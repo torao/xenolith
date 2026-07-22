@@ -1,5 +1,7 @@
 # xylograph
 
+[![CI](https://github.com/torao/xylograph/actions/workflows/ci.yml/badge.svg)](https://github.com/torao/xylograph/actions/workflows/ci.yml)
+
 A native Rust implementation of XML processing and XSLT 1.0, aiming for parity with Java's XML APIs (DOM, XPath, XSLT).
 
 **Status: Phase 0.** The workspace and its shared primitives exist; nothing parses XML yet.
