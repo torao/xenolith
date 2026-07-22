@@ -4,8 +4,8 @@
 //! same core drives a blocking reader, an async reader, or an in-memory slice, and can stop
 //! mid-document to ask for an entity that someone else fetches. See `ROADMAP.md`, decision 7.
 //!
-//! This phase provides the layer below the tokenizer:
-//!
+//! - [`Parser`] — the core: feed it bytes, call [`advance`](Parser::advance), read the event
+//!   through the accessors.
 //! - [`CharStream`] — bytes to characters for one entity: decoding, line-end normalization,
 //!   `Char` checking, and position tracking.
 //! - [`Entity`], [`EntityStack`] — the entities being read, innermost last, with base URIs
@@ -43,7 +43,11 @@
 //! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
 
 pub mod entity;
+mod namespace;
+pub mod parser;
+mod scan;
 pub mod stream;
 
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
+pub use parser::{AttributeRef, EventKind, Parser, Progress, XmlSpace};
 pub use stream::CharStream;

@@ -377,11 +377,14 @@ xylograph/
 - `Entity` / `EntityStack`: 実体ごとの system ID と基底 URI、位置報告は最内実体、`Limits`（深さ・展開回数・展開文字数）、WFC "No Recursion" の検出
 - **成果物**: `xylograph-parser` クレート（テスト 26 + doctest 7）
 
-**1b. Sans-I/O トークナイザ／パーサコア**
-- 要素・属性・テキスト・CDATA・コメント・PI・文字参照・定義済み実体
-- 名前空間解決、`xml:space` / `xml:lang`
-- `feed` / `next` と `Progress`（`Event` / `NeedMoreInput` / `NeedEntity` / `Eof`）
-- 完了条件: `SliceReader` で xmlconf の not-wf / valid（DTD 非依存分）を通す
+**1b. Sans-I/O トークナイザ／パーサコア** ✅ 完了
+- `scan`: トークン境界の探索のみを行う純粋関数。未完なら何も消費せず「入力不足」を返す
+- `Parser`: `feed` / `advance` と `Progress`（`Event` / `NeedMoreInput` / `Eof`。`NeedEntity` は Phase 2 で追加するため `#[non_exhaustive]`）
+- 要素・属性・テキスト・CDATA・コメント・PI・DOCTYPE（Phase 2 まで未解釈のまま保持）・XML 宣言
+- 文字参照と定義済み実体、属性値正規化（§3.3.3）、名前空間解決、`xml:space` / `xml:lang`
+- 整形式制約: タグの対応、単一ルート、属性の一意性、予約接頭辞、`]]>`／`--`、参照の妥当性
+- **入力の分割方法によって結果が変わらないこと**を全ケースで検証（1・2・3・7 バイト刻み）
+- **成果物**: テスト 69 + doctest 10
 
 **1c. ドライバとイベント API**
 - カーソル API（`Event<'_>` を借用で返す）を一次、`OwnedEvent` の `Iterator` をラッパとして提供
