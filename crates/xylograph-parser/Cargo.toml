@@ -1,0 +1,22 @@
+[package]
+name = "xylograph-parser"
+description = "XML 1.0 parser for xylograph: character streams, entities, and the sans-I/O parser core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
+encodings = ["xylograph-core/encodings"]
+
+[dependencies]
+xylograph-core = { workspace = true }
+
+[lints]
+workspace = true

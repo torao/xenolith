@@ -13,7 +13,10 @@ keywords = ["xml", "xpath", "xslt", "dom"]
 categories = ["parser-implementations", "text-processing"]
 
 [workspace.dependencies]
-xylograph-core = { version = "0.0.0", path = "crates/xylograph-core" }
+# Inter-crate dependencies default their features off so each crate re-exports only what it
+# means to; see the feature policy in ROADMAP.md.
+xylograph-core = { version = "0.0.0", path = "crates/xylograph-core", default-features = false }
+xylograph-parser = { version = "0.0.0", path = "crates/xylograph-parser" }
 encoding_rs = "0.8"
 
 [workspace.lints.rust]
