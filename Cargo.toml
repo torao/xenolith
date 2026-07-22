@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/torao/xylograph"
+authors = ["TAKAMI Torao"]
+keywords = ["xml", "xpath", "xslt", "dom"]
+categories = ["parser-implementations", "text-processing"]
+
+[workspace.dependencies]
+xylograph-core = { version = "0.0.0", path = "crates/xylograph-core" }
+encoding_rs = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
