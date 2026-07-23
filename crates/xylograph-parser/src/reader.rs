@@ -1,0 +1,315 @@
+//! Drivers that feed the parser from a source of bytes.
+//!
+//! [`Parser`] never reads anything itself, so a driver is the piece that does: it answers
+//! [`Progress::NeedMoreInput`] by fetching more and asking again. That is the whole of the
+//! difference between the blocking reader here and the asynchronous one behind the `tokio`
+//! feature, which is why there is only one parser and not two.
+
+use std::io::Read;
+
+use xylograph_core::error::{Error, ErrorKind, Location, Result};
+
+use crate::entity::{Entity, Limits};
+use crate::event::Event;
+use crate::parser::{EventKind, Parser, Progress};
+use crate::stream::CharStream;
+
+/// How many bytes to read from the source at a time.
+const CHUNK: usize = 8 * 1024;
+
+/// Reads a document from anything that implements [`Read`].
+///
+/// # Examples
+///
+/// ```
+/// use xylograph_parser::{EventKind, Reader};
+///
+/// let mut reader = Reader::new("<doc>text</doc>".as_bytes());
+/// let mut depth = 0;
+/// while let Some(kind) = reader.advance()? {
+///   match kind {
+///     EventKind::StartElement => depth += 1,
+///     EventKind::Text => assert_eq!(reader.parser().text(), "text"),
+///     _ => {}
+///   }
+/// }
+/// assert_eq!(depth, 1);
+/// # Ok::<(), xylograph_core::Error>(())
+/// ```
+///
+/// Or, when owning the events is more convenient than borrowing them:
+///
+/// ```
+/// use xylograph_parser::{Event, Reader};
+///
+/// let events: Vec<Event> = Reader::new("<a><b/></a>".as_bytes()).events().collect::<Result<_, _>>()?;
+/// assert_eq!(events.len(), 4);
+/// # Ok::<(), xylograph_core::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct Reader<R> {
+  source: R,
+  parser: Parser,
+  buffer: Vec<u8>,
+  finished: bool,
+}
+
+impl<R: Read> Reader<R> {
+  /// Reads a document whose encoding is determined from its bytes.
+  #[must_use]
+  pub fn new(source: R) -> Self {
+    Self::with_document(source, Entity::document(CharStream::new()), Limits::default())
+  }
+
+  /// Reads a document with its system identifier already known.
+  ///
+  /// Worth doing whenever it is: the identifier appears in every diagnostic, and it is the
+  /// base URI against which relative references resolve.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_parser::Reader;
+  ///
+  /// let mut reader = Reader::with_system_id("<a>".as_bytes(), "file:///doc.xml");
+  /// let error = reader.advance().and_then(|_| reader.advance()).unwrap_err();
+  /// assert_eq!(error.location().system_id.as_deref(), Some("file:///doc.xml"));
+  /// assert!(error.to_string().starts_with("file:///doc.xml:"));
+  /// ```
+  #[must_use]
+  pub fn with_system_id(source: R, system_id: &str) -> Self {
+    let document = Entity::document(CharStream::new().with_system_id(system_id));
+    Self::with_document(source, document, Limits::default())
+  }
+
+  /// Reads a document over a prepared entity, with explicit limits.
+  #[must_use]
+  pub fn with_document(source: R, document: Entity, limits: Limits) -> Self {
+    Self { source, parser: Parser::with_document(document, limits), buffer: vec![0; CHUNK], finished: false }
+  }
+
+  /// Advances to the next event, reading from the source as needed.
+  ///
+  /// Returns `None` at the end of the document. The event itself is read through
+  /// [`parser`](Self::parser).
+  ///
+  /// # Errors
+  ///
+  /// Returns [`ErrorKind::Io`] if the source fails, and whatever the parser reports for a
+  /// document that breaks the rules.
+  pub fn advance(&mut self) -> Result<Option<EventKind>> {
+    loop {
+      match self.parser.advance()? {
+        Progress::Event(kind) => return Ok(Some(kind)),
+        Progress::Eof => return Ok(None),
+        Progress::NeedMoreInput => self.fill()?,
+      }
+    }
+  }
+
+  /// Reads one chunk from the source into the parser.
+  fn fill(&mut self) -> Result<()> {
+    if self.finished {
+      // The parser asked for input after the entity ended; only a bug in the parser or in a
+      // hand-written driver gets here, since `feed(.., true)` settles the question.
+      return Err(Error::internal("the parser asked for input beyond the end of the document"));
+    }
+    let read = self.source.read(&mut self.buffer).map_err(|e| {
+      let at = self.parser.location();
+      Error::new(ErrorKind::Io, format!("cannot read the document: {e}")).at(at).caused_by(e)
+    })?;
+    self.finished = read == 0;
+    self.parser.feed(&self.buffer[..read], self.finished)
+  }
+
+  /// Iterates over the remaining events, copying each one.
+  ///
+  /// Iteration stops after the first error.
+  pub fn events(self) -> ReaderEvents<R> {
+    ReaderEvents { reader: self, done: false }
+  }
+
+  /// The parser, for reading the current event.
+  #[must_use]
+  pub const fn parser(&self) -> &Parser {
+    &self.parser
+  }
+
+  /// The current position.
+  #[must_use]
+  pub fn location(&self) -> Location {
+    self.parser.location()
+  }
+
+  /// Returns the source, discarding whatever has not been parsed.
+  pub fn into_inner(self) -> R {
+    self.source
+  }
+}
+
+/// Iterator over the events of a [`Reader`]; see [`Reader::events`].
+#[derive(Debug)]
+pub struct ReaderEvents<R> {
+  reader: Reader<R>,
+  done: bool,
+}
+
+impl<R: Read> Iterator for ReaderEvents<R> {
+  type Item = Result<Event>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.done {
+      return None;
+    }
+    match self.reader.advance() {
+      Ok(Some(_)) => Some(Ok(Event::capture(self.reader.parser()))),
+      Ok(None) => {
+        self.done = true;
+        None
+      }
+      Err(e) => {
+        self.done = true;
+        Some(Err(e))
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::io;
+
+  use super::*;
+
+  /// A source that hands over one byte at a time, and stalls in between.
+  ///
+  /// Both are worth forcing: a driver that assumes a full buffer, or that treats a short read
+  /// as the end of the document, passes every test against a slice and fails against a pipe.
+  struct Trickle {
+    bytes: Vec<u8>,
+    at: usize,
+    stall: bool,
+  }
+
+  impl Trickle {
+    fn new(text: &str) -> Self {
+      Self { bytes: text.as_bytes().to_vec(), at: 0, stall: false }
+    }
+  }
+
+  impl Read for Trickle {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+      if self.at == self.bytes.len() {
+        return Ok(0);
+      }
+      self.stall = !self.stall;
+      if self.stall {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "not yet"));
+      }
+      buf[0] = self.bytes[self.at];
+      self.at += 1;
+      Ok(1)
+    }
+  }
+
+  struct Failing;
+
+  impl Read for Failing {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+      Err(io::Error::new(io::ErrorKind::PermissionDenied, "nope"))
+    }
+  }
+
+  fn kinds<R: Read>(mut reader: Reader<R>) -> Result<Vec<EventKind>> {
+    let mut kinds = Vec::new();
+    while let Some(kind) = reader.advance()? {
+      kinds.push(kind);
+    }
+    Ok(kinds)
+  }
+
+  #[test]
+  fn reads_a_document_from_a_slice() {
+    let kinds = kinds(Reader::new("<a>x</a>".as_bytes())).unwrap();
+    assert_eq!(kinds, [EventKind::StartElement, EventKind::Text, EventKind::EndElement]);
+  }
+
+  #[test]
+  fn an_empty_source_is_a_document_without_a_root() {
+    let error = kinds(Reader::new(&b""[..])).unwrap_err();
+    assert!(error.message().contains("no root element"));
+  }
+
+  #[test]
+  fn io_errors_are_reported_with_their_cause() {
+    let error = kinds(Reader::new(Failing)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Io);
+    assert!(error.message().contains("cannot read"));
+    assert!(std::error::Error::source(&error).is_some(), "the io::Error is kept as the cause");
+  }
+
+  #[test]
+  fn a_source_that_stalls_and_trickles_parses_the_same() {
+    // `Interrupted` is a real condition on a pipe; it must not end the document.
+    let xml = "<?xml version='1.0'?><a x='1'>text<b/><!--c--></a>";
+    let expected = kinds(Reader::new(xml.as_bytes())).unwrap();
+    let mut reader = Reader::new(Trickle::new(xml));
+    let mut got = Vec::new();
+    loop {
+      match reader.advance() {
+        Ok(Some(kind)) => got.push(kind),
+        Ok(None) => break,
+        // Retrying an interruption is the caller's business; here it stands in for a stall.
+        Err(e) if e.kind() == ErrorKind::Io => continue,
+        Err(e) => panic!("{e}"),
+      }
+    }
+    assert_eq!(got, expected);
+  }
+
+  #[test]
+  fn a_document_larger_than_the_buffer_is_read_in_full() {
+    let xml = format!("<a>{}</a>", "x".repeat(CHUNK * 3));
+    let mut reader = Reader::new(xml.as_bytes());
+    let mut text = String::new();
+    while let Some(kind) = reader.advance().unwrap() {
+      if kind == EventKind::Text {
+        text.push_str(reader.parser().text());
+      }
+    }
+    assert_eq!(text.len(), CHUNK * 3);
+  }
+
+  #[test]
+  fn the_system_id_reaches_the_diagnostics() {
+    let mut reader = Reader::with_system_id("<a>&nosuch;</a>".as_bytes(), "file:///doc.xml");
+    let error = loop {
+      match reader.advance() {
+        Ok(Some(_)) => {}
+        Ok(None) => panic!("expected a failure"),
+        Err(e) => break e,
+      }
+    };
+    assert_eq!(error.location().system_id.as_deref(), Some("file:///doc.xml"));
+  }
+
+  #[test]
+  fn events_can_be_collected() {
+    let events: Vec<Event> = Reader::new("<a>x</a>".as_bytes()).events().collect::<Result<_>>().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[1].text(), Some("x"));
+  }
+
+  #[test]
+  fn the_event_iterator_stops_at_the_first_error() {
+    let events: Vec<_> = Reader::new("<a></b>".as_bytes()).events().collect();
+    assert_eq!(events.len(), 2);
+    assert!(events[1].is_err());
+  }
+
+  #[test]
+  fn the_source_can_be_taken_back() {
+    let reader = Reader::new("<a/>rest".as_bytes());
+    assert!(!reader.into_inner().is_empty());
+  }
+}

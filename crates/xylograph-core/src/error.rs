@@ -3,6 +3,36 @@
 //! Every error carries a [`Location`] where one is known. XML processors are judged by their
 //! diagnostics as much as by their conformance, and a location that is threaded through from
 //! the start is far cheaper than one retrofitted later.
+//!
+//! # Writing a message
+//!
+//! Two people read these, and they are not in the same position:
+//!
+//! - **The author of the document.** They see [`WellFormedness`](ErrorKind::WellFormedness),
+//!   [`Validity`](ErrorKind::Validity), [`Namespace`](ErrorKind::Namespace),
+//!   [`Name`](ErrorKind::Name) and [`Encoding`](ErrorKind::Encoding). They have the file open
+//!   at the line we named. They cannot read our source and do not know our types.
+//! - **The programmer calling xylograph.** They see [`Limit`](ErrorKind::Limit),
+//!   [`UnsupportedFeature`](ErrorKind::UnsupportedFeature), [`Io`](ErrorKind::Io) and
+//!   [`Internal`](ErrorKind::Internal). Their document is probably fine; their configuration
+//!   or their code is not.
+//!
+//! Whichever it is, the message answers one question: **what do I do next?**
+//!
+//! - Say what is wrong, then what would be right. `xml:space must be "default" or
+//!   "preserve", not "maybe"` beats `invalid value for xml:space`.
+//! - Quote what was actually found, with `{:?}`, and keep it short. The reader is matching
+//!   our words against their file.
+//! - Name the remedy when it is not in the document: which limit to raise, which feature to
+//!   enable, which method to call. The programmer cannot guess our field names.
+//! - Do not restate the kind or the location; [`Display`](std::fmt::Display) already prints
+//!   both. Write `element <a> is never closed`, not
+//!   `well-formedness error at line 3: element <a> is never closed`.
+//! - Lower case, no trailing period, no exclamation. These are fragments, not sentences.
+//! - Do not apologize and do not scold. State the fact.
+//!
+//! The XML specification's own wording is worth reaching for — an author who searches the
+//! phrase should land on the rule they broke — but plain language wins where they conflict.
 
 use std::fmt;
 use std::sync::Arc;
@@ -119,7 +149,7 @@ pub enum ErrorKind {
   Limit,
   /// The requested capability was not compiled in; see the crate's feature flags.
   UnsupportedFeature,
-  /// A bug in xylograph.
+  /// A bug in xylograph. Build these with [`Error::internal`].
   Internal,
 }
 
@@ -229,15 +259,51 @@ impl Error {
     &self.message
   }
 
+  /// Builds an error for a situation that should be unreachable.
+  ///
+  /// The reader has done nothing wrong and can do nothing about it, so the message says so
+  /// and asks for a report rather than leaving them to doubt their document.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_core::Error;
+  ///
+  /// assert_eq!(
+  ///   Error::internal("the entity stack is empty").to_string(),
+  ///   "internal error: the entity stack is empty; this is a bug in xylograph, please report it"
+  /// );
+  /// ```
+  #[must_use]
+  pub fn internal(what: impl std::fmt::Display) -> Self {
+    Self::new(ErrorKind::Internal, format!("{what}; this is a bug in xylograph, please report it"))
+  }
+
   /// Builds the error returned when a capability was not compiled in.
   ///
-  /// Requesting a disabled capability must fail loudly rather than silently degrade; see
-  /// the feature policy in `ROADMAP.md`.
+  /// Requesting a disabled capability must fail loudly rather than silently degrade; see the
+  /// feature policy in `ROADMAP.md`. The reader here is a programmer who can edit
+  /// `Cargo.toml`, so the message names the feature and says what the build can still do.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_core::{Error, ErrorKind};
+  ///
+  /// let err = Error::unsupported_feature("decoding \"Shift_JIS\"", "encodings", "this build handles UTF-8 only");
+  /// assert_eq!(err.kind(), ErrorKind::UnsupportedFeature);
+  /// assert_eq!(
+  ///   err.to_string(),
+  ///   "unsupported feature: decoding \"Shift_JIS\" needs the `encodings` feature, \
+  ///    which this build does not have; this build handles UTF-8 only"
+  /// );
+  /// ```
   #[must_use]
-  pub fn unsupported_feature(capability: &str, feature: &str) -> Self {
+  pub fn unsupported_feature(capability: impl Into<String>, feature: &str, fallback: &str) -> Self {
+    let capability = capability.into();
     Self::new(
       ErrorKind::UnsupportedFeature,
-      format!("{capability} is not available: rebuild with the `{feature}` feature"),
+      format!("{capability} needs the `{feature}` feature, which this build does not have; {fallback}"),
     )
   }
 }

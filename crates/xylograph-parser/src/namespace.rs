@@ -3,7 +3,7 @@
 //! Bindings are kept in one stack rather than a map per element: declarations are rare, scopes
 //! are shallow, and entering or leaving an element then costs nothing but moving an index.
 
-use xylograph_core::name::{NameId, NamePool};
+use xylograph_core::name::NameId;
 
 /// One prefix binding. A `prefix` of `None` is the default namespace.
 #[derive(Clone, Copy, Debug)]
@@ -50,16 +50,10 @@ impl NamespaceScope {
   }
 }
 
-/// Formats a prefix for an error message.
-pub(crate) fn prefix_name(pool: &NamePool, prefix: Option<NameId>) -> String {
-  match prefix {
-    Some(p) => format!("\"{}\"", pool.resolve(p)),
-    None => "the default namespace".to_owned(),
-  }
-}
-
 #[cfg(test)]
 mod tests {
+  use xylograph_core::name::NamePool;
+
   use super::*;
 
   #[test]

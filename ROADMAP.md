@@ -22,8 +22,20 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 | XPointer Framework / `element()` / `xmlns()` scheme | W3C REC | 必須（XInclude の `@xpointer` に要る） |
 | XML Base (2nd Edition) | W3C REC | **必須**（決定 6） |
 | xml:id 1.0 | W3C REC | **必須**（決定 6） |
+| HTML / loose parsing | WHATWG | **対象外**（下記） |
 | XML 1.1 / Namespaces 1.1 | — | 対象外 |
 | XPath 2.0+ / XSLT 2.0+ / XML Schema | — | 対象外 |
+
+### 非対象: HTML / loose parsing
+
+「XML として不正な HTML を寛容にパースする」機能は**実装しない**。パーサは常に整形式を要求する。
+
+理由:
+
+- スクレイピング用途で意味があるのは「ブラウザと同じ木」であって「エラーを飲み込む木」ではない。WHATWG の tree construction は insertion mode が 20 以上あり、`<table>` 内の `<tbody>` 暗黙挿入や adoption agency algorithm（誤ネストした装飾要素の再構築）まで含む。**中途半端な寛容さは、ブラウザで確認した XPath が静かに違う結果を返す**という最悪の形で表面化する
+- その完全準拠版は `html5ever` が既に提供している。再実装の価値がない
+
+**HTML を扱いたい場合**: Phase 3 で DOM が入った後、`html5ever` の出力を xylograph の DOM に流し込めば、XPath / XSLT 資産はそのまま使える。パーサは strict なまま保てる。これは利用側の統合であって、本ロードマップの作業項目ではない。
 
 ### 非機能要件（初期から意識するもの）
 
@@ -386,11 +398,13 @@ xylograph/
 - **入力の分割方法によって結果が変わらないこと**を全ケースで検証（1・2・3・7 バイト刻み）
 - **成果物**: テスト 69 + doctest 10
 
-**1c. ドライバとイベント API**
-- カーソル API（`Event<'_>` を借用で返す）を一次、`OwnedEvent` の `Iterator` をラッパとして提供
+**1c. ドライバとイベント API** ✅ 完了
+- カーソル API（`Parser` のアクセサが借用を返す）を一次、`Event`（所有）と `Iterator` をその上に
 - `Reader<R: Read>` 同期ドライバ、`AsyncReader<R: AsyncRead>`（feature `tokio`、既定 OFF）
-- 同一の適合性テストを 3 つのドライバすべてで回す（**入力の刻み方を変えても結果が変わらないこと**をランダム分割で検証）
-- **完了条件**: xmlconf を全ドライバで通す。ストリーミング API が公開されている
+- `Limits::max_element_depth` を追加（要素ネストの上限。1b では未保護だった）
+- **入力の刻み方とドライバの種類によって結果が変わらないこと**を全ケースで検証（1・2・3・5・64 バイト刻み × 3 ドライバ）
+- xmlconf ハーネス（`XMLCONF` 環境変数で実行、CI では毎回取得）。DOCTYPE を含むケースは Phase 2 まで skip として計上
+- **成果物**: テスト 92 + 統合 12 + doctest 16
 
 ### Phase 2 — DTD 処理（2a）と妥当性検証（2b）
 

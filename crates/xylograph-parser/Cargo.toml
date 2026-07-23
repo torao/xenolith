@@ -14,9 +14,16 @@ categories.workspace = true
 default = ["encodings"]
 # Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
 encodings = ["xylograph-core/encodings"]
+# An asynchronous driver, `AsyncReader`, over tokio's AsyncRead.
+tokio = ["dep:tokio"]
 
 [dependencies]
 xylograph-core = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tokio-test = "0.4"
 
 [lints]
 workspace = true

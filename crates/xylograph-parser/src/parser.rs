@@ -15,7 +15,8 @@ use xylograph_core::error::{Error, ErrorKind, Location, Result};
 use xylograph_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 
 use crate::entity::{Entity, EntityStack, Limits};
-use crate::namespace::{NamespaceScope, prefix_name};
+use crate::event::Event;
+use crate::namespace::NamespaceScope;
 use crate::scan::{Token, scan};
 use crate::stream::CharStream;
 
@@ -407,7 +408,8 @@ impl Parser {
   fn comment(&mut self, text: &str) -> Result<EventKind> {
     let body = &text[4..text.len() - 3];
     if let Some(i) = body.find("--") {
-      return Err(self.error_at(ErrorKind::WellFormedness, "a comment may not contain \"--\"", text, 4 + i));
+      let message = "a comment may not contain \"--\"; use \"-\" or end the comment here";
+      return Err(self.error_at(ErrorKind::WellFormedness, message, text, 4 + i));
     }
     self.text.clear();
     self.text.push_str(body);
@@ -448,7 +450,8 @@ impl Parser {
       return Err(self.error(ErrorKind::WellFormedness, message));
     }
     if let Some(i) = text.find("]]>") {
-      return Err(self.error_at(ErrorKind::WellFormedness, "\"]]>\" may not appear in text", text, i));
+      let message = "\"]]>\" may not appear in text; write \"]]&gt;\"";
+      return Err(self.error_at(ErrorKind::WellFormedness, message, text, i));
     }
     let mut out = std::mem::take(&mut self.text);
     out.clear();
@@ -465,6 +468,13 @@ impl Parser {
       Phase::Epilog => {
         return Err(self.error(ErrorKind::WellFormedness, "a document may have only one root element"));
       }
+    }
+    let limit = self.stack.limits().max_element_depth;
+    if self.open.len() >= limit {
+      let message = format!(
+        "elements are nested more than {limit} deep; raise Limits::max_element_depth if the document is trusted"
+      );
+      return Err(self.error(ErrorKind::Limit, message));
     }
     let empty = text.ends_with("/>");
     let body = &text[1..text.len() - if empty { 2 } else { 1 }];
@@ -551,14 +561,15 @@ impl Parser {
       at += whitespace_len(&rest[at..]);
 
       if !rest[at..].starts_with('=') {
-        let message = format!("attribute \"{name}\" has no value");
+        // Most often a bare HTML-style attribute such as `checked` or `disabled`.
+        let message = format!("attribute \"{name}\" has no value; every XML attribute needs one, as {name}=\"...\"");
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
       }
       at += 1;
       at += whitespace_len(&rest[at..]);
 
       let Some(quote) = rest[at..].chars().next().filter(|c| *c == '"' || *c == '\'') else {
-        let message = format!("the value of \"{name}\" is not quoted");
+        let message = format!("the value of \"{name}\" is not quoted; enclose it in \" or '");
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
       };
       at += quote.len_utf8();
@@ -571,8 +582,7 @@ impl Parser {
       at += end + quote.len_utf8();
 
       let Some((prefix, local)) = chars::split_qname(name) else {
-        let message = format!("{name:?} is not a valid attribute name");
-        return Err(self.error_at(ErrorKind::Namespace, message, token, name_at));
+        return Err(self.error_at(ErrorKind::Namespace, bad_qname(name, "attribute"), token, name_at));
       };
       let declares_namespace = prefix == Some("xmlns") || (prefix.is_none() && local == "xmlns");
       let start = values.len();
@@ -624,14 +634,12 @@ impl Parser {
 
   fn resolve_element_name(&mut self, name: &str) -> Result<QName> {
     let Some((prefix, local)) = chars::split_qname(name) else {
-      let message = format!("{name:?} is not a valid element name");
-      return Err(self.error(ErrorKind::Namespace, message));
+      return Err(self.error(ErrorKind::Namespace, bad_qname(name, "element")));
     };
     let prefix = prefix.map(|p| self.pool.intern(p));
     let namespace = self.scope.resolve(prefix);
-    if prefix.is_some() && namespace.is_none() {
-      let message = format!("prefix {} is not declared", prefix_name(&self.pool, prefix));
-      return Err(self.error(ErrorKind::Namespace, message));
+    if let Some(prefix) = prefix.filter(|_| namespace.is_none()) {
+      return Err(self.undeclared_prefix(prefix));
     }
     Ok(QName::new(prefix, namespace, self.pool.intern(local)))
   }
@@ -645,10 +653,7 @@ impl Parser {
       } else if let Some(prefix) = attribute.name.prefix {
         match self.scope.resolve(Some(prefix)) {
           Some(namespace) => Some(namespace),
-          None => {
-            let message = format!("prefix {} is not declared", prefix_name(&self.pool, Some(prefix)));
-            return Err(self.error(ErrorKind::Namespace, message));
-          }
+          None => return Err(self.undeclared_prefix(prefix)),
         }
       } else {
         // An unprefixed attribute is in no namespace: the default namespace does not apply.
@@ -719,12 +724,13 @@ impl Parser {
       out.push_str(&normalize(&rest[..i], attribute));
       done += i;
       if rest.as_bytes()[i] == b'<' {
-        let message = "'<' may not appear in an attribute value";
+        let message = "\"<\" may not appear in an attribute value; write \"&lt;\"";
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + done));
       }
       let reference = &rest[i..];
       let Some(end) = reference.find(';') else {
-        return Err(self.error_at(ErrorKind::WellFormedness, "a reference has no \";\"", token, base + done));
+        let message = "a reference must end with \";\"; write \"&amp;\" for a literal ampersand";
+        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + done));
       };
       self.expand_reference(&reference[1..end], out, token, base + done)?;
       rest = &reference[end + 1..];
@@ -743,7 +749,11 @@ impl Parser {
       };
       let code = u32::from_str_radix(digits, radix).ok();
       let Some(c) = code.and_then(char::from_u32).filter(|c| chars::is_char(*c)) else {
-        let message = format!("&{body}; is not a character XML allows");
+        // Almost always a NUL, a C0 control or half a surrogate pair; none can be escaped.
+        let message = format!(
+          "\"&{body};\" is not a character XML permits, and no escape can represent it \
+           (XML 1.0 allows #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and #x10000-#x10FFFF)"
+        );
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
       };
       out.push(c);
@@ -757,11 +767,14 @@ impl Parser {
       "quot" => out.push('"'),
       // Declared entities arrive with the DTD in phase 2.
       name if chars::is_name(name) => {
-        let message = format!("entity \"{name}\" is not declared");
+        let message = format!(
+          "entity \"{name}\" is not declared; declare it in the document type declaration, \
+           or write \"&amp;{name};\" if a literal ampersand was meant"
+        );
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
       }
       other => {
-        let message = format!("&{other}; is not a valid reference");
+        let message = format!("\"&{other};\" is not a reference; write \"&amp;\" for a literal ampersand");
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
       }
     }
@@ -893,6 +906,41 @@ impl Parser {
     &self.pool
   }
 
+  /// Iterates over the remaining events, copying each one.
+  ///
+  /// Every byte must already have been fed: an iterator has nowhere to report that it needs
+  /// more input, so [`Progress::NeedMoreInput`] becomes an error. Use [`advance`](Self::advance)
+  /// directly, or one of the readers, when the input arrives in pieces.
+  ///
+  /// Iteration stops after the first error.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_parser::{Event, Parser};
+  ///
+  /// let mut parser = Parser::new();
+  /// parser.feed(b"<a>hi</a>", true)?;
+  ///
+  /// let names: Vec<String> = parser
+  ///   .events()
+  ///   .filter_map(|event| event.ok()?.text().map(ToOwned::to_owned))
+  ///   .collect();
+  /// assert_eq!(names, ["hi"]);
+  /// # Ok::<(), xylograph_core::Error>(())
+  /// ```
+  pub fn events(&mut self) -> Events<'_> {
+    Events { parser: self, done: false }
+  }
+
+  /// Builds the error for a prefix used without a declaration, naming the fix.
+  fn undeclared_prefix(&self, prefix: NameId) -> Error {
+    let name = self.pool.resolve(prefix);
+    let message =
+      format!("prefix \"{name}\" is not bound; add an xmlns:{name} attribute to this element or an ancestor");
+    self.error(ErrorKind::Namespace, message)
+  }
+
   /// Builds an error at the start of the token being interpreted.
   fn error(&self, kind: ErrorKind, message: impl Into<String>) -> Error {
     Error::new(kind, message).at(self.token_at.clone())
@@ -914,8 +962,63 @@ impl Parser {
   }
 }
 
+/// Iterator over the remaining events of a [`Parser`]; see [`Parser::events`].
+#[derive(Debug)]
+pub struct Events<'a> {
+  parser: &'a mut Parser,
+  done: bool,
+}
+
+impl Iterator for Events<'_> {
+  type Item = Result<Event>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.done {
+      return None;
+    }
+    match self.parser.advance() {
+      Ok(Progress::Event(_)) => Some(Ok(Event::capture(self.parser))),
+      Ok(Progress::Eof) => {
+        self.done = true;
+        None
+      }
+      Ok(Progress::NeedMoreInput) => {
+        self.done = true;
+        let message = "the document is incomplete; feed the remaining bytes before iterating, \
+                       or drive the parser with advance() so it can ask for more";
+        Some(Err(Error::new(ErrorKind::Internal, message).at(self.parser.location())))
+      }
+      Err(e) => {
+        self.done = true;
+        Some(Err(e))
+      }
+    }
+  }
+}
+
 fn whitespace_len(text: &str) -> usize {
   text.len() - text.trim_start_matches(chars::is_whitespace).len()
+}
+
+/// Explains why `name` is not a usable element or attribute name.
+///
+/// "not a valid name" alone leaves the author hunting; naming the offending character, or the
+/// extra colon, usually points straight at the typo.
+fn bad_qname(name: &str, role: &str) -> String {
+  if name.is_empty() {
+    return format!("this {role} has no name");
+  }
+  if name.matches(':').count() > 1 {
+    return format!("{role} name {name:?} has more than one colon; only one separates a prefix from a local name");
+  }
+  if name.starts_with(':') || name.ends_with(':') {
+    return format!("{role} name {name:?} has an empty prefix or local name");
+  }
+  match name.chars().find(|c| !chars::is_name_char(*c)) {
+    Some(c) => format!("{role} name {name:?} contains {c:?}, which names may not"),
+    // Every character is allowed somewhere in a name, so only the first can be at fault.
+    None => format!("{role} name {name:?} starts with a character that may not begin a name"),
+  }
 }
 
 /// Applies attribute-value normalization to literal text.
@@ -1185,9 +1288,9 @@ mod tests {
     assert!(error("<a>&nosuch;</a>").message().contains("not declared"));
     assert!(error("<a>&#xD800;</a>").message().contains("not a character"));
     assert!(error("<a>&#0;</a>").message().contains("not a character"));
-    assert!(error("<a>&amp</a>").message().contains("no \";\""));
-    assert!(error("<a b='&'/>").message().contains("no \";\""));
-    assert!(error("<a b='<'/>").message().contains("'<' may not appear"));
+    assert!(error("<a>&amp</a>").message().contains("must end with \";\""));
+    assert!(error("<a b='&'/>").message().contains("must end with \";\""));
+    assert!(error("<a b='<'/>").message().contains("\"<\" may not appear"));
   }
 
   #[test]
@@ -1216,6 +1319,34 @@ mod tests {
   #[test]
   fn rejects_an_invalid_xml_space() {
     assert!(error("<a xml:space='maybe'/>").message().contains("xml:space"));
+  }
+
+  /// Every message is read by someone deciding what to do next, so each one is checked for
+  /// the remedy and not merely for the complaint. See the guidance in `xylograph_core::error`.
+  #[test]
+  fn messages_say_what_to_do_next() {
+    let cases: [(&str, &str); 8] = [
+      ("<a>&nosuch;</a>", "write \"&amp;nosuch;\""),
+      ("<a>Tom & Jerry</a>", "write \"&amp;\""),
+      ("<a>]]></a>", "write \"]]&gt;\""),
+      ("<a b='<'/>", "write \"&lt;\""),
+      ("<p:a/>", "add an xmlns:p attribute"),
+      ("<a checked/>", "checked=\"...\""),
+      ("<a b=1/>", "enclose it in \" or '"),
+      ("<a xml:space='maybe'/>", "\"default\" or \"preserve\""),
+    ];
+    for (xml, expected) in cases {
+      let message = error(xml).message().to_owned();
+      assert!(message.contains(expected), "parsing {xml:?} said {message:?},\n  which lacks {expected:?}");
+    }
+  }
+
+  #[test]
+  fn name_errors_name_the_offending_character() {
+    assert!(error("<a b c='1'/>").message().contains("no value"));
+    assert!(error("<a:b:c/>").message().contains("more than one colon"));
+    assert!(error("<a b^c='1'/>").message().contains("'^'"));
+    assert!(error("<1a/>").message().contains("may not begin a name"));
   }
 
   #[test]

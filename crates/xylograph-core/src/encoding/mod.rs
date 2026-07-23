@@ -112,9 +112,16 @@ pub fn decoder_for(label: &str) -> Result<Box<dyn Decoder>> {
   match lookup(label) {
     Some(decoder) => Ok(decoder),
     #[cfg(feature = "encodings")]
-    None => Err(Error::new(ErrorKind::Encoding, format!("unknown encoding: {label:?}"))),
+    None => Err(Error::new(
+      ErrorKind::Encoding,
+      format!("no encoding is registered under the name {label:?}; check the spelling of the encoding declaration"),
+    )),
     #[cfg(not(feature = "encodings"))]
-    None => Err(Error::unsupported_feature(&format!("the encoding {label:?}, if it exists,"), "encodings")),
+    None => Err(Error::unsupported_feature(
+      format!("decoding {label:?}"),
+      "encodings",
+      "this build handles only UTF-8, UTF-16, US-ASCII and ISO-8859-1",
+    )),
   }
 }
 

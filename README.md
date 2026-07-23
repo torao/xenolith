@@ -12,7 +12,7 @@ See [ROADMAP.md](ROADMAP.md) for the feature inventory, design decisions and pha
 | Crate | Status | Contents |
 |---|---|---|
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
-| [`xylograph-parser`](crates/xylograph-parser) | Phase 1b | the sans-I/O parser core, character streams and the entity stack |
+| [`xylograph-parser`](crates/xylograph-parser) | Phase 1c | a well-formed XML pull parser: readers, events, the sans-I/O core, entities |
 
 Crates for the DTD, DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later
 phases; see the roadmap.
@@ -47,9 +47,21 @@ build with everything removed still works, with reduced functionality:
 cargo test --workspace --no-default-features
 ```
 
-| Feature | Effect when disabled |
-|---|---|
-| `encodings` | Only UTF-8, UTF-16, US-ASCII and ISO-8859-1 decode; other encodings report an error naming the feature |
+| Feature | Default | Effect |
+|---|---|---|
+| `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error naming the feature |
+| `tokio` | off | `AsyncReader`, over `tokio`'s `AsyncRead`. Only `io-util` is pulled in; the runtime stays the caller's choice |
+
+## Conformance
+
+The W3C XML Conformance Test Suite is not vendored. To run against it:
+
+```bash
+curl -O https://www.w3.org/XML/Test/xmlts20130923.tar.gz && tar xf xmlts20130923.tar.gz && XMLCONF=xmlconf cargo test -p xylograph-parser --test conformance -- --nocapture
+```
+
+CI fetches it on every push. Cases needing machinery a phase does not yet have are counted as
+skipped and reported, never silently passed.
 
 ## License
 

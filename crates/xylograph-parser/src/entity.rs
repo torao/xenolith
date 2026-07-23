@@ -151,11 +151,16 @@ pub struct Limits {
   pub max_expansions: u32,
   /// Maximum number of characters all expansions may produce in total.
   pub max_expansion_chars: u64,
+  /// Maximum nesting depth of elements.
+  ///
+  /// Deep nesting costs memory in the parser and, more sharply, in anything that walks the
+  /// resulting tree recursively.
+  pub max_element_depth: usize,
 }
 
 impl Default for Limits {
   fn default() -> Self {
-    Self { max_depth: 64, max_expansions: 100_000, max_expansion_chars: 64 * 1024 * 1024 }
+    Self { max_depth: 64, max_expansions: 100_000, max_expansion_chars: 64 * 1024 * 1024, max_element_depth: 1024 }
   }
 }
 
@@ -163,7 +168,12 @@ impl Limits {
   /// Limits that permit anything; only for input that is known to be trustworthy.
   #[must_use]
   pub const fn unlimited() -> Self {
-    Self { max_depth: usize::MAX, max_expansions: u32::MAX, max_expansion_chars: u64::MAX }
+    Self {
+      max_depth: usize::MAX,
+      max_expansions: u32::MAX,
+      max_expansion_chars: u64::MAX,
+      max_element_depth: usize::MAX,
+    }
   }
 
   /// Returns a copy with [`max_depth`](Self::max_depth) set.
@@ -184,6 +194,13 @@ impl Limits {
   #[must_use]
   pub const fn with_max_expansion_chars(mut self, max_expansion_chars: u64) -> Self {
     self.max_expansion_chars = max_expansion_chars;
+    self
+  }
+
+  /// Returns a copy with [`max_element_depth`](Self::max_element_depth) set.
+  #[must_use]
+  pub const fn with_max_element_depth(mut self, max_element_depth: usize) -> Self {
+    self.max_element_depth = max_element_depth;
     self
   }
 }
@@ -259,18 +276,24 @@ impl EntityStack {
   pub fn push(&mut self, entity: Entity) -> Result<()> {
     if let Some(name) = entity.name() {
       if self.is_open(name) {
-        return Err(
-          Error::new(ErrorKind::WellFormedness, format!("entity \"{name}\" refers to itself")).at(self.location()),
-        );
+        let open: Vec<&str> = self.entities.iter().filter_map(|e| e.name().map(|n| &**n)).collect();
+        let message = format!("entity \"{name}\" refers to itself, through {}", open.join(" -> "));
+        return Err(Error::new(ErrorKind::WellFormedness, message).at(self.location()));
       }
     }
     if self.entities.len() >= self.limits.max_depth {
-      return Err(self.limit_exceeded(format!("more than {} entities are open at once", self.limits.max_depth)));
+      let limit = self.limits.max_depth;
+      return Err(self.limit_exceeded(format!(
+        "{limit} entities are already open; raise Limits::max_depth if the document is trusted"
+      )));
     }
     if entity.kind().is_expansion() {
       self.expansions += 1;
       if self.expansions > self.limits.max_expansions {
-        return Err(self.limit_exceeded(format!("more than {} entity expansions", self.limits.max_expansions)));
+        let limit = self.limits.max_expansions;
+        return Err(self.limit_exceeded(format!(
+          "the document expands more than {limit} entities; raise Limits::max_expansions if it is trusted"
+        )));
       }
       // An internal entity arrives with its replacement text already decoded, so charge for
       // what it holds now; `feed` charges for whatever it grows by later.
@@ -311,9 +334,10 @@ impl EntityStack {
   fn charge_expansion(&mut self, chars: u64) -> Result<()> {
     self.expansion_chars = self.expansion_chars.saturating_add(chars);
     if self.expansion_chars > self.limits.max_expansion_chars {
+      let limit = self.limits.max_expansion_chars;
       return Err(self.limit_exceeded(format!(
-        "entity expansion produced more than {} characters",
-        self.limits.max_expansion_chars
+        "entity expansion has produced more than {limit} characters; \
+         raise Limits::max_expansion_chars if the document is trusted"
       )));
     }
     Ok(())
@@ -409,6 +433,35 @@ mod tests {
     let err = stack.push(text_entity("a", "&b;")).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::WellFormedness);
     assert!(err.message().contains("\"a\""));
+  }
+
+  /// A programmer who hits a limit is told which one to raise; the number alone would leave
+  /// them grepping. See the guidance in `xylograph_core::error`.
+  #[test]
+  fn limit_errors_name_the_limit_to_raise() {
+    let mut stack =
+      EntityStack::new(Entity::document(CharStream::from_text("x").unwrap()), Limits::default().with_max_depth(1));
+    assert!(stack.push(text_entity("a", "x")).unwrap_err().message().contains("Limits::max_depth"));
+
+    let mut stack =
+      EntityStack::new(Entity::document(CharStream::from_text("x").unwrap()), Limits::default().with_max_expansions(0));
+    assert!(stack.push(text_entity("a", "x")).unwrap_err().message().contains("Limits::max_expansions"));
+
+    let mut stack = EntityStack::new(
+      Entity::document(CharStream::from_text("x").unwrap()),
+      Limits::default().with_max_expansion_chars(1),
+    );
+    assert!(stack.push(text_entity("a", "long")).unwrap_err().message().contains("Limits::max_expansion_chars"));
+  }
+
+  /// Recursion is easiest to fix when the cycle is spelled out.
+  #[test]
+  fn a_recursive_entity_error_shows_the_cycle() {
+    let mut stack = stack_of("&a;");
+    stack.push(text_entity("a", "&b;")).unwrap();
+    stack.push(text_entity("b", "&a;")).unwrap();
+    let message = stack.push(text_entity("a", "&b;")).unwrap_err().message().to_owned();
+    assert!(message.contains("a -> b"), "{message:?}");
   }
 
   #[test]

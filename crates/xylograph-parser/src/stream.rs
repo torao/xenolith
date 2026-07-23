@@ -174,7 +174,8 @@ impl CharStream {
   /// a character `Char` forbids, and [`ErrorKind::Internal`] if called after `last`.
   pub fn feed(&mut self, bytes: &[u8], last: bool) -> Result<()> {
     if self.finished {
-      return Err(Error::new(ErrorKind::Internal, "bytes fed after the end of the entity").at(self.location()));
+      let message = "this entity was already fed its last bytes; feed(.., true) may only be called once";
+      return Err(Error::new(ErrorKind::Internal, message).at(self.location()));
     }
     if let State::Sniffing(sniffed) = &mut self.state {
       sniffed.extend_from_slice(bytes);
@@ -193,7 +194,7 @@ impl CharStream {
 
   fn decode(&mut self, bytes: &[u8], last: bool) -> Result<()> {
     let State::Decoding(decoder) = &mut self.state else {
-      return Err(Error::new(ErrorKind::Internal, "the encoding has not been determined"));
+      return Err(Error::internal("decoding began before the encoding was determined"));
     };
 
     let mut text = String::new();
@@ -226,10 +227,13 @@ impl CharStream {
       self.after_cr = c == '\r';
       let c = if c == '\r' { '\n' } else { c };
       if !chars::is_char(c) {
-        return Err(
-          Error::new(ErrorKind::WellFormedness, format!("character U+{:04X} may not appear in XML", c as u32))
-            .at(self.location_of(self.buf.len())),
+        // Usually a NUL or a C0 control from a mislabelled encoding, so name that first.
+        let message = format!(
+          "U+{:04X} may not appear in XML, in any form; if the entity is not really {}, correct its encoding declaration",
+          c as u32,
+          self.encoding.as_deref().unwrap_or("this encoding")
         );
+        return Err(Error::new(ErrorKind::WellFormedness, message).at(self.location_of(self.buf.len())));
       }
       self.buf.push(c);
       self.chars_appended += 1;
@@ -359,7 +363,7 @@ impl Decoder for NoDecoder {
   }
 
   fn decode(&mut self, _src: &[u8], _dst: &mut String, _last: bool) -> Result<usize> {
-    Err(Error::new(ErrorKind::Internal, "this entity has no byte representation"))
+    Err(Error::internal("an entity built from text was fed bytes"))
   }
 }
 
