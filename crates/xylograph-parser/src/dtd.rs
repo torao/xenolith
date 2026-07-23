@@ -5,12 +5,16 @@
 //! attributes, and the notations an unparsed entity points at. Without it those are
 //! guesswork, which is why even a non-validating processor reads the DTD.
 //!
-//! This module models a DTD and parses an internal subset into one. Names are lexical: the
-//! DTD predates Namespaces in XML and matches on the qualified name as written, prefix and
-//! all, so `p:a` and `q:a` are different elements to it however their prefixes are bound.
+//! This module models a DTD and parses one from a buffer holding the internal subset followed
+//! by the external subset. Names are lexical: the DTD predates Namespaces in XML and matches
+//! on the qualified name as written, prefix and all, so `p:a` and `q:a` are different elements
+//! to it however their prefixes are bound.
 //!
-//! The external subset and external parameter entities need I/O and arrive in a later step;
-//! see [`Parser`](crate::Parser).
+//! Parameter entities are expanded by splicing their replacement text into the buffer and
+//! reading on. An external one cannot be spliced synchronously, so a pass over the buffer stops
+//! with [`DtdOutcome::NeedExternalPe`]; the caller fetches it, splices it in, and parses the
+//! buffer again from the start. Restarting each time keeps the whole pass free of state that
+//! would have to survive a pause, at the cost of re-reading a small buffer.
 
 use std::collections::HashMap;
 
@@ -188,6 +192,11 @@ pub(crate) struct Dtd {
   // the notations declared here.
   #[allow(dead_code)]
   notations: HashMap<NameId, ExternalId>,
+  /// General entities and elements declared in the external subset (or an external parameter
+  /// entity). A `standalone="yes"` document may not depend on these, so referencing such an
+  /// entity, or defaulting an attribute the external subset declared, is then a fatal error.
+  external_general: std::collections::HashSet<NameId>,
+  external_attlist: std::collections::HashSet<NameId>,
 }
 
 impl Dtd {
@@ -200,44 +209,240 @@ impl Dtd {
   pub(crate) fn attlist(&self, element: NameId) -> Option<&[AttDef]> {
     self.attlists.get(&element).map(Vec::as_slice)
   }
+
+  /// True if the general entity was declared where a standalone document may not depend on it:
+  /// in the external subset, or in an external parameter entity.
+  pub(crate) fn general_entity_is_external(&self, name: NameId) -> bool {
+    self.external_general.contains(&name)
+  }
+
+  /// True if any of an element's attribute declarations came from the external subset, so a
+  /// default or a tokenized normalization it supplies is off-limits to a standalone document.
+  pub(crate) fn attlist_is_external(&self, element: NameId) -> bool {
+    self.external_attlist.contains(&element)
+  }
 }
 
-/// Parses the internal DTD subset between the brackets of a `DOCTYPE`.
+/// A request for an external parameter entity, raised while parsing the DTD.
 ///
-/// Parameter-entity references are expanded where the internal subset permits them — between
-/// declarations, never inside one. An external parameter entity cannot be read here, so a
-/// reference to one is refused with a clear error rather than skipped.
+/// The parser pauses on one of these; the driver fetches the entity, splices its content into
+/// the DTD buffer at [`at`](Self::at)`..`[`end`](Self::end), and re-parses from the start.
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalPe {
+  pub(crate) name: String,
+  pub(crate) public_id: Option<String>,
+  pub(crate) system_id: String,
+  /// Byte range of the `%name;` reference in the buffer, replaced by the fetched content.
+  pub(crate) at: usize,
+  pub(crate) end: usize,
+}
+
+/// The result of one pass over the DTD buffer.
+pub(crate) enum DtdOutcome {
+  /// The DTD is fully parsed. Boxed because a completed DTD is much larger than a request.
+  Complete(Box<Dtd>),
+  /// An external parameter entity is needed; fetch it, splice it in, and parse again.
+  NeedExternalPe(ExternalPe),
+}
+
+/// Parses the DTD held in `buf`.
+///
+/// `buf` is the internal subset followed by the external subset (once fetched); `internal_len`
+/// is the byte length of the internal part, which decides where the stricter internal-subset
+/// rules apply. Internal parameter entities are spliced in as they are met and the pass
+/// continues; an external one stops the pass with [`DtdOutcome::NeedExternalPe`], and the pass
+/// is repeated after the driver splices its content in. Because each pass starts from the
+/// beginning of the growing buffer, no state has to be carried across a pause.
+pub(crate) fn parse_dtd(
+  buf: &mut String,
+  internal_len: &mut usize,
+  pool: &mut NamePool,
+  base: &Location,
+) -> Result<DtdOutcome> {
+  let mut parser = DtdParser {
+    pool,
+    base: base.clone(),
+    buf,
+    internal_len,
+    pos: 0,
+    dtd: Dtd::default(),
+    pause: None,
+    pe_regions: Vec::new(),
+  };
+  match parser.parse() {
+    Ok(()) => Ok(DtdOutcome::Complete(Box::new(parser.dtd))),
+    Err(_) if parser.pause.is_some() => Ok(DtdOutcome::NeedExternalPe(parser.pause.take().expect("just checked"))),
+    Err(e) => Err(e),
+  }
+}
+
+/// Parses a self-contained internal subset that references no external parameter entity.
+///
+/// A convenience over [`parse_dtd`] for tests and for a document whose DTD is wholly internal.
+#[cfg(test)]
 pub(crate) fn parse_internal_subset(subset: &str, pool: &mut NamePool, base: Location) -> Result<Dtd> {
-  DtdParser { pool, base, buf: subset.to_owned(), pos: 0, dtd: Dtd::default() }.parse()
+  let mut buf = subset.to_owned();
+  let mut internal_len = buf.len();
+  match parse_dtd(&mut buf, &mut internal_len, pool, &base)? {
+    DtdOutcome::Complete(dtd) => Ok(*dtd),
+    DtdOutcome::NeedExternalPe(pe) => {
+      Err(Error::new(ErrorKind::UnsupportedFeature, format!("needs external parameter entity \"{}\"", pe.name)))
+    }
+  }
 }
 
 struct DtdParser<'p> {
   pool: &'p mut NamePool,
   base: Location,
-  /// The subset, rewritten in place as parameter entities are spliced in.
-  buf: String,
+  /// The DTD text, rewritten in place as parameter entities are spliced in.
+  buf: &'p mut String,
+  /// Byte length of the internal subset; text at or after it obeys external-subset rules.
+  internal_len: &'p mut usize,
   pos: usize,
   dtd: Dtd,
+  /// Set when the pass must stop to have an external parameter entity fetched.
+  pause: Option<ExternalPe>,
+  /// Byte ranges of parameter-entity replacement text spliced into the buffer, so that a
+  /// declaration straddling one boundary — its `<!` in the replacement and its `>` outside, or
+  /// the reverse — can be rejected (WFC: PE Between Declarations, Proper PE Nesting).
+  pe_regions: Vec<std::ops::Range<usize>>,
 }
 
 impl DtdParser<'_> {
-  fn parse(mut self) -> Result<Dtd> {
+  fn parse(&mut self) -> Result<()> {
     loop {
+      self.skip_whitespace();
+      self.expand_parameter_entity()?;
       self.skip_whitespace();
       let Some(c) = self.peek() else { break };
       match c {
-        '%' => self.parameter_reference()?,
-        '<' => self.markup_declaration()?,
+        '<' => {
+          let start = self.pos;
+          self.markup_declaration()?;
+          // The whole markup declaration must lie within one parameter-entity replacement, or
+          // wholly outside them all.
+          if !self.same_pe_region(start, self.pos) {
+            return Err(self.error("a markup declaration begins in one parameter entity and ends in another"));
+          }
+        }
+        // In the internal subset `%` is a reference between declarations; in the external
+        // subset `expand_parameter_entity` above already dealt with it, so reaching one here
+        // means it stood where a declaration should.
         _ => return Err(self.error(format!("{c:?} is not the start of a markup declaration"))),
       }
     }
-    Ok(self.dtd)
+    Ok(())
+  }
+
+  /// True if byte positions `a` and `b` lie in the same parameter-entity replacement, or both
+  /// lie outside every one.
+  fn same_pe_region(&self, a: usize, b: usize) -> bool {
+    let region_of = |p: usize| self.pe_regions.iter().position(|r| r.start <= p && p < r.end);
+    // `b` is one past the declaration's last character, so test the last character itself.
+    region_of(a) == region_of(b.saturating_sub(1))
+  }
+
+  /// True when the cursor is in the external subset, where a parameter-entity reference may
+  /// appear inside a declaration and conditional sections are allowed.
+  fn external(&self) -> bool {
+    self.pos >= *self.internal_len
+  }
+
+  /// Expands a parameter-entity reference at the cursor, if there is one and it is allowed
+  /// here. An internal entity is spliced in and the cursor rewound to read it; an external one
+  /// stops the pass.
+  fn expand_parameter_entity(&mut self) -> Result<()> {
+    self.expand_parameter_entities(true)
+  }
+
+  /// Expands the parameter-entity references at the cursor.
+  ///
+  /// `spaces` adds the leading and trailing space of §4.4.8, wanted everywhere the reference
+  /// stands as markup but not inside an entity value, where §4.4.5 includes it literally.
+  fn expand_parameter_entities(&mut self, spaces: bool) -> Result<()> {
+    while self.peek_pe_start() {
+      let start = self.pos;
+      self.pos += 1;
+      let name = self.raw_name("parameter entity")?;
+      self.expect(';')?;
+      match self.dtd.parameter.get(&name).cloned() {
+        Some(ParameterEntity::Internal { value }) => {
+          // With the §4.4.8 spaces the entity's own text is the middle; the region excludes
+          // them so the boundary check sees exactly the replacement.
+          let (replacement, content) =
+            if spaces { (format!(" {value} "), 1..1 + value.len()) } else { (value.clone(), 0..value.len()) };
+          self.splice(start..self.pos, &replacement, content);
+          self.pos = start;
+        }
+        Some(ParameterEntity::External { public_id, system_id }) => {
+          self.pause = Some(ExternalPe {
+            name: self.pool.resolve(name).to_owned(),
+            public_id,
+            system_id,
+            at: start,
+            end: self.pos,
+          });
+          return Err(self.pause_error());
+        }
+        None => {
+          let name = self.pool.resolve(name).to_owned();
+          return Err(self.error(format!("parameter entity \"{name}\" is referenced before it is declared")));
+        }
+      }
+      if spaces {
+        self.skip_whitespace();
+      }
+    }
+    Ok(())
+  }
+
+  /// True if a parameter-entity reference stands at the cursor.
+  fn peek_pe_start(&self) -> bool {
+    self.rest().starts_with('%') && self.rest()[1..].starts_with(|c: char| chars::is_name_start_char(c))
+  }
+
+  /// Replaces `range` in the buffer with `replacement`, keeping `internal_len` and the
+  /// parameter-entity regions in step. `content` marks how much of `replacement` is the
+  /// entity's own text (the rest is the spaces §4.4.8 adds), which is the part that becomes a
+  /// region.
+  fn splice(&mut self, range: std::ops::Range<usize>, replacement: &str, content: std::ops::Range<usize>) {
+    let (start, old_len, new_len) = (range.start, range.len(), replacement.len());
+    if start < *self.internal_len {
+      let removed = range.end.min(*self.internal_len) - start;
+      *self.internal_len = *self.internal_len - removed + new_len;
+    }
+    // Shift the regions that follow the splice, and drop any the splice overwrote.
+    let delta = new_len as isize - old_len as isize;
+    self.pe_regions.retain(|r| !(r.start >= start && r.start < range.end));
+    for region in &mut self.pe_regions {
+      if region.start >= range.end {
+        region.start = (region.start as isize + delta) as usize;
+        region.end = (region.end as isize + delta) as usize;
+      }
+    }
+    if !content.is_empty() {
+      self.pe_regions.push((start + content.start)..(start + content.end));
+    }
+    self.buf.replace_range(range, replacement);
+  }
+
+  /// The sentinel error that unwinds a pass paused for an external parameter entity. It is
+  /// never surfaced: [`parse_dtd`] turns it into [`DtdOutcome::NeedExternalPe`].
+  fn pause_error(&self) -> Error {
+    Error::new(ErrorKind::Internal, "<paused for an external parameter entity>")
   }
 
   /// Handles one of the constructs that begin with `<` in the subset.
   fn markup_declaration(&mut self) -> Result<()> {
     if self.consume("<!--") {
       return self.comment();
+    }
+    // A conditional section is only allowed in the external subset.
+    if self.rest().starts_with("<![") {
+      if !self.external() {
+        return Err(self.error("a conditional section may not appear in the internal subset"));
+      }
+      return self.conditional_section();
     }
     if self.consume("<?") {
       return self.processing_instruction();
@@ -255,6 +460,72 @@ impl DtdParser<'_> {
       return self.notation_declaration();
     }
     Err(self.error("expected <!ELEMENT, <!ATTLIST, <!ENTITY, <!NOTATION, a comment or a processing instruction"))
+  }
+
+  /// `conditionalSect ::= includeSect | ignoreSect` (external subset only).
+  ///
+  /// `<![ INCLUDE [ ... ]]>` parses its contents as DTD; `<![ IGNORE [ ... ]]>` skips them,
+  /// counting nested sections so an inner `]]>` does not close the outer one. The keyword may
+  /// itself have come from a parameter entity, so it is read after PE expansion.
+  fn conditional_section(&mut self) -> Result<()> {
+    self.pos += 3; // "<!["
+    self.skip_whitespace();
+    self.expand_parameter_entity()?;
+    self.skip_whitespace();
+    let keyword = if self.consume("INCLUDE") {
+      true
+    } else if self.consume("IGNORE") {
+      false
+    } else {
+      return Err(self.error("a conditional section must be INCLUDE or IGNORE"));
+    };
+    self.skip_whitespace();
+    if !self.consume("[") {
+      return Err(self.error("expected \"[\" after INCLUDE or IGNORE"));
+    }
+    if keyword {
+      // INCLUDE: parse the contents, then require the closing "]]>".
+      return self.include_section();
+    }
+    self.skip_ignored_section()
+  }
+
+  /// Parses the body of an `INCLUDE` section up to its `]]>`.
+  fn include_section(&mut self) -> Result<()> {
+    loop {
+      self.skip_whitespace();
+      self.expand_parameter_entity()?;
+      self.skip_whitespace();
+      if self.consume("]]>") {
+        return Ok(());
+      }
+      if self.peek().is_none() {
+        return Err(self.error("an INCLUDE section is not closed by \"]]>\""));
+      }
+      self.markup_declaration()?;
+    }
+  }
+
+  /// Skips the body of an `IGNORE` section, honouring nested `<![ ... ]]>`.
+  fn skip_ignored_section(&mut self) -> Result<()> {
+    let mut depth = 1usize;
+    while depth > 0 {
+      let rest = self.rest();
+      let open = rest.find("<![");
+      let close = rest.find("]]>");
+      match (open, close) {
+        (Some(o), Some(c)) if o < c => {
+          self.pos += o + 3;
+          depth += 1;
+        }
+        (_, Some(c)) => {
+          self.pos += c + 3;
+          depth -= 1;
+        }
+        _ => return Err(self.error("an IGNORE section is not closed by \"]]>\"")),
+      }
+    }
+    Ok(())
   }
 
   fn comment(&mut self) -> Result<()> {
@@ -288,6 +559,8 @@ impl DtdParser<'_> {
 
   /// `EntityDecl ::= '<!ENTITY' S ('%' S)? Name S EntityDef S? '>'`
   fn entity_declaration(&mut self) -> Result<()> {
+    // Where the declaration stands decides whether a standalone document may rely on it.
+    let from_external = self.external();
     self.require_whitespace("<!ENTITY")?;
     let parameter = self.consume("%");
     if parameter {
@@ -331,6 +604,9 @@ impl DtdParser<'_> {
       GeneralEntity::Internal { value: self.entity_value()? }
     };
     self.close_declaration()?;
+    if from_external && !self.dtd.general.contains_key(&name) {
+      self.dtd.external_general.insert(name);
+    }
     self.dtd.general.entry(name).or_insert(entity);
     Ok(())
   }
@@ -351,6 +627,10 @@ impl DtdParser<'_> {
 
   /// `contentspec ::= 'EMPTY' | 'ANY' | Mixed | children`
   fn content_spec(&mut self) -> Result<ContentSpec> {
+    // A whole content model may come from a parameter entity in the external subset.
+    if self.external() {
+      self.expand_parameter_entity()?;
+    }
     if self.consume_keyword("EMPTY") {
       return Ok(ContentSpec::Empty);
     }
@@ -369,23 +649,34 @@ impl DtdParser<'_> {
     }
   }
 
+  /// Skips whitespace and any parameter-entity references, as allowed within a content model
+  /// in the external subset.
+  fn skip_separators(&mut self) -> Result<()> {
+    self.skip_whitespace();
+    if self.external() {
+      self.expand_parameter_entity()?;
+      self.skip_whitespace();
+    }
+    Ok(())
+  }
+
   /// `Mixed ::= '(' S? '#PCDATA' (S? '|' S? Name)* S? ')*' | '(' S? '#PCDATA' S? ')'`
   fn mixed_content(&mut self) -> Result<ContentSpec> {
     self.expect('(')?;
-    self.skip_whitespace();
+    self.skip_separators()?;
     if !self.consume("#PCDATA") {
       return Err(self.error("mixed content must begin with #PCDATA"));
     }
     let mut names = Vec::new();
-    self.skip_whitespace();
+    self.skip_separators()?;
     loop {
       match self.peek() {
         Some(')') => break,
         Some('|') => {
           self.pos += 1;
-          self.skip_whitespace();
+          self.skip_separators()?;
           names.push(self.name("child element")?);
-          self.skip_whitespace();
+          self.skip_separators()?;
         }
         _ => return Err(self.error("expected \"|\" or \")\" in mixed content")),
       }
@@ -402,6 +693,9 @@ impl DtdParser<'_> {
 
   /// `cp ::= (Name | choice | seq) ('?' | '*' | '+')?`
   fn content_particle(&mut self) -> Result<ContentParticle> {
+    if self.external() {
+      self.expand_parameter_entity()?;
+    }
     if self.peek() == Some('(') {
       return self.choice_or_seq();
     }
@@ -413,9 +707,9 @@ impl DtdParser<'_> {
   /// `seq ::= '(' S? cp ( S? ',' S? cp )* S? ')'`
   fn choice_or_seq(&mut self) -> Result<ContentParticle> {
     self.expect('(')?;
-    self.skip_whitespace();
+    self.skip_separators()?;
     let mut particles = vec![self.content_particle()?];
-    self.skip_whitespace();
+    self.skip_separators()?;
 
     // The first separator fixes whether this is a choice or a sequence.
     let separator = match self.peek() {
@@ -431,9 +725,9 @@ impl DtdParser<'_> {
       match self.peek() {
         Some(c) if c == separator => {
           self.pos += 1;
-          self.skip_whitespace();
+          self.skip_separators()?;
           particles.push(self.content_particle()?);
-          self.skip_whitespace();
+          self.skip_separators()?;
         }
         Some(')') => {
           self.pos += 1;
@@ -471,11 +765,16 @@ impl DtdParser<'_> {
 
   /// `AttlistDecl ::= '<!ATTLIST' S Name AttDef* S? '>'`
   fn attlist_declaration(&mut self) -> Result<()> {
+    let from_external = self.external();
     self.require_whitespace("<!ATTLIST")?;
     let element = self.name("element")?;
+    if from_external {
+      self.dtd.external_attlist.insert(element);
+    }
     let mut defs = Vec::new();
     loop {
-      self.skip_whitespace();
+      // A whole attribute definition, or several, may come from a parameter entity.
+      self.skip_separators()?;
       if self.consume(">") {
         break;
       }
@@ -600,12 +899,40 @@ impl DtdParser<'_> {
 
   /// `EntityValue`, with character references expanded and general references left in place.
   ///
-  /// Parameter-entity references may not appear here in the internal subset (WFC: PEs in
-  /// Internal Subset), so a `%` is rejected rather than expanded.
+  /// A parameter-entity reference is included literally (§4.4.5) in the external subset, and
+  /// forbidden in the internal one (WFC: PEs in Internal Subset).
   fn entity_value(&mut self) -> Result<String> {
     let quote = self.expect_quote()?;
     let mut out = String::new();
     loop {
+      // A parameter entity in an entity value is included literally: append its already-
+      // processed value, so a quote inside it does not close the literal (splicing it into the
+      // buffer would). An external one is still spliced and fetched, which is rarer.
+      if self.external() && self.peek_pe_start() {
+        let start = self.pos;
+        self.pos += 1;
+        let name = self.raw_name("parameter entity")?;
+        self.expect(';')?;
+        match self.dtd.parameter.get(&name).cloned() {
+          Some(ParameterEntity::Internal { value }) => out.push_str(&value),
+          Some(ParameterEntity::External { public_id, system_id }) => {
+            self.pos = start;
+            self.pause = Some(ExternalPe {
+              name: self.pool.resolve(name).to_owned(),
+              public_id,
+              system_id,
+              at: start,
+              end: start + 1 + self.pool.resolve(name).len() + 1,
+            });
+            return Err(self.pause_error());
+          }
+          None => {
+            let name = self.pool.resolve(name).to_owned();
+            return Err(self.error(format!("parameter entity \"{name}\" is referenced before it is declared")));
+          }
+        }
+        continue;
+      }
       let Some(c) = self.peek() else {
         return Err(self.error("an entity value is not closed"));
       };
@@ -679,33 +1006,6 @@ impl DtdParser<'_> {
     digits
   }
 
-  /// A parameter-entity reference between declarations: splice its value in and re-read.
-  fn parameter_reference(&mut self) -> Result<()> {
-    let start = self.pos;
-    self.pos += 1; // '%'
-    let name = self.name("parameter entity")?;
-    self.expect(';')?;
-    match self.dtd.parameter.get(&name) {
-      Some(ParameterEntity::Internal { value }) => {
-        // A parameter entity is included with a leading and trailing space (§4.4.8).
-        let replacement = format!(" {value} ");
-        self.buf.replace_range(start..self.pos, &replacement);
-        self.pos = start;
-        Ok(())
-      }
-      Some(ParameterEntity::External { .. }) => {
-        let name = self.pool.resolve(name).to_owned();
-        let message =
-          format!("parameter entity \"{name}\" is external; reading the external DTD subset is not yet supported");
-        Err(Error::new(ErrorKind::UnsupportedFeature, message).at(self.base.clone()))
-      }
-      None => {
-        let name = self.pool.resolve(name).to_owned();
-        Err(self.error(format!("parameter entity \"{name}\" is referenced before it is declared")))
-      }
-    }
-  }
-
   /// `(Name (S? '|' S? Name)*)` in parentheses, for `NOTATION` types.
   fn name_group(&mut self) -> Result<Vec<NameId>> {
     self.group(|p| p.name("notation"))
@@ -737,6 +1037,16 @@ impl DtdParser<'_> {
   // --- low-level scanning ---
 
   fn name(&mut self, role: &str) -> Result<NameId> {
+    // In the external subset a name may have been written as a parameter entity, e.g. the
+    // element name in `<!ATTLIST %e; ...>`; expand it before reading.
+    if self.external() {
+      self.expand_parameter_entity()?;
+    }
+    self.raw_name(role)
+  }
+
+  /// Reads a name without first expanding a parameter entity, for reading the name *of* one.
+  fn raw_name(&mut self, role: &str) -> Result<NameId> {
     let len = self.rest().find(|c: char| !chars::is_name_char(c)).unwrap_or(self.rest().len());
     // Copy off `buf` before touching the pool, which borrows `self` mutably.
     let name = self.rest()[..len].to_owned();
@@ -834,8 +1144,19 @@ impl DtdParser<'_> {
   }
 
   fn require_whitespace(&mut self, after: &str) -> Result<()> {
+    // A parameter-entity reference may also stand where whitespace does, and its markup form
+    // supplies the required separator, so it is accepted here in the external subset.
+    if self.external() && self.peek_pe_start() {
+      self.expand_parameter_entity()?;
+      return Ok(());
+    }
     if self.peek().is_some_and(chars::is_whitespace) {
       self.skip_whitespace();
+      // The next token may itself be a parameter entity, e.g. the type or default in an
+      // attribute definition.
+      if self.external() {
+        self.expand_parameter_entity()?;
+      }
       Ok(())
     } else {
       Err(self.error(format!("expected whitespace after {after}")))

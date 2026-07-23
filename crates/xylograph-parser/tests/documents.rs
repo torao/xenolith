@@ -163,6 +163,79 @@ fn ill_formed_documents_are_rejected_with_a_useful_message() {
   }
 }
 
+/// A resolver over an in-memory map of system id to bytes, for the external-DTD tests.
+struct MapResolver(std::collections::HashMap<&'static str, &'static [u8]>);
+
+impl xylograph_parser::resolve::UriResolver for MapResolver {
+  fn resolve(
+    &mut self,
+    request: &xylograph_parser::resolve::EntityRequest,
+  ) -> Result<Option<Vec<u8>>, xylograph_core::Error> {
+    Ok(self.0.get(request.system_id()).map(|b| b.to_vec()))
+  }
+}
+
+fn parse_with(xml: &str, files: &[(&'static str, &'static [u8])]) -> Result<Vec<Event>, String> {
+  let resolver = MapResolver(files.iter().copied().collect());
+  Reader::new(xml.as_bytes()).with_resolver(resolver).events().collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+#[test]
+fn an_external_subset_declares_entities_and_defaults() {
+  // The external subset supplies the entity and the attribute default the document relies on.
+  let dtd: &[u8] = b"<!ELEMENT doc (#PCDATA)>\n<!ATTLIST doc lang CDATA 'en'>\n<!ENTITY greeting 'hello'>";
+  let xml = "<!DOCTYPE doc SYSTEM 'doc.dtd'><doc>&greeting;</doc>";
+  let events = parse_with(xml, &[("doc.dtd", dtd)]).expect("should parse");
+  let Event::StartElement { attributes, .. } = &events[1] else { panic!("expected <doc>") };
+  assert_eq!(attributes.iter().find(|a| a.value == "en").map(|a| a.value.as_str()), Some("en"));
+  assert_eq!(events[2].text(), Some("hello"));
+}
+
+#[test]
+fn a_parameter_entity_parameterizes_a_declaration() {
+  // `%e;` stands for the whole attribute definition, as real DTDs do.
+  let dtd: &[u8] = b"<!ELEMENT doc (#PCDATA)>\n<!ENTITY % e 'a1 CDATA \"v1\"'>\n<!ATTLIST doc %e;>";
+  let xml = "<!DOCTYPE doc SYSTEM 'doc.dtd'><doc/>";
+  let events = parse_with(xml, &[("doc.dtd", dtd)]).expect("should parse");
+  let Event::StartElement { attributes, .. } = &events[1] else { panic!("expected <doc>") };
+  assert_eq!(attributes.iter().find(|a| a.value == "v1").map(|a| a.value.as_str()), Some("v1"));
+}
+
+#[test]
+fn an_external_parameter_entity_is_fetched_and_spliced() {
+  let outer: &[u8] = b"<!ELEMENT doc EMPTY>\n<!ENTITY % inner SYSTEM 'inner.dtd'>\n%inner;";
+  let inner: &[u8] = b"<!ATTLIST doc a CDATA 'defaulted'>";
+  let xml = "<!DOCTYPE doc SYSTEM 'outer.dtd'><doc/>";
+  let events = parse_with(xml, &[("outer.dtd", outer), ("inner.dtd", inner)]).expect("should parse");
+  let Event::StartElement { attributes, .. } = &events[1] else { panic!("expected <doc>") };
+  assert_eq!(attributes.first().map(|a| a.value.as_str()), Some("defaulted"));
+}
+
+#[test]
+fn a_standalone_document_may_not_depend_on_the_external_subset() {
+  // standalone="yes" but the entity is only declared externally: a fatal error.
+  let dtd: &[u8] = b"<!ELEMENT doc (#PCDATA)>\n<!ENTITY e 'x'>";
+  let xml = "<?xml version='1.0' standalone='yes'?><!DOCTYPE doc SYSTEM 'doc.dtd'><doc>&e;</doc>";
+  let message = parse_with(xml, &[("doc.dtd", dtd)]).expect_err("standalone violation");
+  assert!(message.contains("standalone"), "{message}");
+}
+
+#[test]
+fn a_conditional_section_includes_or_ignores() {
+  let dtd: &[u8] = b"<![INCLUDE[<!ELEMENT doc (#PCDATA)>]]>\n<![IGNORE[<!ELEMENT doc EMPTY> ]]>";
+  let xml = "<!DOCTYPE doc SYSTEM 'doc.dtd'><doc>text</doc>";
+  assert_eq!(parse_with(xml, &[("doc.dtd", dtd)]).expect("should parse")[2].text(), Some("text"));
+}
+
+#[test]
+fn a_declaration_may_not_straddle_a_parameter_entity_boundary() {
+  // WFC: the whole markup declaration must lie in one replacement text.
+  let dtd: &[u8] = b"<!ENTITY % partial '<!ELEMENT doc '>\n%partial;EMPTY>";
+  let xml = "<!DOCTYPE doc SYSTEM 'doc.dtd'><doc/>";
+  let message = parse_with(xml, &[("doc.dtd", dtd)]).expect_err("straddling declaration");
+  assert!(message.contains("parameter entity"), "{message}");
+}
+
 #[test]
 fn attribute_defaults_and_types_come_from_the_dtd() {
   let xml = "<!DOCTYPE a [\

@@ -178,9 +178,20 @@ pub struct Parser {
   seen_doctype: bool,
   /// The document type definition, once a `DOCTYPE` has declared one.
   dtd: Option<Dtd>,
-  /// True if the document has an external DTD subset we have not read, so an entity we cannot
-  /// find might still be declared out there.
+  /// True if the document declared an external DTD subset that was not read (no resolver), so
+  /// an entity we cannot find might still be declared out there.
   external_subset_unread: bool,
+  /// The DTD text being parsed — internal subset then external subset — grown as parameter
+  /// entities are spliced in. Non-empty only while the DTD is being parsed.
+  dtd_buf: String,
+  /// Byte length of the internal subset within [`dtd_buf`](Self::dtd_buf).
+  dtd_internal_len: usize,
+  /// The external subset's identifier, until it has been fetched.
+  dtd_external_id: Option<(Option<String>, String)>,
+  /// True while the DTD is being parsed: `advance` drives it before the `Doctype` event.
+  dtd_active: bool,
+  /// The external parameter entity being fetched, so its content can be spliced back in.
+  dtd_pe: Option<dtd::ExternalPe>,
   /// Character data accumulated but not yet emitted, so a run split by a character reference
   /// or an entity boundary still surfaces as one text event where it can.
   pending_text: String,
@@ -255,6 +266,11 @@ impl Parser {
       seen_doctype: false,
       dtd: None,
       external_subset_unread: false,
+      dtd_buf: String::new(),
+      dtd_internal_len: 0,
+      dtd_external_id: None,
+      dtd_active: false,
+      dtd_pe: None,
       pending_text: String::new(),
       pending_text_at: Location::unknown(),
       held: None,
@@ -293,6 +309,9 @@ impl Parser {
   /// Returns [`ErrorKind::WellFormedness`] or [`ErrorKind::Namespace`] for a document that
   /// breaks the rules, and passes on decoding and limit errors.
   pub fn advance(&mut self) -> Result<Progress> {
+    if self.dtd_active {
+      return self.drive_dtd();
+    }
     if self.end_pending {
       self.end_pending = false;
       let open = self.open.pop().expect("an empty element was left open");
@@ -376,6 +395,10 @@ impl Parser {
         self.kind = Some(kind);
         return Ok(Progress::Event(kind));
       }
+      // A DOCTYPE was just read: parse its DTD, which may pause to fetch entities.
+      if self.dtd_active {
+        return self.drive_dtd();
+      }
       if self.pending_entity.is_some() {
         return Ok(Progress::NeedEntity);
       }
@@ -405,7 +428,7 @@ impl Parser {
     match token {
       Token::Pi => self.processing_instruction(text),
       Token::Comment => self.comment(text).map(Some),
-      Token::Doctype => self.doctype(text).map(Some),
+      Token::Doctype => self.doctype(text),
       Token::StartTag => self.start_tag(text).map(Some),
       Token::EndTag => self.end_tag(text).map(Some),
       Token::CData => self.cdata(text).map(Some),
@@ -566,7 +589,7 @@ impl Parser {
     Ok(EventKind::Comment)
   }
 
-  fn doctype(&mut self, text: &str) -> Result<EventKind> {
+  fn doctype(&mut self, text: &str) -> Result<Option<EventKind>> {
     if self.phase != Phase::Prolog {
       let message = "the document type declaration must come before the root element";
       return Err(self.error(ErrorKind::WellFormedness, message));
@@ -586,27 +609,65 @@ impl Parser {
     let after_name = &body[name_len..];
 
     let (before_bracket, internal_subset) = match after_name.split_once('[') {
-      Some((before, subset)) => (before, Some(subset.trim_end().trim_end_matches(']'))),
-      None => (after_name, None),
+      Some((before, subset)) => (before, subset.trim_end().trim_end_matches(']')),
+      None => (after_name, ""),
     };
     // Between the name and the internal subset only an external identifier may appear.
-    let external_id = before_bracket.trim();
-    self.external_subset_unread = external_id.starts_with("SYSTEM") || external_id.starts_with("PUBLIC");
-    if !external_id.is_empty() && !self.external_subset_unread {
-      let message = format!("{external_id:?} is not a valid external identifier in the document type declaration");
-      return Err(self.error(ErrorKind::WellFormedness, message));
-    }
-
-    if let Some(subset) = internal_subset.filter(|s| !s.trim().is_empty()) {
-      let dtd = dtd::parse_internal_subset(subset, &mut self.pool, self.token_at.clone())?;
-      self.dtd = Some(dtd);
+    let external = before_bracket.trim();
+    self.dtd_external_id = if external.is_empty() {
+      None
+    } else if external.starts_with("SYSTEM") || external.starts_with("PUBLIC") {
+      Some(parse_external_id(external).ok_or_else(|| {
+        self.error(ErrorKind::WellFormedness, format!("{external:?} is not a valid external identifier"))
+      })?)
     } else {
-      self.dtd = Some(Dtd::default());
-    }
+      let message = format!("{external:?} is not a valid external identifier in the document type declaration");
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    };
 
+    // Keep the DOCTYPE text for the event, and set up the DTD to be parsed by `drive_dtd`,
+    // which runs across the entity fetches an external subset or parameter entity may need.
     self.text.clear();
     self.text.push_str(text);
-    Ok(EventKind::Doctype)
+    self.dtd_buf = internal_subset.to_owned();
+    self.dtd_internal_len = self.dtd_buf.len();
+    self.dtd_active = true;
+    Ok(None)
+  }
+
+  /// Drives DTD parsing across the entity fetches it may need, and emits the `Doctype` event
+  /// when the DTD is complete.
+  fn drive_dtd(&mut self) -> Result<Progress> {
+    // Fetch the external subset first, if one was declared and is not yet in the buffer.
+    if let Some((public_id, system_id)) = self.dtd_external_id.take() {
+      let base = self.stack.document().base_uri().map(ToString::to_string);
+      self.pending_entity = Some(EntityRequest::new(None, public_id, system_id, base, RequestKind::ExternalSubset));
+      return Ok(Progress::NeedEntity);
+    }
+    // One pass over the buffer. It either finishes the DTD or stops for an external parameter
+    // entity; in the latter case the driver fetches it and calls back here through `advance`.
+    let base = self.token_at.clone();
+    match dtd::parse_dtd(&mut self.dtd_buf, &mut self.dtd_internal_len, &mut self.pool, &base)? {
+      dtd::DtdOutcome::Complete(dtd) => {
+        self.dtd = Some(*dtd);
+        self.dtd_active = false;
+        self.dtd_buf = String::new();
+        self.kind = Some(EventKind::Doctype);
+        Ok(Progress::Event(EventKind::Doctype))
+      }
+      dtd::DtdOutcome::NeedExternalPe(pe) => {
+        let base = self.stack.document().base_uri().map(ToString::to_string);
+        self.pending_entity = Some(EntityRequest::new(
+          Some(pe.name.clone()),
+          pe.public_id.clone(),
+          pe.system_id.clone(),
+          base,
+          RequestKind::ParameterEntity,
+        ));
+        self.dtd_pe = Some(pe);
+        Ok(Progress::NeedEntity)
+      }
+    }
   }
 
   fn cdata(&mut self, text: &str) -> Result<EventKind> {
@@ -728,6 +789,14 @@ impl Parser {
   fn push_general_entity(&mut self, name: NameId, at: &Location) -> Result<()> {
     self.token_at = at.clone();
     let display = self.pool.resolve(name).to_owned();
+    // WFC: Entity Declared, standalone form. A standalone document may not reference an entity
+    // that only the external subset declares.
+    if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(name)) {
+      let message = format!(
+        "entity \"{display}\" is declared in the external subset, which a standalone document may not depend on"
+      );
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    }
     match self.dtd.as_ref().and_then(|dtd| dtd.general_entity(name)).cloned() {
       Some(GeneralEntity::Internal { value }) => {
         let base = self.stack.base_uri().cloned();
@@ -934,10 +1003,21 @@ impl Parser {
     }
 
     // Supply defaults for attributes the tag did not carry.
+    let external_attlist = self.dtd.as_ref().is_some_and(|d| d.attlist_is_external(element));
     for def in &defs {
       let Some(value) = def.default.value() else { continue };
       if present.contains(&def.name) {
         continue;
+      }
+      // WFC: Standalone Document Declaration. A default from the external subset may not be
+      // applied to a standalone document.
+      if self.standalone == Some(true) && external_attlist {
+        let name = self.pool.resolve(def.name).to_owned();
+        let message = format!(
+          "attribute \"{name}\" would take a default from the external subset, \
+           which a standalone document may not depend on"
+        );
+        return Err(self.error(ErrorKind::WellFormedness, message));
       }
       let start = self.attribute_text.len();
       if value.contains('&') {
@@ -1156,6 +1236,11 @@ impl Parser {
   /// or unparsed entity, is caught here where XML 1.0 §3.3.1 forbids it.
   fn expand_general_in_attribute(&mut self, name: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
     let id = self.pool.intern(name);
+    if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(id)) {
+      let message =
+        format!("entity \"{name}\" is declared in the external subset, which a standalone document may not depend on");
+      return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+    }
     let entity = self.dtd.as_ref().and_then(|dtd| dtd.general_entity(id)).cloned();
     match entity {
       Some(GeneralEntity::Internal { value }) => {
@@ -1343,24 +1428,54 @@ impl Parser {
     }
     stream.feed(bytes, true)?;
     self.strip_text_declaration(&mut stream)?;
-    let name = request.name().map(Into::into);
-    let entity = Entity::new(name, EntityKind::ExternalGeneral, stream, None);
-    self.stack.push(entity)
+
+    match request.kind() {
+      RequestKind::GeneralEntity => {
+        let name = request.name().map(Into::into);
+        self.stack.push(Entity::new(name, EntityKind::ExternalGeneral, stream, None))
+      }
+      // The external subset is DTD text: append it after the internal subset and resume.
+      RequestKind::ExternalSubset => {
+        if !self.dtd_buf.is_empty() {
+          self.dtd_buf.push('\n');
+        }
+        self.dtd_buf.push_str(stream.remainder());
+        Ok(())
+      }
+      // An external parameter entity's content replaces the `%name;` that summoned it.
+      RequestKind::ParameterEntity => {
+        let pe = self.dtd_pe.take().expect("a parameter entity was pending");
+        let replacement = format!(" {} ", stream.remainder());
+        if pe.at < self.dtd_internal_len {
+          let removed = pe.end.min(self.dtd_internal_len) - pe.at;
+          self.dtd_internal_len = self.dtd_internal_len - removed + replacement.len();
+        }
+        self.dtd_buf.replace_range(pe.at..pe.end, &replacement);
+        Ok(())
+      }
+    }
   }
 
   /// Reports that the entity the parser asked for could not be resolved.
   ///
-  /// For a well-formed document this is fatal: a referenced parsed entity must be available.
+  /// A general or parameter entity that cannot be resolved is fatal for a well-formed
+  /// document. The external subset, which a non-validating processor need not read, is instead
+  /// skipped; a later reference to an entity that only it declared is what then fails.
   ///
   /// # Errors
   ///
-  /// Always returns [`ErrorKind::WellFormedness`], naming the entity.
+  /// [`ErrorKind::WellFormedness`] for a general or parameter entity.
   ///
   /// # Panics
   ///
   /// If the parser is not waiting for an entity.
   pub fn decline_entity(&mut self) -> Result<()> {
     let request = self.pending_entity.take().expect("the parser is not waiting for an entity");
+    if request.kind() == RequestKind::ExternalSubset {
+      self.external_subset_unread = true;
+      self.dtd_pe = None;
+      return Ok(());
+    }
     let what = request.name().map_or_else(|| "an external entity".to_owned(), |name| format!("entity \"{name}\""));
     Err(self.error(ErrorKind::WellFormedness, format!("{what} could not be resolved")))
   }
@@ -1463,6 +1578,40 @@ impl Iterator for Events<'_> {
 
 fn whitespace_len(text: &str) -> usize {
   text.len() - text.trim_start_matches(chars::is_whitespace).len()
+}
+
+/// Parses an `ExternalID` into its public and system identifiers.
+///
+/// `ExternalID ::= 'SYSTEM' S SystemLiteral | 'PUBLIC' S PubidLiteral S SystemLiteral`.
+/// Returns `None` if it is not shaped like one.
+fn parse_external_id(text: &str) -> Option<(Option<String>, String)> {
+  fn read_literal(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start_matches(chars::is_whitespace);
+    let quote = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let rest = &s[quote.len_utf8()..];
+    let end = rest.find(quote)?;
+    Some((rest[..end].to_owned(), &rest[end + quote.len_utf8()..]))
+  }
+  if let Some(rest) = text.strip_prefix("SYSTEM") {
+    if !rest.starts_with(chars::is_whitespace) {
+      return None;
+    }
+    let (system, _) = read_literal(rest)?;
+    Some((None, system))
+  } else if let Some(rest) = text.strip_prefix("PUBLIC") {
+    if !rest.starts_with(chars::is_whitespace) {
+      return None;
+    }
+    let (public, after_public) = read_literal(rest)?;
+    // A system literal must be separated from the public one by whitespace.
+    if !after_public.starts_with(chars::is_whitespace) {
+      return None;
+    }
+    let (system, _) = read_literal(after_public)?;
+    Some((Some(public), system))
+  } else {
+    None
+  }
 }
 
 /// Explains why `name` is not a usable element or attribute name.

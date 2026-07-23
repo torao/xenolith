@@ -19,6 +19,10 @@ use std::fmt;
 pub enum RequestKind {
   /// A general entity referenced in content.
   GeneralEntity,
+  /// The external DTD subset named on the `DOCTYPE`.
+  ExternalSubset,
+  /// An external parameter entity referenced while parsing the DTD.
+  ParameterEntity,
 }
 
 /// A request for an external entity the parser cannot read itself.

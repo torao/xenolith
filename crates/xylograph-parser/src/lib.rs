@@ -4,12 +4,12 @@
 //! same core drives a blocking reader, an async reader, or an in-memory slice, and can stop
 //! mid-document to ask for an entity that someone else fetches. See `ROADMAP.md`, decision 7.
 //!
-//! It reads an internal DTD subset: general entities are resolved in content and attributes,
-//! declared attribute defaults are supplied, and tokenized attribute values are normalized.
-//! An external general entity is fetched through a [`resolve::UriResolver`] supplied to the
-//! reader — off by default, since that is the XXE attack surface. The external
-//! DTD subset and external parameter entities are not read yet; a reference to one is reported
-//! rather than guessed at.
+//! It reads the DTD in full — internal subset, external subset, and internal and external
+//! parameter entities: general entities are resolved in content and attributes, declared
+//! attribute defaults are supplied, tokenized attribute values are normalized, and the
+//! standalone and parameter-entity nesting constraints are enforced. Anything external — the
+//! external subset, an external entity — is fetched through a [`resolve::UriResolver`] given to
+//! the reader, off by default, since that is the XXE attack surface.
 //!
 //! # Where to start
 //!
