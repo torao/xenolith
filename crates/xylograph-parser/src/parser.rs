@@ -355,16 +355,33 @@ impl Parser {
     let mut rest = data;
     let mut seen: Vec<&str> = Vec::new();
     while !rest.trim_start_matches(chars::is_whitespace).is_empty() {
+      // `<?xml version="1.0"encoding="UTF-8"?>` is not a declaration: the production puts an
+      // `S` between the pseudo-attributes, not an optional one.
+      if whitespace_len(rest) == 0 {
+        let message = "the XML declaration needs whitespace between its parts";
+        return Err(self.error(ErrorKind::WellFormedness, message));
+      }
       let (name, value, tail) = self.pseudo_attribute(rest)?;
       match name {
         "version" if seen.is_empty() => {
-          if !value.starts_with("1.") {
-            let message = format!("XML version {value:?} is not supported");
+          // `VersionNum ::= '1.' [0-9]+`, so a stray space or character is not merely an
+          // unsupported version but a malformed declaration.
+          let digits = value.strip_prefix("1.").filter(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+          if digits.is_none() {
+            let message = format!("{value:?} is not an XML version; it must be \"1.\" followed by digits");
             return Err(self.error(ErrorKind::WellFormedness, message));
           }
           self.version = value.to_owned();
         }
-        "encoding" if seen == ["version"] => self.declared_encoding = Some(value.to_owned()),
+        "encoding" if seen == ["version"] => {
+          if !chars::is_enc_name(value) {
+            let message = format!(
+              "{value:?} is not an encoding name; it must start with a letter and hold only letters, digits, \".\", \"_\" and \"-\""
+            );
+            return Err(self.error(ErrorKind::WellFormedness, message));
+          }
+          self.declared_encoding = Some(value.to_owned());
+        }
         "standalone" if !seen.is_empty() && !seen.contains(&"standalone") => {
           self.standalone = match value {
             "yes" => Some(true),
@@ -410,6 +427,12 @@ impl Parser {
     if let Some(i) = body.find("--") {
       let message = "a comment may not contain \"--\"; use \"-\" or end the comment here";
       return Err(self.error_at(ErrorKind::WellFormedness, message, text, 4 + i));
+    }
+    // `Comment ::= '<!--' ((Char - '-') | ('-' (Char - '-')))* '-->'`, so the body cannot end
+    // with a dash either: `<!--a--->` is three dashes, not a comment closed by the last two.
+    if body.ends_with('-') {
+      let message = "a comment may not end with \"-\" before its \"-->\"";
+      return Err(self.error_at(ErrorKind::WellFormedness, message, text, text.len() - 4));
     }
     self.text.clear();
     self.text.push_str(body);
@@ -743,10 +766,20 @@ impl Parser {
   /// Expands one reference, given its text between `&` and `;`.
   fn expand_reference(&self, body: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
     if let Some(digits) = body.strip_prefix('#') {
-      let (digits, radix) = match digits.strip_prefix(['x', 'X']) {
+      // `CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';'`. The `x` is lower case only,
+      // and neither form admits a sign, which `from_str_radix` would otherwise accept.
+      let (digits, radix) = match digits.strip_prefix('x') {
         Some(hex) => (hex, 16),
         None => (digits, 10),
       };
+      if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        let message = if radix == 16 {
+          format!("\"&{body};\" is not a character reference; after \"&#x\" only 0-9, a-f and A-F may follow")
+        } else {
+          format!("\"&{body};\" is not a character reference; write \"&#\" and digits, or \"&#x\" and hex digits")
+        };
+        return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+      }
       let code = u32::from_str_radix(digits, radix).ok();
       let Some(c) = code.and_then(char::from_u32).filter(|c| chars::is_char(*c)) else {
         // Almost always a NUL, a C0 control or half a surrogate pair; none can be escaped.
@@ -1305,7 +1338,7 @@ mod tests {
     assert!(error(" <?xml version='1.0'?><a/>").message().contains("reserved"));
     assert!(error("<?XML version='1.0'?><a/>").message().contains("reserved"));
     assert!(error("<?xml?><a/>").message().contains("no version"));
-    assert!(error("<?xml version='2.0'?><a/>").message().contains("not supported"));
+    assert!(error("<?xml version='2.0'?><a/>").message().contains("not an XML version"));
     assert!(error("<?xml encoding='UTF-8' version='1.0'?><a/>").message().contains("out of place"));
     assert!(error("<?xml version='1.0' standalone='maybe'?><a/>").message().contains("standalone"));
   }

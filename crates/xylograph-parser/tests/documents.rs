@@ -176,6 +176,39 @@ fn an_expansion_bomb_is_refused_rather_than_expanded() {
   assert!(message.contains("x2"), "{message}");
 }
 
+/// Cases the W3C suite caught that hand-written tests had missed. Each is named after the
+/// case that found it.
+#[test]
+fn productions_are_checked_to_the_letter() {
+  // A comment body may not end with a dash: `<!--a--->` is not `<!--a-->` plus a stray one.
+  // (not-wf-sa-070, o-p15fail1)
+  assert!(rejects("<!--a---><a/>").contains("may not end with"));
+  assert!(rejects("<!-- three dashes ---><a/>").contains("may not end with"));
+  assert_eq!(kinds("<!----><a/>").len(), 3, "an empty comment is still a comment");
+  assert_eq!(kinds("<!--a-b--><a/>").len(), 3, "a lone dash inside is fine");
+
+  // `CharRef` spells the hexadecimal marker in lower case only. (not-wf-sa-093)
+  assert!(rejects("<a>&#X58;</a>").contains("not a character reference"));
+  assert!(rejects("<a>&#x;</a>").contains("not a character reference"));
+  assert!(rejects("<a>&#+58;</a>").contains("not a character reference"));
+  assert_eq!(parse("<a>&#x58;&#X0058;</a>"), parse("<a>&#x58;&#X0058;</a>"), "sanity");
+  assert!(rejects("<a>&#x58;&#X58;</a>").contains("not a character reference"));
+
+  // The XML declaration needs whitespace between its parts. (not-wf-sa-096, o-p32fail3)
+  assert!(rejects("<?xml version=\"1.0\"encoding=\"UTF-8\"?><a/>").contains("needs whitespace"));
+  assert!(rejects("<?xml version=\"1.0\"standalone=\"yes\"?><a/>").contains("needs whitespace"));
+
+  // `VersionNum ::= '1.' [0-9]+`. (not-wf-sa-102, o-p26fail1, o-p26fail2)
+  assert!(rejects("<?xml version=\"1.0 \"?><a/>").contains("not an XML version"));
+  assert!(rejects("<?xml version=\"1.0?\"?><a/>").contains("not an XML version"));
+  assert!(rejects("<?xml version=\"1.\"?><a/>").contains("not an XML version"));
+  assert!(rejects("<?xml version=\"2.0\"?><a/>").contains("not an XML version"));
+
+  // `EncName` starts with a letter and admits no spaces. (not-wf-sa-101)
+  assert!(rejects("<?xml version=\"1.0\" encoding=\" UTF-8\"?><a/>").contains("not an encoding name"));
+  assert!(rejects("<?xml version=\"1.0\" encoding=\"8859-1\"?><a/>").contains("not an encoding name"));
+}
+
 #[test]
 fn a_document_that_is_only_a_prolog_is_rejected() {
   assert!(rejects("<?xml version='1.0'?>").contains("no root element"));

@@ -130,14 +130,7 @@ pub fn parse_declared_encoding(bytes: &[u8]) -> Option<String> {
   let value = &after[1..=value_end];
 
   let name = std::str::from_utf8(value).ok()?;
-  is_enc_name(name).then(|| name.to_owned())
-}
-
-/// `EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')*`
-fn is_enc_name(s: &str) -> bool {
-  let mut chars = s.chars();
-  matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
-    && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+  crate::chars::is_enc_name(name).then(|| name.to_owned())
 }
 
 fn skip_whitespace(bytes: &[u8]) -> &[u8] {

@@ -15,7 +15,12 @@
 //! What can be judged depends on the phase. Until the DTD arrives in phase 2, a document with
 //! a `DOCTYPE` cannot be: an undeclared entity may in fact be declared, and default attribute
 //! values change which documents are well-formed. Those cases are counted as skipped.
+//!
+//! That leaves the `valid` cases checking nothing at all for now, since a case of that type is
+//! valid *against a DTD* and so carries one by construction. It is kept because phase 2 turns
+//! it on; until then only the `not-wf` run has teeth.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use xylograph_parser::Reader;
@@ -36,6 +41,9 @@ fn suite() -> Option<PathBuf> {
 /// kilobytes of real XML before a single case is judged.
 fn cases(root: &Path) -> Vec<(String, PathBuf, String)> {
   let mut cases = Vec::new();
+  // Sub-catalogues overlap: several list the same case, and a case counted twice inflates
+  // both the totals and the failure list.
+  let mut seen = HashSet::new();
   // The top-level catalogue pulls in the per-vendor ones through entity references, which
   // phase 1 cannot expand, so those files are found on disk instead.
   let catalogues = std::fs::read_dir(root)
@@ -61,7 +69,9 @@ fn cases(root: &Path) -> Vec<(String, PathBuf, String)> {
       let kind = parser.attribute_value(None, "TYPE").unwrap_or_default().to_owned();
       let namespace_aware = parser.attribute_value(None, "NAMESPACE") != Some("no");
       if let Some(uri) = parser.attribute_value(None, "URI").filter(|_| namespace_aware) {
-        cases.push((id, base.join(uri), kind));
+        if seen.insert(id.clone()) {
+          cases.push((id, base.join(uri), kind));
+        }
       }
     }
   }
@@ -83,10 +93,12 @@ fn parse(path: &Path) -> Result<(), String> {
 }
 
 /// Runs every case of one type, requiring each to be accepted or rejected as `expected`.
-fn run(kind: &str, expected: bool) {
+///
+/// Returns how many were actually judged.
+fn run(kind: &str, expected: bool) -> usize {
   let Some(root) = suite() else {
     eprintln!("skipped: set XMLCONF to a copy of the W3C suite (see this file's documentation)");
-    return;
+    return 0;
   };
   let (mut checked, mut skipped) = (0, 0);
   let mut failures = Vec::new();
@@ -110,14 +122,21 @@ fn run(kind: &str, expected: bool) {
 
   eprintln!("{kind}: {checked} checked, {skipped} skipped for phase 2, {} failed", failures.len());
   assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+  checked
 }
 
 #[test]
 fn valid_documents_are_accepted() {
+  // Expected to check nothing until phase 2: see this file's documentation.
   run("valid", true);
 }
 
 #[test]
 fn documents_that_are_not_well_formed_are_rejected() {
-  run("not-wf", false);
+  let checked = run("not-wf", false);
+  if std::env::var_os("XMLCONF").is_some() {
+    // A harness that quietly stops finding cases would otherwise look like a clean run. The
+    // suite of 2013-09-23 yields 182 here; the floor only has to catch a collapse.
+    assert!(checked >= 150, "only {checked} cases were checked; the catalogue was not read properly");
+  }
 }

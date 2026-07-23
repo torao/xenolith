@@ -163,6 +163,29 @@ pub fn is_ncname(s: &str) -> bool {
   }
 }
 
+/// True if `s` matches `EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')*`.
+///
+/// The names an XML declaration may give are a narrower set than the ones a decoder might
+/// recognize: `" UTF-8"` names no encoding, whatever a lookup would make of it.
+///
+/// # Examples
+///
+/// ```
+/// use xylograph_core::chars::is_enc_name;
+///
+/// assert!(is_enc_name("UTF-8"));
+/// assert!(is_enc_name("ISO-8859-1"));
+/// assert!(!is_enc_name(" UTF-8")); // no leading space
+/// assert!(!is_enc_name("8859-1")); // must start with a letter
+/// assert!(!is_enc_name(""));
+/// ```
+#[must_use]
+pub fn is_enc_name(s: &str) -> bool {
+  let mut chars = s.chars();
+  matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+    && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 /// True if `s` matches `Nmtoken ::= (NameChar)+`.
 #[must_use]
 pub fn is_nmtoken(s: &str) -> bool {
