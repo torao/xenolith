@@ -18,6 +18,7 @@ use crate::dtd::{self, Dtd, GeneralEntity};
 use crate::entity::{Entity, EntityKind, EntityStack, Limits};
 use crate::event::Event;
 use crate::namespace::NamespaceScope;
+use crate::resolve::{EntityRequest, RequestKind};
 use crate::scan::{Token, scan};
 use crate::stream::CharStream;
 
@@ -29,6 +30,12 @@ pub enum Progress {
   Event(EventKind),
   /// More bytes are needed before anything can be decided.
   NeedMoreInput,
+  /// An external entity must be resolved before parsing can continue. Read the request from
+  /// [`Parser::pending_entity`], then call [`Parser::provide_entity`] or
+  /// [`Parser::decline_entity`]. A blocking driver does this through a
+  /// [`UriResolver`](crate::resolve::UriResolver); most callers use a [`Reader`](crate::Reader)
+  /// and never see this variant.
+  NeedEntity,
   /// The document is finished.
   Eof,
 }
@@ -182,6 +189,8 @@ pub struct Parser {
   held: Option<Held>,
   /// Entities being expanded into an attribute value, for recursion detection.
   expanding: Vec<NameId>,
+  /// An external entity the parser has stopped to have resolved, if any.
+  pending_entity: Option<EntityRequest>,
   /// The end of an empty element, owed to the caller on the next call.
   end_pending: bool,
   kind: Option<EventKind>,
@@ -250,6 +259,7 @@ impl Parser {
       pending_text_at: Location::unknown(),
       held: None,
       expanding: Vec::new(),
+      pending_entity: None,
       end_pending: false,
       kind: None,
       token: String::new(),
@@ -365,6 +375,9 @@ impl Parser {
       if let Some(kind) = event {
         self.kind = Some(kind);
         return Ok(Progress::Event(kind));
+      }
+      if self.pending_entity.is_some() {
+        return Ok(Progress::NeedEntity);
       }
     }
   }
@@ -496,6 +509,44 @@ impl Parser {
     let rest = &rest[quote.len_utf8()..];
     let end = rest.find(quote).ok_or_else(|| malformed("has an unterminated value"))?;
     Ok((name, &rest[..end], &rest[end + quote.len_utf8()..]))
+  }
+
+  /// Consumes and checks a leading text declaration on an external entity's stream.
+  ///
+  /// `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`: the encoding is required, the
+  /// version optional and, if present, first, and — unlike the XML declaration — there is no
+  /// standalone. The stream already read it to choose the encoding; this checks its shape and
+  /// steps over it so it does not reach the parser as a processing instruction.
+  fn strip_text_declaration(&self, stream: &mut CharStream) -> Result<()> {
+    let remainder = stream.remainder();
+    let Some(after) = remainder.strip_prefix("<?xml") else { return Ok(()) };
+    // `<?xmlfoo` is not a declaration; a real one is followed by whitespace.
+    if !after.starts_with(chars::is_whitespace) {
+      return Ok(());
+    }
+    let at = stream.location();
+    let malformed =
+      |what: &str| Error::new(ErrorKind::WellFormedness, format!("the text declaration {what}")).at(at.clone());
+    let end = remainder.find("?>").ok_or_else(|| malformed("is not closed by \"?>\""))?;
+    let mut rest = &remainder[5..end];
+
+    let mut seen: Vec<&str> = Vec::new();
+    while !rest.trim_start_matches(chars::is_whitespace).is_empty() {
+      let (name, _value, tail) = self.pseudo_attribute(rest).map_err(|_| malformed("is malformed"))?;
+      match name {
+        "version" if seen.is_empty() => {}
+        "encoding" if seen.is_empty() || seen == ["version"] => {}
+        "standalone" => return Err(malformed("may not have a standalone declaration")),
+        _ => return Err(malformed("has its parts out of order or repeated")),
+      }
+      seen.push(name);
+      rest = tail;
+    }
+    if !seen.contains(&"encoding") {
+      return Err(malformed("has no encoding"));
+    }
+    stream.advance(end + 2);
+    Ok(())
   }
 
   fn comment(&mut self, text: &str) -> Result<EventKind> {
@@ -688,10 +739,13 @@ impl Parser {
         let message = format!("unparsed entity \"{display}\" may not be referenced in content");
         Err(self.error(ErrorKind::WellFormedness, message))
       }
-      Some(GeneralEntity::External { .. }) => {
-        let message =
-          format!("external entity \"{display}\" is referenced, but reading external entities is not yet supported");
-        Err(Error::new(ErrorKind::UnsupportedFeature, message).at(at.clone()))
+      Some(GeneralEntity::External { public_id, system_id }) => {
+        // Stop and ask for it. A driver resolves it and calls `provide_entity`, or
+        // `decline_entity`; `advance` sees the request and returns `Progress::NeedEntity`.
+        let base = self.stack.document().base_uri().map(ToString::to_string);
+        self.pending_entity =
+          Some(EntityRequest::new(Some(display), public_id, system_id, base, RequestKind::GeneralEntity));
+        Ok(())
       }
       None => Err(self.undeclared_entity(&display)),
     }
@@ -1258,6 +1312,59 @@ impl Parser {
     &self.pool
   }
 
+  /// The external entity the parser is waiting on, after [`advance`](Self::advance) returned
+  /// [`Progress::NeedEntity`].
+  #[must_use]
+  pub const fn pending_entity(&self) -> Option<&EntityRequest> {
+    self.pending_entity.as_ref()
+  }
+
+  /// Supplies the bytes of the entity the parser asked for, and resumes.
+  ///
+  /// The bytes are the entity's content as retrieved, encoding and text declaration included;
+  /// the parser sniffs the encoding and strips the text declaration. The entity's replacement
+  /// is then read where the reference stood.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`ErrorKind::Encoding`] if the bytes cannot be decoded, and passes on the limit
+  /// errors that guard against a hostile entity.
+  ///
+  /// # Panics
+  ///
+  /// If the parser is not waiting for an entity — call it only after
+  /// [`Progress::NeedEntity`].
+  pub fn provide_entity(&mut self, bytes: &[u8]) -> Result<()> {
+    let request = self.pending_entity.take().expect("the parser is not waiting for an entity");
+    let system_id = request.resolved_uri();
+    let mut stream = CharStream::new();
+    if let Some(id) = system_id {
+      stream = stream.with_system_id(id);
+    }
+    stream.feed(bytes, true)?;
+    self.strip_text_declaration(&mut stream)?;
+    let name = request.name().map(Into::into);
+    let entity = Entity::new(name, EntityKind::ExternalGeneral, stream, None);
+    self.stack.push(entity)
+  }
+
+  /// Reports that the entity the parser asked for could not be resolved.
+  ///
+  /// For a well-formed document this is fatal: a referenced parsed entity must be available.
+  ///
+  /// # Errors
+  ///
+  /// Always returns [`ErrorKind::WellFormedness`], naming the entity.
+  ///
+  /// # Panics
+  ///
+  /// If the parser is not waiting for an entity.
+  pub fn decline_entity(&mut self) -> Result<()> {
+    let request = self.pending_entity.take().expect("the parser is not waiting for an entity");
+    let what = request.name().map_or_else(|| "an external entity".to_owned(), |name| format!("entity \"{name}\""));
+    Err(self.error(ErrorKind::WellFormedness, format!("{what} could not be resolved")))
+  }
+
   /// Iterates over the remaining events, copying each one.
   ///
   /// Every byte must already have been fed: an iterator has nowhere to report that it needs
@@ -1338,6 +1445,12 @@ impl Iterator for Events<'_> {
         self.done = true;
         let message = "the document is incomplete; feed the remaining bytes before iterating, \
                        or drive the parser with advance() so it can ask for more";
+        Some(Err(Error::new(ErrorKind::Internal, message).at(self.parser.location())))
+      }
+      Ok(Progress::NeedEntity) => {
+        self.done = true;
+        let message = "the document references an external entity; iterate over a Reader with a \
+                       resolver, or drive the parser with advance() so the entity can be provided";
         Some(Err(Error::new(ErrorKind::Internal, message).at(self.parser.location())))
       }
       Err(e) => {
@@ -1439,6 +1552,8 @@ mod tests {
           parser.feed(&bytes[fed..end], end == bytes.len())?;
           fed = end;
         }
+        // These unit tests use no external entities.
+        Progress::NeedEntity => parser.decline_entity()?,
       }
     }
   }

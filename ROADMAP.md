@@ -416,11 +416,18 @@ xylograph/
 - パーサ再構成: `scan` に Reference トークンを追加、pending-text バッファでテキストの極大性を維持
 - **完了条件**: xmlconf の not-wf **701 件**・DTD 依存 valid **243 件**を通す（外部実体・5th ed 非該当ケースは skip として計上）
 
-**2a-ii. 外部サブセットと外部実体**（未着手）
-- 外部 DTD サブセット、外部一般／パラメータ実体の解決（`UriResolver`、決定 7 の `NeedEntity`）
+**2a-ii. NeedEntity 機構と外部一般実体** ✅ 完了
+- 決定 7 の I/O 境界: `Progress::NeedEntity` + `EntityRequest` + `UriResolver`（同期）/ `AsyncUriResolver`（非同期）
+- パーサは外部一般実体の参照で停止し `pending_entity()` を公開、ドライバが解決して `provide_entity(bytes)` / `decline_entity()` を呼ぶ。パーサは符号化判定とテキスト宣言の除去・検証を行う
+- `Reader::with_resolver` / `AsyncReader::with_resolver`。**リゾルバ未設定なら外部実体は拒否**（XXE 対策の安全既定）
+- 外部実体は現状「一括読み込み」（本文はストリーム、外部実体は全読み）
+- **完了条件**: xmlconf の外部一般実体ケースを通す（valid 266 / not-wf 761、0 失敗）
+
+**2a-iii. 外部サブセットと外部パラメータ実体**（未着手）
+- 外部 DTD サブセットと外部パラメータ実体の解決（DTD をストリームからパース、`NeedEntity` を DTD パーサにも通す）
 - 条件セクション `INCLUDE`/`IGNORE`（外部サブセットのみ）、宣言内のパラメータ実体展開
-- `standalone` 制約チェック、セキュリティ予算（外部取得の上限）
-- 完了条件: xmlconf の外部依存ケースを通す
+- `standalone` 制約チェック
+- 完了条件: xmlconf の外部サブセット依存ケースを通す
 
 **2b. 妥当性検証**（決定 1）
 - 内容モデルの DFA コンパイルと照合、決定性制約の検査

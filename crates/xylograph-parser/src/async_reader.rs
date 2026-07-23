@@ -11,6 +11,7 @@ use xylograph_core::error::{Error, ErrorKind, Location, Result};
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
+use crate::resolve::AsyncUriResolver;
 use crate::stream::CharStream;
 
 /// How many bytes to read from the source at a time.
@@ -35,12 +36,30 @@ const CHUNK: usize = 8 * 1024;
 /// # Ok::<(), xylograph_core::Error>(())
 /// # }).unwrap();
 /// ```
-#[derive(Debug)]
-pub struct AsyncReader<R> {
+pub struct AsyncReader<R, Resolver = NoResolver> {
   source: R,
   parser: Parser,
   buffer: Vec<u8>,
   finished: bool,
+  resolver: Resolver,
+}
+
+impl<R, Resolver> std::fmt::Debug for AsyncReader<R, Resolver> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("AsyncReader").field("finished", &self.finished).finish_non_exhaustive()
+  }
+}
+
+/// The default resolver of an [`AsyncReader`]: it declines every external entity, so a
+/// reference to one is a fatal error until [`AsyncReader::with_resolver`] supplies a real one.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoResolver;
+
+impl AsyncUriResolver for NoResolver {
+  async fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<Vec<u8>>> {
+    let message = format!("{request}: no resolver is configured; attach one with with_resolver to allow this");
+    Err(Error::new(ErrorKind::WellFormedness, message))
+  }
 }
 
 impl<R: AsyncRead + Unpin> AsyncReader<R> {
@@ -62,9 +81,26 @@ impl<R: AsyncRead + Unpin> AsyncReader<R> {
   /// Reads a document over a prepared entity, with explicit limits.
   #[must_use]
   pub fn with_document(source: R, document: Entity, limits: Limits) -> Self {
-    Self { source, parser: Parser::with_document(document, limits), buffer: vec![0; CHUNK], finished: false }
+    Self {
+      source,
+      parser: Parser::with_document(document, limits),
+      buffer: vec![0; CHUNK],
+      finished: false,
+      resolver: NoResolver,
+    }
   }
 
+  /// Attaches a resolver for external entities.
+  ///
+  /// Without one, a reference to an external entity is a fatal error — the safe default. See
+  /// [`AsyncUriResolver`] and the note on [`Reader::with_resolver`](crate::Reader::with_resolver).
+  #[must_use]
+  pub fn with_resolver<Resolver: AsyncUriResolver>(self, resolver: Resolver) -> AsyncReader<R, Resolver> {
+    AsyncReader { source: self.source, parser: self.parser, buffer: self.buffer, finished: self.finished, resolver }
+  }
+}
+
+impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> {
   /// Advances to the next event, reading from the source as needed.
   ///
   /// Returns `None` at the end of the document. The event itself is read through
@@ -86,7 +122,17 @@ impl<R: AsyncRead + Unpin> AsyncReader<R> {
         Progress::Event(kind) => return Ok(Some(kind)),
         Progress::Eof => return Ok(None),
         Progress::NeedMoreInput => self.fill().await?,
+        Progress::NeedEntity => self.resolve_entity().await?,
       }
+    }
+  }
+
+  /// Resolves the entity the parser asked for, through the configured resolver.
+  async fn resolve_entity(&mut self) -> Result<()> {
+    let request = self.parser.pending_entity().expect("the parser asked for an entity");
+    match self.resolver.resolve(request).await? {
+      Some(bytes) => self.parser.provide_entity(&bytes),
+      None => self.parser.decline_entity(),
     }
   }
 
@@ -227,5 +273,31 @@ mod tests {
     let xml = format!("<a>{}</a>", "x".repeat(CHUNK * 3));
     let events = AsyncReader::new(xml.as_bytes()).events().await.unwrap();
     assert_eq!(events[1].text().map(str::len), Some(CHUNK * 3));
+  }
+
+  struct AsyncFixture(&'static [u8]);
+
+  impl AsyncUriResolver for AsyncFixture {
+    async fn resolve(&mut self, _request: &crate::resolve::EntityRequest) -> Result<Option<Vec<u8>>> {
+      // A real resolver would await a socket or a file here.
+      Ok(Some(self.0.to_vec()))
+    }
+  }
+
+  #[tokio::test]
+  async fn an_external_entity_is_resolved_asynchronously() {
+    let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
+    let mut reader = AsyncReader::new(xml.as_bytes()).with_resolver(AsyncFixture(b"<b>in</b>"));
+    let events = reader.events().await.unwrap();
+    let names: Vec<_> = events.iter().filter_map(Event::name).map(|n| n.local()).collect();
+    // <doc>, <b>, </b>, </doc>: four names.
+    assert_eq!(names.len(), 4);
+  }
+
+  #[tokio::test]
+  async fn without_a_resolver_an_external_entity_is_refused() {
+    let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
+    let error = AsyncReader::new(xml.as_bytes()).events().await.unwrap_err();
+    assert!(error.message().contains("no resolver is configured"));
   }
 }

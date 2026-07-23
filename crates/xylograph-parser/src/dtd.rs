@@ -312,9 +312,15 @@ impl DtdParser<'_> {
     let entity = if self.peek_external() {
       let id = self.external_id(false)?;
       let system_id = id.system_id.unwrap_or_default();
-      // `NDataDecl ::= S 'NDATA' S Name`: whitespace precedes NDATA, or the declaration ends.
+      // `NDataDecl ::= S 'NDATA' S Name`: the whitespace before NDATA is required, so
+      // `"foo.eps"NDATA` — no space — is malformed, not a plain external entity.
+      let had_whitespace = self.peek().is_some_and(chars::is_whitespace);
       self.skip_whitespace();
-      if self.consume_keyword("NDATA") {
+      if self.rest().starts_with("NDATA") {
+        if !had_whitespace {
+          return Err(self.error("whitespace is required before NDATA"));
+        }
+        self.consume("NDATA");
         self.require_whitespace("NDATA")?;
         let notation = self.name("notation")?;
         GeneralEntity::Unparsed { public_id: id.public_id, system_id, notation }
@@ -571,10 +577,15 @@ impl DtdParser<'_> {
     if self.consume_keyword("PUBLIC") {
       self.require_whitespace("PUBLIC")?;
       let public_id = self.pubid_literal()?;
-      // A notation may stop after the public identifier; an entity may not.
+      // A notation may stop after the public identifier; an entity may not. Either way, a
+      // system literal must be separated from it by whitespace, so `"pub""sys"` is malformed.
+      let had_whitespace = self.peek().is_some_and(chars::is_whitespace);
       self.skip_whitespace();
       if allow_public_only && matches!(self.peek(), Some('>') | None) {
         return Ok(ExternalId { public_id: Some(public_id), system_id: None });
+      }
+      if !had_whitespace {
+        return Err(self.error("whitespace is required between the public and system identifiers"));
       }
       let system_id = self.system_literal()?;
       return Ok(ExternalId { public_id: Some(public_id), system_id: Some(system_id) });

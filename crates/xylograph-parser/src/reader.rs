@@ -12,6 +12,7 @@ use xylograph_core::error::{Error, ErrorKind, Location, Result};
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
+use crate::resolve::UriResolver;
 use crate::stream::CharStream;
 
 /// How many bytes to read from the source at a time.
@@ -46,12 +47,21 @@ const CHUNK: usize = 8 * 1024;
 /// assert_eq!(events.len(), 4);
 /// # Ok::<(), xylograph_core::Error>(())
 /// ```
-#[derive(Debug)]
 pub struct Reader<R> {
   source: R,
   parser: Parser,
   buffer: Vec<u8>,
   finished: bool,
+  resolver: Option<Box<dyn UriResolver>>,
+}
+
+impl<R> std::fmt::Debug for Reader<R> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Reader")
+      .field("finished", &self.finished)
+      .field("has_resolver", &self.resolver.is_some())
+      .finish_non_exhaustive()
+  }
 }
 
 impl<R: Read> Reader<R> {
@@ -85,7 +95,24 @@ impl<R: Read> Reader<R> {
   /// Reads a document over a prepared entity, with explicit limits.
   #[must_use]
   pub fn with_document(source: R, document: Entity, limits: Limits) -> Self {
-    Self { source, parser: Parser::with_document(document, limits), buffer: vec![0; CHUNK], finished: false }
+    Self {
+      source,
+      parser: Parser::with_document(document, limits),
+      buffer: vec![0; CHUNK],
+      finished: false,
+      resolver: None,
+    }
+  }
+
+  /// Sets the resolver used for external entities.
+  ///
+  /// Without one, a reference to an external entity is a fatal error — the safe default, since
+  /// resolving external entities is the XML external-entity (XXE) attack surface. Supply a
+  /// resolver only for trusted input; see [`UriResolver`].
+  #[must_use]
+  pub fn with_resolver(mut self, resolver: impl UriResolver + 'static) -> Self {
+    self.resolver = Some(Box::new(resolver));
+    self
   }
 
   /// Advances to the next event, reading from the source as needed.
@@ -103,6 +130,25 @@ impl<R: Read> Reader<R> {
         Progress::Event(kind) => return Ok(Some(kind)),
         Progress::Eof => return Ok(None),
         Progress::NeedMoreInput => self.fill()?,
+        Progress::NeedEntity => self.resolve_entity()?,
+      }
+    }
+  }
+
+  /// Resolves the entity the parser asked for, through the configured resolver.
+  fn resolve_entity(&mut self) -> Result<()> {
+    let request = self.parser.pending_entity().expect("the parser asked for an entity");
+    match &mut self.resolver {
+      Some(resolver) => match resolver.resolve(request)? {
+        Some(bytes) => self.parser.provide_entity(&bytes),
+        None => self.parser.decline_entity(),
+      },
+      // No resolver: external entities are refused, which is the safe default for untrusted
+      // input. The message names the way to opt in.
+      None => {
+        let at = self.parser.location();
+        let message = format!("{request}: no resolver is configured; call Reader::with_resolver to allow this");
+        Err(Error::new(ErrorKind::WellFormedness, message).at(at))
       }
     }
   }
@@ -311,5 +357,66 @@ mod tests {
   fn the_source_can_be_taken_back() {
     let reader = Reader::new("<a/>rest".as_bytes());
     assert!(!reader.into_inner().is_empty());
+  }
+
+  /// A resolver keyed on the entity name, standing in for a catalogue or a filesystem.
+  struct Fixtures(std::collections::HashMap<&'static str, &'static [u8]>);
+
+  impl UriResolver for Fixtures {
+    fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<Vec<u8>>> {
+      Ok(request.name().and_then(|name| self.0.get(name)).map(|bytes| bytes.to_vec()))
+    }
+  }
+
+  #[test]
+  fn an_external_entity_is_resolved_through_the_resolver() {
+    let fixtures = Fixtures([("chap", &b"<title>Ch. 1</title>"[..])].into_iter().collect());
+    let xml = "<!DOCTYPE doc [<!ENTITY chap SYSTEM 'chap1.xml'>]><doc>&chap;</doc>";
+    let mut reader = Reader::new(xml.as_bytes()).with_resolver(fixtures);
+
+    let mut names = Vec::new();
+    while let Some(kind) = reader.advance().unwrap() {
+      if kind == EventKind::StartElement {
+        names.push(reader.parser().local_name().to_owned());
+      }
+    }
+    // The entity's content — an element — was parsed in place.
+    assert_eq!(names, ["doc", "title"]);
+  }
+
+  #[test]
+  fn a_text_declaration_on_an_external_entity_is_stripped() {
+    let fixtures = Fixtures([("e", &b"<?xml version='1.0' encoding='UTF-8'?>text"[..])].into_iter().collect());
+    let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
+    let mut reader = Reader::new(xml.as_bytes()).with_resolver(fixtures);
+    let mut text = String::new();
+    while let Some(kind) = reader.advance().unwrap() {
+      if kind == EventKind::Text {
+        text.push_str(reader.parser().text());
+      }
+    }
+    assert_eq!(text, "text", "the text declaration is not reported as a processing instruction");
+  }
+
+  #[test]
+  fn without_a_resolver_an_external_entity_is_refused() {
+    let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
+    let error = kinds(Reader::new(xml.as_bytes())).unwrap_err();
+    assert!(error.message().contains("no resolver is configured"), "{}", error.message());
+  }
+
+  #[test]
+  fn a_declined_entity_is_a_fatal_error() {
+    let fixtures = Fixtures(std::collections::HashMap::new()); // resolves nothing
+    let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
+    let mut reader = Reader::new(xml.as_bytes()).with_resolver(fixtures);
+    let error = loop {
+      match reader.advance() {
+        Ok(Some(_)) => {}
+        Ok(None) => panic!("expected a failure"),
+        Err(e) => break e,
+      }
+    };
+    assert!(error.message().contains("could not be resolved"));
   }
 }

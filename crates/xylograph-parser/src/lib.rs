@@ -6,8 +6,10 @@
 //!
 //! It reads an internal DTD subset: general entities are resolved in content and attributes,
 //! declared attribute defaults are supplied, and tokenized attribute values are normalized.
-//! The external subset and external entities need I/O and are not read yet — a reference to
-//! one is reported rather than guessed at.
+//! An external general entity is fetched through a [`resolve::UriResolver`] supplied to the
+//! reader — off by default, since that is the XXE attack surface. The external
+//! DTD subset and external parameter entities are not read yet; a reference to one is reported
+//! rather than guessed at.
 //!
 //! # Where to start
 //!
@@ -32,6 +34,8 @@
 //!   through the accessors. Drive this directly to control where the bytes come from.
 //! - [`AsyncReader`] — the same, over [`tokio::io::AsyncRead`], behind the `tokio` feature.
 //! - [`Event`] — an event that owns its data, for when the borrow is in the way.
+//! - [`resolve`] — [`resolve::UriResolver`] and the request the parser hands out when it needs
+//!   an external entity; give a resolver to a reader with `with_resolver`.
 //! - [`CharStream`] — bytes to characters for one entity: decoding, line-end normalization,
 //!   `Char` checking, and position tracking.
 //! - [`Entity`], [`EntityStack`] — the entities being read, innermost last, with base URIs
@@ -86,13 +90,17 @@ pub mod event;
 mod namespace;
 pub mod parser;
 pub mod reader;
+pub mod resolve;
 mod scan;
 pub mod stream;
 
 #[cfg(feature = "tokio")]
-pub use async_reader::AsyncReader;
+pub use async_reader::{AsyncReader, NoResolver};
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
 pub use parser::{AttributeRef, EventKind, Events, Parser, Progress, XmlSpace};
 pub use reader::{Reader, ReaderEvents};
+#[cfg(feature = "tokio")]
+pub use resolve::AsyncUriResolver;
+pub use resolve::{EntityRequest, RequestKind, UriResolver};
 pub use stream::CharStream;

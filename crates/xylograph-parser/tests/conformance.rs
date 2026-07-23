@@ -12,12 +12,12 @@
 //! Without it the test prints what it would have needed and passes, so a checkout with no
 //! suite is not a checkout that silently tests nothing.
 //!
-//! What can be judged grows with each phase. The parser now reads an internal DTD subset, so
-//! most `not-wf` and `valid` cases can be judged. Two kinds are still skipped, by reading the
-//! test file itself:
+//! What can be judged grows with each phase. The parser reads the internal DTD subset and,
+//! through the filesystem resolver below, external *general* entities, so most `not-wf` and
+//! `valid` cases can be judged. Still skipped, by reading the test file itself:
 //!
-//! - one whose DTD has an *external* subset or an *external* parameter entity, which needs
-//!   I/O the parser does not yet do (a later step in phase 2);
+//! - one whose DTD has an *external* subset or an *external* parameter entity, which needs the
+//!   DTD to be parsed from a stream (phase 2a-iii);
 //! - a `valid` case that depends on validation, which is phase 2b.
 //!
 //! Skips are counted and printed, never passed silently.
@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use xylograph_parser::Reader;
+use xylograph_parser::resolve::{EntityRequest, UriResolver};
 
 /// Locates the suite, or explains that it is absent.
 fn suite() -> Option<PathBuf> {
@@ -85,29 +86,45 @@ fn cases(root: &Path) -> Vec<(String, PathBuf, String)> {
 
 /// True if a case needs machinery a later phase brings.
 ///
-/// This reads the source heuristically: an external subset or external parameter entity needs
-/// I/O the parser does not do yet, and a `standalone` document declaration invokes validity
-/// constraints that are phase 2b. Both err on the side of skipping.
+/// External *general* entities are now read, through the filesystem resolver below. An
+/// external DTD subset or external *parameter* entity still needs the DTD to be parsed from a
+/// stream, which is phase 2a-ii, so those are skipped.
 fn needs_a_later_phase(source: &str) -> bool {
-  // An external subset on the DOCTYPE needs I/O the parser does not do yet.
+  // An external subset on the DOCTYPE needs the external DTD, not read yet.
   let external_subset = source
     .find("<!DOCTYPE")
     .map(|i| &source[i..])
     .and_then(|doctype| doctype.get(..doctype.find(['[', '>']).unwrap_or(0)))
     .is_some_and(|head| head.contains("SYSTEM") || head.contains("PUBLIC"));
-  // Any external entity — parameter or general — is likewise a later step: we cannot read it.
-  let external_entity = source.split("<!ENTITY").skip(1).any(|decl| {
+  // An external parameter entity (`<!ENTITY % ... SYSTEM/PUBLIC`) is part of the DTD too.
+  let external_parameter_entity = source.split("<!ENTITY").skip(1).any(|decl| {
     let head = &decl[..decl.find('>').unwrap_or(decl.len())];
-    head.contains("SYSTEM") || head.contains("PUBLIC")
+    head.trim_start().starts_with('%') && (head.contains("SYSTEM") || head.contains("PUBLIC"))
   });
-  external_subset || external_entity
+  external_subset || external_parameter_entity
+}
+
+/// Resolves an external entity by reading the file its system identifier points at, relative
+/// to the entity that declared it. Only files under the suite root are served.
+struct FileResolver {
+  root: PathBuf,
+}
+
+impl UriResolver for FileResolver {
+  fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Vec<u8>>, xylograph_core::Error> {
+    let Some(uri) = request.resolved_uri() else { return Ok(None) };
+    let path = uri.strip_prefix("file:///").map(PathBuf::from).unwrap_or_else(|| self.root.join(request.system_id()));
+    Ok(std::fs::read(&path).ok())
+  }
 }
 
 /// Parses a document to its end, returning the failure if there was one.
 fn parse(path: &Path) -> Result<(), String> {
+  let root = path.ancestors().nth(4).unwrap_or(path).to_path_buf();
   let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
   let system_id = format!("file:///{}", path.display().to_string().replace('\\', "/"));
-  let mut reader = Reader::with_system_id(std::io::BufReader::new(file), &system_id);
+  let mut reader =
+    Reader::with_system_id(std::io::BufReader::new(file), &system_id).with_resolver(FileResolver { root });
   loop {
     match reader.advance() {
       Ok(Some(_)) => {}
