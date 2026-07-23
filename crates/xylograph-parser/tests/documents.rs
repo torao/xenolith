@@ -164,16 +164,97 @@ fn ill_formed_documents_are_rejected_with_a_useful_message() {
 }
 
 #[test]
-fn an_expansion_bomb_is_refused_rather_than_expanded() {
-  // The classic shape. Phase 1 has no entity declarations, so this is rejected at the first
-  // reference; phase 2 must keep it rejected, by the expansion budget instead.
+fn attribute_defaults_and_types_come_from_the_dtd() {
   let xml = "<!DOCTYPE a [\
-             <!ENTITY x0 'boom'>\
-             <!ENTITY x1 '&x0;&x0;&x0;&x0;&x0;&x0;&x0;&x0;&x0;&x0;'>\
-             <!ENTITY x2 '&x1;&x1;&x1;&x1;&x1;&x1;&x1;&x1;&x1;&x1;'>\
-             ]><a>&x2;</a>";
-  let message = rejects(xml);
-  assert!(message.contains("x2"), "{message}");
+             <!ATTLIST a lang CDATA \"en\" id ID #IMPLIED tokens NMTOKENS #IMPLIED>\
+             ]><a id=\"x\" tokens=\"  one   two  \"/>";
+  let events = parse(xml).expect("should parse");
+  let attrs = events[1].attributes();
+
+  // The default is supplied for the absent `lang`.
+  let lang = attrs.iter().find(|a| a.value == "en").expect("lang defaulted");
+  let _ = lang;
+  // A tokenized value has its whitespace collapsed; a CDATA value would not.
+  let tokens = attrs.iter().find(|a| a.value.contains("one")).unwrap();
+  assert_eq!(tokens.value, "one two");
+}
+
+#[test]
+fn entities_may_nest_and_be_reused() {
+  let xml = "<!DOCTYPE a [<!ENTITY inner 'x'><!ENTITY outer '&inner;&inner;'>]><a>&outer;&outer;</a>";
+  assert_eq!(parse(xml).expect("should parse")[2].text(), Some("xxxx"));
+}
+
+#[test]
+fn dtd_and_content_errors_are_reported() {
+  // A self-referential entity is refused, not expanded forever.
+  assert!(rejects("<!DOCTYPE a [<!ENTITY e '&e;'>]><a>&e;</a>").contains("itself"));
+  // An unparsed entity may not be referenced as if it were parsed.
+  assert!(
+    rejects("<!DOCTYPE a [<!NOTATION n SYSTEM 'x'><!ENTITY e SYSTEM 'e.dat' NDATA n>]><a>&e;</a>").contains("unparsed")
+  );
+  // A malformed declaration in the internal subset is caught.
+  assert!(!rejects("<!DOCTYPE a [<!ENTITY e>]><a/>").is_empty());
+  // An entity with no declaration anywhere is still an error.
+  assert!(rejects("<a>&undeclared;</a>").contains("not declared"));
+}
+
+#[test]
+fn an_element_must_start_and_end_in_one_entity() {
+  // The classic well-formedness constraint an entity can be used to break: the entity's
+  // replacement closes a tag the entity did not open, or leaves one open.
+  assert!(rejects("<!DOCTYPE a [<!ENTITY e '</b><b>'>]><a><b>&e;</b></a>").contains("different entities"));
+  assert!(rejects("<!DOCTYPE a [<!ENTITY e '<b>'>]><a>&e;</b></a>").contains("different entities"));
+  // A balanced entity is fine: Doctype, <a>, <b>, </b>, </a>.
+  assert_eq!(parse("<!DOCTYPE a [<!ENTITY e '<b/>'>]><a>&e;</a>").expect("balanced").len(), 5);
+}
+
+#[test]
+fn a_default_referencing_a_later_entity_is_rejected() {
+  // The entity is declared, but after the attribute list that names it in a default.
+  let xml = "<!DOCTYPE a [<!ATTLIST a x CDATA '&e;'><!ENTITY e 'v'>]><a/>";
+  assert!(rejects(xml).contains("before it is declared"));
+  // Declared first, it is fine and the default expands.
+  let ok = "<!DOCTYPE a [<!ENTITY e 'v'><!ATTLIST a x CDATA '&e;'>]><a/>";
+  assert_eq!(parse(ok).expect("should parse")[1].attributes()[0].value, "v");
+}
+
+#[test]
+fn a_declared_entity_expands_in_content_and_attributes() {
+  // A general entity may carry markup into content, and text into an attribute.
+  let xml = "<!DOCTYPE a [<!ENTITY e 'as <b>bold</b>'><!ENTITY t 'plain'>]><a x='&t;'>it is &e;</a>";
+  let events = parse(xml).expect("should parse");
+  let kinds = events.iter().map(Event::kind).collect::<Vec<_>>();
+  assert_eq!(
+    kinds,
+    [
+      EventKind::Doctype,
+      EventKind::StartElement, // a
+      EventKind::Text,         // "it is as " — text coalesces across the entity boundary
+      EventKind::StartElement, // b, from inside the entity
+      EventKind::Text,         // "bold"
+      EventKind::EndElement,   // b
+      EventKind::EndElement,   // a
+    ]
+  );
+  assert_eq!(events[1].attributes()[0].value, "plain");
+  assert_eq!(events[2].text(), Some("it is as "));
+}
+
+#[test]
+fn an_expansion_bomb_is_refused_rather_than_expanded() {
+  // The billion-laughs shape: each level names the one below it ten times. Expanding it fully
+  // would be 10^10 characters; the entity-expansion budget must stop it long before that.
+  let mut dtd = String::from("<!DOCTYPE a [<!ENTITY l0 \"boom\">");
+  for level in 1..=10 {
+    let child = format!("&l{};", level - 1);
+    dtd += &format!("<!ENTITY l{level} \"{}\">", child.repeat(10));
+  }
+  dtd += "]><a>&l10;</a>";
+  // Drive it once directly rather than through every chunk size and driver: the point is that
+  // it is refused, and refusing it a hundred thousand entities in is not worth doing sevenfold.
+  let message = by_reader(&dtd).expect_err("a bomb must be refused");
+  assert!(message.contains("expansion") || message.contains("entities"), "{message}");
 }
 
 /// Cases the W3C suite caught that hand-written tests had missed. Each is named after the

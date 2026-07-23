@@ -5,6 +5,7 @@
 //! text simply reports that more input is needed and is retried from the same place once the
 //! text has grown. That is what makes the parser resumable at any byte boundary.
 
+use xylograph_core::chars;
 use xylograph_core::error::{Error, ErrorKind, Result};
 
 /// The kind of token found, before it is interpreted.
@@ -22,8 +23,10 @@ pub(crate) enum Token {
   StartTag,
   /// `</name>`
   EndTag,
-  /// Character data up to the next `<`.
+  /// Character data up to the next `<` or `&`.
   Text,
+  /// `&name;` or `&#...;`: an entity or character reference, delimiters included.
+  Reference,
 }
 
 /// Prefixes that may follow `<!`.
@@ -36,6 +39,9 @@ const MARKUP_PREFIXES: [&str; 3] = ["<!--", "<![CDATA[", "<!DOCTYPE"];
 /// text the entity will ever have, which turns a partial token into an error.
 pub(crate) fn scan(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
   debug_assert!(!rest.is_empty());
+  if rest.starts_with('&') {
+    return scan_reference(rest, complete);
+  }
   if !rest.starts_with('<') {
     return Ok(scan_text(rest, complete).map(|len| (Token::Text, len)));
   }
@@ -57,7 +63,11 @@ fn scan_markup_declaration(rest: &str, complete: bool) -> Result<Option<(Token, 
     return delimited(rest, Token::CData, 9, "]]>", complete);
   }
   if rest.starts_with(MARKUP_PREFIXES[2]) {
-    return Ok(scan_doctype(rest).map(|len| (Token::Doctype, len)));
+    return match scan_doctype(rest) {
+      Some(len) => Ok(Some((Token::Doctype, len))),
+      None if complete => Err(Error::new(ErrorKind::WellFormedness, "the document type declaration is not closed")),
+      None => Ok(None),
+    };
   }
   // Still too short to tell which of them it is.
   if !complete && MARKUP_PREFIXES.iter().any(|p| p.starts_with(rest)) {
@@ -106,11 +116,27 @@ fn scan_start_tag(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> 
 
 /// Scans `<!DOCTYPE ... >`, allowing an internal subset in brackets.
 ///
-/// The declaration is not interpreted here; that arrives with DTD support in phase 2.
+/// The declaration is not interpreted here; that is the DTD parser's work. Comments and
+/// processing instructions are stepped over whole, so an apostrophe or a bracket inside one —
+/// as in `<!--doesn't-->` — is not mistaken for markup.
 fn scan_doctype(rest: &str) -> Option<usize> {
-  let mut quote = None;
+  let mut i = 0;
+  let mut quote: Option<char> = None;
   let mut depth = 0usize;
-  for (i, c) in rest.char_indices() {
+  while i < rest.len() {
+    let tail = &rest[i..];
+    if quote.is_none() {
+      // Skip a comment or PI in the internal subset before reading its content as markup.
+      if let Some(after) = tail.strip_prefix("<!--") {
+        i += 4 + after.find("-->").map_or(after.len(), |j| j + 3);
+        continue;
+      }
+      if let Some(after) = tail.strip_prefix("<?") {
+        i += 2 + after.find("?>").map_or(after.len(), |j| j + 2);
+        continue;
+      }
+    }
+    let c = tail.chars().next()?;
     match (quote, c) {
       (Some(q), c) if c == q => quote = None,
       (Some(_), _) => {}
@@ -120,6 +146,7 @@ fn scan_doctype(rest: &str) -> Option<usize> {
       (None, '>') if depth == 0 => return Some(i + 1),
       (None, _) => {}
     }
+    i += c.len_utf8();
   }
   None
 }
@@ -132,9 +159,32 @@ fn scan_doctype(rest: &str) -> Option<usize> {
 /// together by every caller. It also means the events a document produces do not depend on
 /// how its bytes were divided.
 fn scan_text(rest: &str, complete: bool) -> Option<usize> {
-  match rest.find('<') {
+  match rest.find(['<', '&']) {
     Some(i) => (i > 0).then_some(i),
     None => complete.then_some(rest.len()),
+  }
+}
+
+/// Scans `&...;`. The content is not interpreted here; that is the parser's work.
+fn scan_reference(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
+  let unterminated = || {
+    Error::new(ErrorKind::WellFormedness, "a reference must end with \";\"; write \"&amp;\" for a literal ampersand")
+  };
+  // A character reference `&#...;` is taken up to its `;` even when the characters between
+  // are wrong, so the parser can say precisely why; only a `<`, another `&` or whitespace
+  // marks it as a bare ampersand. An entity reference `&name;` instead ends at the first
+  // character a name may not contain, which must be the `;`.
+  let body = &rest[1..];
+  let boundary = if body.starts_with('#') {
+    body.char_indices().find(|(_, c)| matches!(*c, ';' | '<' | '&') || chars::is_whitespace(*c))
+  } else {
+    body.char_indices().find(|(_, c)| !chars::is_name_char(*c))
+  };
+  match boundary {
+    Some((i, ';')) => Ok(Some((Token::Reference, 1 + i + 1))),
+    Some(_) => Err(unterminated()),
+    None if complete => Err(unterminated()),
+    None => Ok(None),
   }
 }
 
@@ -219,14 +269,25 @@ mod tests {
 
   #[test]
   fn a_run_of_text_is_only_taken_whole() {
-    // Without a following `<` the run may still grow, so nothing is taken yet: text nodes
-    // have to be maximal, and a reference or a "]]>" could straddle the boundary.
+    // Without a following `<` or `&` the run may still grow, so nothing is taken yet.
     assert_eq!(partial("hello"), None);
-    assert_eq!(partial("a&am"), None);
     assert_eq!(partial("a]]"), None);
     // At the end of the entity there is nothing more to wait for.
     assert_eq!(complete("hello"), (Token::Text, 5));
     assert_eq!(complete("a]]"), (Token::Text, 3));
+  }
+
+  #[test]
+  fn text_stops_before_a_reference() {
+    assert_eq!(complete("ab&amp;cd"), (Token::Text, 2));
+    assert_eq!(complete("&amp;cd"), (Token::Reference, 5));
+    assert_eq!(complete("&#x41;"), (Token::Reference, 6));
+    // Incomplete references wait for their ';'.
+    assert_eq!(partial("&am"), None);
+    assert_eq!(partial("&"), None);
+    // A '<' or a second '&' before the ';' is a bare ampersand, not a reference.
+    assert!(scan("&amp cd", false).is_err());
+    assert!(scan("&foo<", false).is_err());
   }
 
   #[test]

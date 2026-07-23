@@ -12,7 +12,7 @@ See [ROADMAP.md](ROADMAP.md) for the feature inventory, design decisions and pha
 | Crate | Status | Contents |
 | --- | --- | --- |
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
-| [`xylograph-parser`](crates/xylograph-parser) | Phase 1c | a well-formed XML pull parser: readers, events, the sans-I/O core, entities |
+| [`xylograph-parser`](crates/xylograph-parser) | Phase 2a-i | a namespace-aware XML pull parser with an internal-subset DTD: entity resolution, attribute defaults, sans-I/O core, readers |
 
 Crates for the DTD, DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later
 phases; see the roadmap.

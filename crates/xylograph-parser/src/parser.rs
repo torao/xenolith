@@ -14,7 +14,8 @@ use xylograph_core::chars;
 use xylograph_core::error::{Error, ErrorKind, Location, Result};
 use xylograph_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 
-use crate::entity::{Entity, EntityStack, Limits};
+use crate::dtd::{self, Dtd, GeneralEntity};
+use crate::entity::{Entity, EntityKind, EntityStack, Limits};
 use crate::event::Event;
 use crate::namespace::NamespaceScope;
 use crate::scan::{Token, scan};
@@ -90,6 +91,19 @@ struct OpenElement {
   namespace_mark: usize,
   xml_space: XmlSpace,
   xml_lang: Option<NameId>,
+  /// The entity depth at which the start tag was read. An end tag must be read at the same
+  /// depth, so that an element cannot start in one entity and end in another (WFC: the tags
+  /// of an element must lie within one entity).
+  entity_depth: usize,
+}
+
+/// A markup token scanned but not yet interpreted, because pending text had to be emitted
+/// first. Holding it lets a text run and the markup that ends it be reported in that order.
+#[derive(Debug)]
+struct Held {
+  token: Token,
+  text: String,
+  at: Location,
 }
 
 /// Where in the document the parser is.
@@ -155,6 +169,19 @@ pub struct Parser {
   open: Vec<OpenElement>,
   phase: Phase,
   seen_doctype: bool,
+  /// The document type definition, once a `DOCTYPE` has declared one.
+  dtd: Option<Dtd>,
+  /// True if the document has an external DTD subset we have not read, so an entity we cannot
+  /// find might still be declared out there.
+  external_subset_unread: bool,
+  /// Character data accumulated but not yet emitted, so a run split by a character reference
+  /// or an entity boundary still surfaces as one text event where it can.
+  pending_text: String,
+  pending_text_at: Location,
+  /// A markup token scanned while `pending_text` still had to be flushed first.
+  held: Option<Held>,
+  /// Entities being expanded into an attribute value, for recursion detection.
+  expanding: Vec<NameId>,
   /// The end of an empty element, owed to the caller on the next call.
   end_pending: bool,
   kind: Option<EventKind>,
@@ -217,6 +244,12 @@ impl Parser {
       open: Vec::new(),
       phase: Phase::Prolog,
       seen_doctype: false,
+      dtd: None,
+      external_subset_unread: false,
+      pending_text: String::new(),
+      pending_text_at: Location::unknown(),
+      held: None,
+      expanding: Vec::new(),
       end_pending: false,
       kind: None,
       token: String::new(),
@@ -258,36 +291,78 @@ impl Parser {
       return Ok(Progress::Event(EventKind::EndElement));
     }
     loop {
-      let (token, len) = {
+      // A markup token held back while the text before it was flushed.
+      if let Some(held) = self.held.take() {
+        self.token_at = held.at;
+        if let Some(kind) = self.interpret(held.token, &held.text)? {
+          self.kind = Some(kind);
+          return Ok(Progress::Event(kind));
+        }
+        continue;
+      }
+
+      let scanned = {
         let stream = self.stack.current().stream();
         let rest = stream.remainder();
         if rest.is_empty() {
           if !stream.is_complete() {
             return Ok(Progress::NeedMoreInput);
           }
-          if self.stack.depth() > 1 {
-            self.stack.pop();
-            continue;
+          None
+        } else {
+          match scan(rest, stream.is_complete()).map_err(|e| e.at(self.stack.location()))? {
+            Some(found) => Some(found),
+            None => return Ok(Progress::NeedMoreInput),
           }
-          return self.finish();
-        }
-        match scan(rest, stream.is_complete()).map_err(|e| e.at(self.stack.location()))? {
-          Some(found) => found,
-          None => return Ok(Progress::NeedMoreInput),
         }
       };
 
-      self.token_at = self.stack.location();
+      let Some((token, len)) = scanned else {
+        // The innermost entity is exhausted. Resume the one that referenced it, or, at the
+        // document entity, flush any last text and end.
+        if self.stack.depth() > 1 {
+          self.stack.pop();
+          continue;
+        }
+        if let Some(kind) = self.flush_text()? {
+          return Ok(Progress::Event(kind));
+        }
+        return self.finish();
+      };
+
+      let at = self.stack.location();
       self.token.clear();
       self.token.push_str(&self.stack.current().stream().remainder()[..len]);
       self.stack.current_mut().stream_mut().advance(len);
-
-      // Take the scratch out so the interpreting code can borrow it while mutating `self`.
       let text = std::mem::take(&mut self.token);
-      let outcome = self.interpret(token, &text);
-      self.token = text;
 
-      if let Some(kind) = outcome? {
+      let event = match token {
+        Token::Text => {
+          let outcome = self.accumulate_text(&text, &at);
+          self.token = text;
+          outcome?;
+          None
+        }
+        Token::Reference => {
+          let outcome = self.reference(&text, &at);
+          self.token = text;
+          outcome?
+        }
+        _ => {
+          // Markup ends a text run: flush the text first and hold the markup for next time.
+          if self.pending_text.is_empty() {
+            self.token_at = at;
+            let outcome = self.interpret(token, &text);
+            self.token = text;
+            outcome?
+          } else {
+            self.held = Some(Held { token, text, at });
+            self.flush_text()?
+          }
+        }
+      };
+
+      if let Some(kind) = event {
         self.kind = Some(kind);
         return Ok(Progress::Event(kind));
       }
@@ -321,7 +396,8 @@ impl Parser {
       Token::StartTag => self.start_tag(text).map(Some),
       Token::EndTag => self.end_tag(text).map(Some),
       Token::CData => self.cdata(text).map(Some),
-      Token::Text => self.character_data(text),
+      // Text and references never reach here: `advance` accumulates them itself.
+      Token::Text | Token::Reference => Ok(None),
     }
   }
 
@@ -448,6 +524,35 @@ impl Parser {
       return Err(self.error(ErrorKind::WellFormedness, "there may be only one document type declaration"));
     }
     self.seen_doctype = true;
+
+    // `<!DOCTYPE` S Name (S ExternalID)? S? ('[' intSubset ']' S?)? `>`
+    let body = text[9..text.len() - 1].trim_start_matches(chars::is_whitespace);
+    let name_len = body.find(|c: char| chars::is_whitespace(c) || c == '[').unwrap_or(body.len());
+    if !chars::is_name(&body[..name_len]) {
+      let message = format!("{:?} is not a valid document type name", &body[..name_len.min(body.len())]);
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    }
+    let after_name = &body[name_len..];
+
+    let (before_bracket, internal_subset) = match after_name.split_once('[') {
+      Some((before, subset)) => (before, Some(subset.trim_end().trim_end_matches(']'))),
+      None => (after_name, None),
+    };
+    // Between the name and the internal subset only an external identifier may appear.
+    let external_id = before_bracket.trim();
+    self.external_subset_unread = external_id.starts_with("SYSTEM") || external_id.starts_with("PUBLIC");
+    if !external_id.is_empty() && !self.external_subset_unread {
+      let message = format!("{external_id:?} is not a valid external identifier in the document type declaration");
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    }
+
+    if let Some(subset) = internal_subset.filter(|s| !s.trim().is_empty()) {
+      let dtd = dtd::parse_internal_subset(subset, &mut self.pool, self.token_at.clone())?;
+      self.dtd = Some(dtd);
+    } else {
+      self.dtd = Some(Dtd::default());
+    }
+
     self.text.clear();
     self.text.push_str(text);
     Ok(EventKind::Doctype)
@@ -462,26 +567,150 @@ impl Parser {
     Ok(EventKind::CData)
   }
 
-  /// Interprets character data. Whitespace outside the root element is dropped.
-  fn character_data(&mut self, text: &str) -> Result<Option<EventKind>> {
+  /// Adds a run of character data to the pending text.
+  ///
+  /// A `Text` token holds no references — the scanner splits before every `&` — so this is
+  /// raw character data, checked for the one sequence it may not contain.
+  fn accumulate_text(&mut self, text: &str, at: &Location) -> Result<()> {
+    if let Some(i) = text.find("]]>") {
+      self.token_at = at.clone();
+      let message = "\"]]>\" may not appear in text; write \"]]&gt;\"";
+      return Err(self.error_at(ErrorKind::WellFormedness, message, text, i));
+    }
+    if self.pending_text.is_empty() {
+      self.pending_text_at = at.clone();
+    }
+    self.pending_text.push_str(text);
+    Ok(())
+  }
+
+  /// Emits the accumulated text as an event, or nothing when there is none to emit.
+  ///
+  /// Whitespace between the prolog's declarations and around the root element is discarded;
+  /// any other text there is an error.
+  fn flush_text(&mut self) -> Result<Option<EventKind>> {
+    if self.pending_text.is_empty() {
+      return Ok(None);
+    }
     if self.phase != Phase::Content {
-      if text.chars().all(chars::is_whitespace) {
+      if self.pending_text.chars().all(chars::is_whitespace) {
+        self.pending_text.clear();
         return Ok(None);
       }
+      self.token_at = self.pending_text_at.clone();
       let place = if self.phase == Phase::Prolog { "before" } else { "after" };
       let message = format!("text may not appear {place} the root element");
       return Err(self.error(ErrorKind::WellFormedness, message));
     }
-    if let Some(i) = text.find("]]>") {
-      let message = "\"]]>\" may not appear in text; write \"]]&gt;\"";
-      return Err(self.error_at(ErrorKind::WellFormedness, message, text, i));
-    }
-    let mut out = std::mem::take(&mut self.text);
-    out.clear();
-    let outcome = self.expand(text, &mut out, false);
-    self.text = out;
-    outcome?;
+    std::mem::swap(&mut self.text, &mut self.pending_text);
+    self.pending_text.clear();
+    self.token_at = self.pending_text_at.clone();
     Ok(Some(EventKind::Text))
+  }
+
+  /// Handles a reference in content: `&#..;` and the predefined entities join the text run,
+  /// while a general entity is expanded by reading its replacement in place.
+  fn reference(&mut self, text: &str, at: &Location) -> Result<Option<EventKind>> {
+    if self.phase != Phase::Content {
+      self.token_at = at.clone();
+      let message = "a reference may not appear outside the root element";
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    }
+    let body = &text[1..text.len() - 1];
+    if let Some(c) = self.character_or_predefined(body, text, at)? {
+      if self.pending_text.is_empty() {
+        self.pending_text_at = at.clone();
+      }
+      self.pending_text.push(c);
+      return Ok(None);
+    }
+    // A general entity: begin reading its replacement where the reference stood. The pending
+    // text is deliberately not flushed, so character data on either side of an entity whose
+    // replacement is itself text coalesces into one node, as the data model wants. Markup in
+    // the replacement flushes it in the ordinary way.
+    let name = self.pool.intern(body);
+    self.push_general_entity(name, at)?;
+    Ok(None)
+  }
+
+  /// Resolves `body` to a character if it is a character or predefined reference; returns
+  /// `None` for a general-entity reference, which the caller resolves against the DTD.
+  fn character_or_predefined(&self, body: &str, token: &str, at: &Location) -> Result<Option<char>> {
+    let c = match body {
+      _ if body.starts_with('#') => return self.character_reference(body, token, at).map(Some),
+      "lt" => '<',
+      "gt" => '>',
+      "amp" => '&',
+      "apos" => '\'',
+      "quot" => '"',
+      name if chars::is_name(name) => return Ok(None),
+      _ => {
+        let message = format!("\"&{body};\" is not a reference; write \"&amp;\" for a literal ampersand");
+        return Err(Error::new(ErrorKind::WellFormedness, message).at(at.clone()));
+      }
+    };
+    Ok(Some(c))
+  }
+
+  /// Parses `#dd`/`#xhh` into the character it denotes.
+  fn character_reference(&self, body: &str, token: &str, at: &Location) -> Result<char> {
+    let error = |message: String| Error::new(ErrorKind::WellFormedness, message).at(at.clone());
+    let digits = &body[1..];
+    let (digits, radix) = match digits.strip_prefix('x') {
+      Some(hex) => (hex, 16),
+      None => (digits, 10),
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+      let hint = if radix == 16 { "after \"&#x\" only 0-9, a-f and A-F may follow" } else { "write \"&#\" and digits" };
+      return Err(error(format!("\"{token}\" is not a character reference; {hint}")));
+    }
+    let code = u32::from_str_radix(digits, radix).ok();
+    code.and_then(char::from_u32).filter(|c| chars::is_char(*c)).ok_or_else(|| {
+      error(format!(
+        "\"{token}\" is not a character XML permits, and no escape can represent it \
+         (XML 1.0 allows #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and #x10000-#x10FFFF)"
+      ))
+    })
+  }
+
+  /// Suspends the current entity and begins reading a general entity's replacement text.
+  fn push_general_entity(&mut self, name: NameId, at: &Location) -> Result<()> {
+    self.token_at = at.clone();
+    let display = self.pool.resolve(name).to_owned();
+    match self.dtd.as_ref().and_then(|dtd| dtd.general_entity(name)).cloned() {
+      Some(GeneralEntity::Internal { value }) => {
+        let base = self.stack.base_uri().cloned();
+        let stream = CharStream::from_text(&value).map_err(|e| e.at(at.clone()))?;
+        let entity = Entity::new(Some(display.into()), EntityKind::InternalGeneral, stream, base);
+        self.stack.push(entity)
+      }
+      Some(GeneralEntity::Unparsed { .. }) => {
+        let message = format!("unparsed entity \"{display}\" may not be referenced in content");
+        Err(self.error(ErrorKind::WellFormedness, message))
+      }
+      Some(GeneralEntity::External { .. }) => {
+        let message =
+          format!("external entity \"{display}\" is referenced, but reading external entities is not yet supported");
+        Err(Error::new(ErrorKind::UnsupportedFeature, message).at(at.clone()))
+      }
+      None => Err(self.undeclared_entity(&display)),
+    }
+  }
+
+  /// The error for a reference to an entity that has no declaration in reach.
+  fn undeclared_entity(&self, name: &str) -> Error {
+    let message = if self.external_subset_unread {
+      format!(
+        "entity \"{name}\" is not declared in the internal subset, and its external subset has not been read \
+         (reading the external subset is not yet supported)"
+      )
+    } else {
+      format!(
+        "entity \"{name}\" is not declared; declare it in the document type declaration, \
+         or write \"&amp;{name};\" if a literal ampersand was meant"
+      )
+    };
+    self.error(ErrorKind::WellFormedness, message)
   }
 
   fn start_tag(&mut self, text: &str) -> Result<EventKind> {
@@ -505,6 +734,8 @@ impl Parser {
     let lexical = &body[..name_len];
 
     self.parse_attributes(&body[name_len..], 1 + name_len, text)?;
+    let element = self.pool.intern(lexical);
+    self.apply_dtd_attributes(element)?;
 
     let namespace_mark = self.scope.mark();
     self.declare_namespaces()?;
@@ -517,7 +748,8 @@ impl Parser {
     self.name = name;
     self.xml_space = xml_space;
     self.xml_lang = xml_lang;
-    self.open.push(OpenElement { name, lexical, namespace_mark, xml_space, xml_lang });
+    let entity_depth = self.stack.depth();
+    self.open.push(OpenElement { name, lexical, namespace_mark, xml_space, xml_lang, entity_depth });
     self.end_pending = empty;
     Ok(EventKind::StartElement)
   }
@@ -531,6 +763,11 @@ impl Parser {
     let expected = &self.names[open.lexical.clone()];
     if expected != name {
       let message = format!("</{name}> does not close <{expected}>");
+      return Err(self.error(ErrorKind::WellFormedness, message));
+    }
+    if open.entity_depth != self.stack.depth() {
+      // The start tag and this end tag are in different entities.
+      let message = format!("<{expected}> and its end tag are in different entities");
       return Err(self.error(ErrorKind::WellFormedness, message));
     }
     let open = self.open.pop().expect("just inspected");
@@ -613,6 +850,63 @@ impl Parser {
       let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
       self.attributes.push(Attribute { name, value: start..values.len(), declares_namespace });
     }
+  }
+
+  /// Applies what the DTD says about this element's attributes: it collapses the whitespace
+  /// of any specified attribute with a tokenized type, and supplies the declared defaults for
+  /// attributes the start tag left out.
+  fn apply_dtd_attributes(&mut self, element: NameId) -> Result<()> {
+    let Some(defs) = self.dtd.as_ref().and_then(|dtd| dtd.attlist(element)) else {
+      return Ok(());
+    };
+    let defs = defs.to_vec();
+    // The lexical name of each specified attribute, interned to match the DTD's names.
+    let mut present: Vec<NameId> = Vec::with_capacity(self.attributes.len());
+    for i in 0..self.attributes.len() {
+      let lexical = self.attributes[i].name.to_lexical(&self.pool);
+      present.push(self.pool.intern(&lexical));
+    }
+
+    // Collapse the whitespace of specified values whose type is tokenized.
+    let tokenized: Vec<NameId> = defs.iter().filter(|d| d.att_type.is_tokenized()).map(|d| d.name).collect();
+    for (i, &lexical) in present.iter().enumerate() {
+      if tokenized.contains(&lexical) {
+        let value = &self.attribute_text[self.attributes[i].value.clone()];
+        let normalized = dtd::normalize_tokenized(value, true);
+        let start = self.attribute_text.len();
+        self.attribute_text.push_str(&normalized);
+        self.attributes[i].value = start..self.attribute_text.len();
+      }
+    }
+
+    // Supply defaults for attributes the tag did not carry.
+    for def in &defs {
+      let Some(value) = def.default.value() else { continue };
+      if present.contains(&def.name) {
+        continue;
+      }
+      let start = self.attribute_text.len();
+      if value.contains('&') {
+        // The default carries a reference: expand it now, so an undeclared or recursive
+        // entity in a default is caught just as it would be in a written attribute value.
+        let mut out = std::mem::take(&mut self.attribute_text);
+        let outcome = self.expand_at(value, &mut out, true, value, 0);
+        self.attribute_text = out;
+        outcome?;
+      } else {
+        self.attribute_text.push_str(value);
+      }
+      let range = start..self.attribute_text.len();
+      let lexical = self.pool.resolve(def.name).to_owned();
+      let Some((prefix, local)) = chars::split_qname(&lexical) else {
+        let message = format!("the DTD declares an attribute with the invalid name {lexical:?}");
+        return Err(self.error(ErrorKind::WellFormedness, message));
+      };
+      let declares_namespace = prefix == Some("xmlns") || (prefix.is_none() && local == "xmlns");
+      let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
+      self.attributes.push(Attribute { name, value: range, declares_namespace });
+    }
+    Ok(())
   }
 
   /// Applies the namespace declarations of the current start tag.
@@ -731,16 +1025,11 @@ impl Parser {
     start..self.names.len()
   }
 
-  /// Expands references in text that is not part of a token being located precisely.
-  fn expand(&self, text: &str, out: &mut String, attribute: bool) -> Result<()> {
-    self.expand_at(text, out, attribute, text, 0)
-  }
-
   /// Expands references into `out`.
   ///
   /// With `attribute` set, the normalization of XML 1.0 §3.3.3 applies: whitespace written
   /// literally becomes a space, while whitespace written as a character reference is kept.
-  fn expand_at(&self, text: &str, out: &mut String, attribute: bool, token: &str, base: usize) -> Result<()> {
+  fn expand_at(&mut self, text: &str, out: &mut String, attribute: bool, token: &str, base: usize) -> Result<()> {
     let mut rest = text;
     let mut done = 0;
     while let Some(i) = rest.find(['&', '<']) {
@@ -764,7 +1053,7 @@ impl Parser {
   }
 
   /// Expands one reference, given its text between `&` and `;`.
-  fn expand_reference(&self, body: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
+  fn expand_reference(&mut self, body: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
     if let Some(digits) = body.strip_prefix('#') {
       // `CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';'`. The `x` is lower case only,
       // and neither form admits a sign, which `from_str_radix` would otherwise accept.
@@ -798,20 +1087,50 @@ impl Parser {
       "amp" => out.push('&'),
       "apos" => out.push('\''),
       "quot" => out.push('"'),
-      // Declared entities arrive with the DTD in phase 2.
-      name if chars::is_name(name) => {
-        let message = format!(
-          "entity \"{name}\" is not declared; declare it in the document type declaration, \
-           or write \"&amp;{name};\" if a literal ampersand was meant"
-        );
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
-      }
+      name if chars::is_name(name) => return self.expand_general_in_attribute(name, out, token, at),
       other => {
         let message = format!("\"&{other};\" is not a reference; write \"&amp;\" for a literal ampersand");
         return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
       }
     }
     Ok(())
+  }
+
+  /// Expands a general entity referenced inside an attribute value.
+  ///
+  /// The replacement is processed recursively, so a `<` in it, or a reference to an external
+  /// or unparsed entity, is caught here where XML 1.0 §3.3.1 forbids it.
+  fn expand_general_in_attribute(&mut self, name: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
+    let id = self.pool.intern(name);
+    let entity = self.dtd.as_ref().and_then(|dtd| dtd.general_entity(id)).cloned();
+    match entity {
+      Some(GeneralEntity::Internal { value }) => {
+        if self.expanding.contains(&id) {
+          let message = format!("entity \"{name}\" refers to itself");
+          return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+        }
+        if self.expanding.len() >= self.stack.limits().max_depth {
+          let limit = self.stack.limits().max_depth;
+          let message =
+            format!("entities are nested more than {limit} deep; raise Limits::max_depth if the document is trusted");
+          return Err(Error::new(ErrorKind::Limit, message).at(self.token_at.clone()));
+        }
+        self.expanding.push(id);
+        // The replacement stands where a literal value would, so it normalizes the same way.
+        let outcome = self.expand_at(&value, out, true, &value, 0);
+        self.expanding.pop();
+        outcome
+      }
+      Some(GeneralEntity::Unparsed { .. }) => {
+        let message = format!("unparsed entity \"{name}\" may not be referenced in an attribute value");
+        Err(self.error_at(ErrorKind::WellFormedness, message, token, at))
+      }
+      Some(GeneralEntity::External { .. }) => {
+        let message = format!("external entity \"{name}\" may not be referenced in an attribute value");
+        Err(self.error_at(ErrorKind::WellFormedness, message, token, at))
+      }
+      None => Err(self.undeclared_entity(name)),
+    }
   }
 
   /// The kind of the current event, or `None` before the first one and after the last.

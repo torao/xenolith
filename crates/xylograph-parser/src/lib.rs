@@ -4,6 +4,11 @@
 //! same core drives a blocking reader, an async reader, or an in-memory slice, and can stop
 //! mid-document to ask for an entity that someone else fetches. See `ROADMAP.md`, decision 7.
 //!
+//! It reads an internal DTD subset: general entities are resolved in content and attributes,
+//! declared attribute defaults are supplied, and tokenized attribute values are normalized.
+//! The external subset and external entities need I/O and are not read yet — a reference to
+//! one is reported rather than guessed at.
+//!
 //! # Where to start
 //!
 //! [`Reader`] is the ordinary way in: give it anything that implements [`std::io::Read`] and
@@ -75,6 +80,7 @@
 
 #[cfg(feature = "tokio")]
 pub mod async_reader;
+mod dtd;
 pub mod entity;
 pub mod event;
 mod namespace;
