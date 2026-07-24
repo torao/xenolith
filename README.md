@@ -23,6 +23,7 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph`](crates/xylograph) | facade | the entry point; re-exports the layers below under one name |
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 2a | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, and a sans-I/O core |
+| [`xylograph-validate`](crates/xylograph-validate) | Phase 2b | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking |
 
 Crates for the DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
@@ -67,11 +68,13 @@ cargo test --workspace --no-default-features
 The W3C XML Conformance Test Suite is not vendored. To run against it:
 
 ```bash
-curl -O https://www.w3.org/XML/Test/xmlts20130923.tar.gz && tar xf xmlts20130923.tar.gz && XMLCONF=xmlconf cargo test -p xylograph-parser --test conformance -- --nocapture
+curl -O https://www.w3.org/XML/Test/xmlts20130923.tar.gz && tar xf xmlts20130923.tar.gz && XMLCONF=xmlconf cargo test --workspace --test conformance -- --nocapture
 ```
 
-CI fetches it on every push. Cases needing machinery a phase does not yet have are counted as
-skipped and reported, never silently passed.
+This exercises both halves: the parser against the well-formed and not-well-formed cases, and
+`xylograph-validate` against the invalid cases (89 of 97 detected; the remaining 8 are recorded
+as documented deviations). CI fetches the suite on every push. Cases needing machinery a phase
+does not yet have are counted as skipped and reported, never silently passed.
 
 ## License
 

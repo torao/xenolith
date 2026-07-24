@@ -13,13 +13,14 @@ categories.workspace = true
 [features]
 default = ["encodings"]
 # Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
-encodings = ["xylograph-core/encodings", "xylograph-parser/encodings"]
+encodings = ["xylograph-core/encodings", "xylograph-parser/encodings", "xylograph-validate/encodings"]
 # The asynchronous reader, over tokio's AsyncRead.
 tokio = ["xylograph-parser/tokio"]
 
 [dependencies]
 xylograph-core = { workspace = true }
 xylograph-parser = { workspace = true }
+xylograph-validate = { workspace = true }
 
 [lints]
 workspace = true

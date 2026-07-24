@@ -54,7 +54,8 @@ jobs:
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the
-    # parser is measured against it on every push rather than only when someone remembers.
+    # parser and validator are measured against it on every push rather than only when
+    # someone remembers.
     name: W3C conformance
     runs-on: ubuntu-latest
     steps:
@@ -65,7 +66,12 @@ jobs:
         run: |
           curl -sSfL -o xmlts.tar.gz https://www.w3.org/XML/Test/xmlts20130923.tar.gz
           tar xf xmlts.tar.gz
-      - run: cargo test -p xylograph-parser --test conformance -- --nocapture
+      - name: Parser conformance (well-formedness)
+        run: cargo test -p xylograph-parser --test conformance -- --nocapture
+        env:
+          XMLCONF: ${{ github.workspace }}/xmlconf
+      - name: Validator conformance (validity)
+        run: cargo test -p xylograph-validate --all-features --test conformance -- --nocapture
         env:
           XMLCONF: ${{ github.workspace }}/xmlconf
 

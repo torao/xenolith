@@ -84,7 +84,7 @@
 
 #[cfg(feature = "tokio")]
 pub mod async_reader;
-mod dtd;
+pub mod dtd;
 pub mod entity;
 pub mod event;
 mod namespace;
@@ -96,6 +96,7 @@ pub mod stream;
 
 #[cfg(feature = "tokio")]
 pub use async_reader::{AsyncReader, NoResolver};
+pub use dtd::Dtd;
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
 pub use parser::{AttributeRef, EventKind, Events, Parser, Progress, XmlSpace};

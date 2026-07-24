@@ -176,6 +176,9 @@ pub struct Parser {
   open: Vec<OpenElement>,
   phase: Phase,
   seen_doctype: bool,
+  /// The root element name the `DOCTYPE` declared, interned; a validator matches the document
+  /// root against it.
+  doctype_name: Option<NameId>,
   /// The document type definition, once a `DOCTYPE` has declared one.
   dtd: Option<Dtd>,
   /// True if the document declared an external DTD subset that was not read (no resolver), so
@@ -264,6 +267,7 @@ impl Parser {
       open: Vec::new(),
       phase: Phase::Prolog,
       seen_doctype: false,
+      doctype_name: None,
       dtd: None,
       external_subset_unread: false,
       dtd_buf: String::new(),
@@ -606,6 +610,7 @@ impl Parser {
       let message = format!("{:?} is not a valid document type name", &body[..name_len.min(body.len())]);
       return Err(self.error(ErrorKind::WellFormedness, message));
     }
+    self.doctype_name = Some(self.pool.intern(&body[..name_len]));
     let after_name = &body[name_len..];
 
     let (before_bracket, internal_subset) = match after_name.split_once('[') {
@@ -1395,6 +1400,23 @@ impl Parser {
   #[must_use]
   pub const fn pool(&self) -> &NamePool {
     &self.pool
+  }
+
+  /// The document type definition, once a `DOCTYPE` has been read; `None` before that, or if
+  /// the document has no `DOCTYPE`.
+  ///
+  /// This is what a validator reads: the declared elements, attributes, entities and
+  /// notations. It becomes available with the [`Doctype`](EventKind::Doctype) event.
+  #[must_use]
+  pub const fn dtd(&self) -> Option<&Dtd> {
+    self.dtd.as_ref()
+  }
+
+  /// The root element name the `DOCTYPE` declared, interned in [`pool`](Self::pool). A
+  /// validator checks the document's root element against it.
+  #[must_use]
+  pub const fn doctype_name(&self) -> Option<NameId> {
+    self.doctype_name
   }
 
   /// The external entity the parser is waiting on, after [`advance`](Self::advance) returned

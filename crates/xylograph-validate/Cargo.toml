@@ -1,0 +1,25 @@
+[package]
+name = "xylograph-validate"
+description = "Validation for xylograph: a schema-agnostic Validator interface, with a DTD validator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+encodings = ["xylograph-parser/encodings"]
+
+[dependencies]
+xylograph-core = { workspace = true }
+xylograph-parser = { workspace = true }
+
+[dev-dependencies]
+xylograph-parser = { workspace = true, features = ["encodings"] }
+
+[lints]
+workspace = true

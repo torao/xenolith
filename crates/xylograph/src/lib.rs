@@ -6,6 +6,7 @@
 //! layers through their modules:
 //!
 //! - [`parser`] — the XML pull parser: readers, events, entity resolution, the DTD.
+//! - [`validate`] — validation: a schema-agnostic `Validator` and the DTD validator.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
@@ -34,6 +35,9 @@
 
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
 pub use xylograph_parser as parser;
+
+/// Validation: the schema-agnostic [`Validator`](validate::Validator) and the DTD validator.
+pub use xylograph_validate as validate;
 
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};

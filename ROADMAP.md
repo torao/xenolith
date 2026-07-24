@@ -440,14 +440,15 @@ xylograph/
 
 **実装方式（決定: 完全ストリーミング / 再パース）**: DTD パーサを **DTD バッファに対する再入可能関数**にする。内部 PE 参照はその場で値を融合（`%ref;` を値で置換）して読み進める。**外部 PE / 外部サブセットの取得点で `NeedExternalPe` / `NeedExternalSubset` を返して中断**し、ドライバが `NeedEntity` 経由で取得、取得内容をバッファに融合してから**先頭から再パース**する。再パースにより宣言途中での中断・再開を回避しつつ、宣言内 PE も文字列融合で扱える（DTD は小さいので再パースのコストは許容）。内部サブセット（PE は宣言間のみ、条件セクション不可）と外部サブセット（PE は宣言内も可、条件セクション可）はバッファ境界で区別する。
 
-**2b. 妥当性検証**（決定 1・8、`xylograph-validate`）
+**2b. 妥当性検証**（決定 1・8、`xylograph-validate`）✅ 完了
 - **スキーマ非依存の検証インタフェース**: `Validator`（イベント列／後の DOM 木を受け取る）と `ErrorListener`（warning / error(recoverable) / fatal）。DTD 検証器をその最初の実装に
-- parser が DTD モデル（`Dtd` / `ContentSpec` / `AttDef` …）を公開 API として提供（現状 `pub(crate)`）
-- 内容モデルの DFA コンパイルと照合、決定性制約（付録 E）の検査
+- parser が DTD モデル（`Dtd` / `ContentSpec` / `AttDef` …）を公開 API として提供（`pub`、`Dtd: Clone`）
+- 内容モデルの Glushkov オートマトンによるコンパイルと照合、決定性制約（付録 E）の検査
 - 属性の妥当性、ID の一意性・IDREF 解決、ルート要素名の一致
-- `ErrorListener` 経由の recoverable エラー報告と継続
+- `ErrorListener` 経由の recoverable エラー報告と継続。`CollectErrors` / `FailFast` を同梱
 - ファサードから `xylograph::validate` として再エクスポート
-- 完了条件: **xmlconf の invalid 群を全件検出**し、valid 群で誤検出ゼロ。既知の逸脱は文書化
+- **成果物**: `xylograph-validate` クレート（`Validator` / `Schema` / `ErrorListener` / `DtdValidator`。テスト 5 + 統合 10 + doctest 1）
+- **完了条件**: xmlconf の invalid 群 **89/97 を検出**（0 失敗）。残る 8 件は特殊な妥当性制約として `KNOWN_DEVIATIONS` に理由付きで記録 — Proper Group / PE Nesting ×5、standalone トークン化正規化 ×2、既定値中の実体宣言順 ×1（いずれも本線の検証は全通過）
 
 **2c. XML Base / xml:id**（決定 6）
 - ノードごとの基底 URI 計算（起点は実体の system ID、`xml:base` で上書き）

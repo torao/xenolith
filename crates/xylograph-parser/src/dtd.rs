@@ -12,7 +12,7 @@
 //!
 //! Parameter entities are expanded by splicing their replacement text into the buffer and
 //! reading on. An external one cannot be spliced synchronously, so a pass over the buffer stops
-//! with [`DtdOutcome::NeedExternalPe`]; the caller fetches it, splices it in, and parses the
+//! and asks the driver for it; the caller fetches it, splices it in, and parses the
 //! buffer again from the start. Restarting each time keeps the whole pass free of state that
 //! would have to survive a pause, at the cost of re-reading a small buffer.
 
@@ -24,7 +24,7 @@ use xylograph_core::name::{NameId, NamePool};
 
 /// A general entity: one that a reference in content or an attribute may name.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum GeneralEntity {
+pub enum GeneralEntity {
   /// Declared with its replacement text inline.
   Internal {
     /// The replacement text, with character references expanded and general-entity
@@ -51,7 +51,7 @@ pub(crate) enum GeneralEntity {
 
 /// A parameter entity: one referenced only inside the DTD, with `%name;`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ParameterEntity {
+pub enum ParameterEntity {
   /// Declared with its replacement text inline.
   Internal {
     /// The replacement text.
@@ -68,7 +68,7 @@ pub(crate) enum ParameterEntity {
 
 /// The declared type of an attribute (XML 1.0 §3.3.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AttType {
+pub enum AttType {
   /// Character data; the only type whose value is not whitespace-collapsed.
   Cdata,
   /// A unique identifier.
@@ -93,14 +93,14 @@ pub(crate) enum AttType {
 
 impl AttType {
   /// True for every type but `CDATA`, all of which have their values whitespace-collapsed.
-  pub(crate) fn is_tokenized(&self) -> bool {
+  pub fn is_tokenized(&self) -> bool {
     !matches!(self, Self::Cdata)
   }
 }
 
 /// What an attribute defaults to when a start tag omits it (XML 1.0 §3.3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DefaultDecl {
+pub enum DefaultDecl {
   /// `#REQUIRED`: the start tag must give a value.
   Required,
   /// `#IMPLIED`: no value, and no default.
@@ -113,7 +113,7 @@ pub(crate) enum DefaultDecl {
 
 impl DefaultDecl {
   /// The default value to supply for an absent attribute, if any.
-  pub(crate) fn value(&self) -> Option<&str> {
+  pub fn value(&self) -> Option<&str> {
     match self {
       Self::Fixed(value) | Self::Default(value) => Some(value),
       Self::Required | Self::Implied => None,
@@ -123,27 +123,27 @@ impl DefaultDecl {
 
 /// One attribute definition from an `ATTLIST`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AttDef {
+pub struct AttDef {
   /// The attribute's lexical name.
-  pub(crate) name: NameId,
+  pub name: NameId,
   /// Its declared type.
-  pub(crate) att_type: AttType,
+  pub att_type: AttType,
   /// Its default.
-  pub(crate) default: DefaultDecl,
+  pub default: DefaultDecl,
 }
 
 /// An external identifier, as on a notation or an external entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ExternalId {
+pub struct ExternalId {
   /// The public identifier, if given.
-  pub(crate) public_id: Option<String>,
+  pub public_id: Option<String>,
   /// The system identifier, absent for a notation declared `PUBLIC` alone.
-  pub(crate) system_id: Option<String>,
+  pub system_id: Option<String>,
 }
 
 /// How often a content particle may occur.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Occurs {
+pub enum Occurs {
   /// Exactly once.
   Once,
   /// `?`: zero or one.
@@ -156,7 +156,7 @@ pub(crate) enum Occurs {
 
 /// A particle of an element content model (XML 1.0 §3.2.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ContentParticle {
+pub enum ContentParticle {
   /// A child element name.
   Name(NameId, Occurs),
   /// A choice of alternatives, `(a | b | ...)`.
@@ -167,7 +167,7 @@ pub(crate) enum ContentParticle {
 
 /// The content specification of an element (XML 1.0 §3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ContentSpec {
+pub enum ContentSpec {
   /// `EMPTY`: no content.
   Empty,
   /// `ANY`: any well-formed content.
@@ -180,17 +180,15 @@ pub(crate) enum ContentSpec {
 
 /// A parsed document type definition.
 ///
-/// The declarations are kept as read; interpreting them against a document is phase 2b.
-#[derive(Debug, Default)]
-pub(crate) struct Dtd {
+/// The declarations are kept as read; interpreting them against a document is a validator's
+/// work (`xylograph-validate`). It is [`Clone`] so a validator can own a copy and read it
+/// while the parser goes on producing events.
+#[derive(Clone, Debug, Default)]
+pub struct Dtd {
   general: HashMap<NameId, GeneralEntity>,
   parameter: HashMap<NameId, ParameterEntity>,
-  #[allow(dead_code)] // the content models are read by phase 2b's validator.
   elements: HashMap<NameId, ContentSpec>,
   attlists: HashMap<NameId, Vec<AttDef>>,
-  // Read by phase 2b, which validates NOTATION-typed attributes and unparsed entities against
-  // the notations declared here.
-  #[allow(dead_code)]
   notations: HashMap<NameId, ExternalId>,
   /// General entities and elements declared in the external subset (or an external parameter
   /// entity). A `standalone="yes"` document may not depend on these, so referencing such an
@@ -201,25 +199,50 @@ pub(crate) struct Dtd {
 
 impl Dtd {
   /// The declaration of a general entity, if it has one.
-  pub(crate) fn general_entity(&self, name: NameId) -> Option<&GeneralEntity> {
+  pub fn general_entity(&self, name: NameId) -> Option<&GeneralEntity> {
     self.general.get(&name)
   }
 
   /// The attribute definitions for an element's lexical name.
-  pub(crate) fn attlist(&self, element: NameId) -> Option<&[AttDef]> {
+  pub fn attlist(&self, element: NameId) -> Option<&[AttDef]> {
     self.attlists.get(&element).map(Vec::as_slice)
   }
 
   /// True if the general entity was declared where a standalone document may not depend on it:
   /// in the external subset, or in an external parameter entity.
-  pub(crate) fn general_entity_is_external(&self, name: NameId) -> bool {
+  pub fn general_entity_is_external(&self, name: NameId) -> bool {
     self.external_general.contains(&name)
   }
 
   /// True if any of an element's attribute declarations came from the external subset, so a
   /// default or a tokenized normalization it supplies is off-limits to a standalone document.
-  pub(crate) fn attlist_is_external(&self, element: NameId) -> bool {
+  pub fn attlist_is_external(&self, element: NameId) -> bool {
     self.external_attlist.contains(&element)
+  }
+
+  /// The content specification declared for an element, if it was declared.
+  pub fn content_spec(&self, element: NameId) -> Option<&ContentSpec> {
+    self.elements.get(&element)
+  }
+
+  /// True if the element was declared with an `<!ELEMENT>` declaration.
+  pub fn has_element(&self, element: NameId) -> bool {
+    self.elements.contains_key(&element)
+  }
+
+  /// True if a notation of this name was declared.
+  pub fn has_notation(&self, name: NameId) -> bool {
+    self.notations.contains_key(&name)
+  }
+
+  /// Every element with an attribute-list declaration, and its definitions.
+  pub fn attlists(&self) -> impl Iterator<Item = (NameId, &[AttDef])> {
+    self.attlists.iter().map(|(&name, defs)| (name, defs.as_slice()))
+  }
+
+  /// Every element with an `<!ELEMENT>` declaration, and its content specification.
+  pub fn elements(&self) -> impl Iterator<Item = (NameId, &ContentSpec)> {
+    self.elements.iter().map(|(&name, spec)| (name, spec))
   }
 }
 
@@ -229,12 +252,12 @@ impl Dtd {
 /// the DTD buffer at [`at`](Self::at)`..`[`end`](Self::end), and re-parses from the start.
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalPe {
-  pub(crate) name: String,
-  pub(crate) public_id: Option<String>,
-  pub(crate) system_id: String,
+  pub name: String,
+  pub public_id: Option<String>,
+  pub system_id: String,
   /// Byte range of the `%name;` reference in the buffer, replaced by the fetched content.
-  pub(crate) at: usize,
-  pub(crate) end: usize,
+  pub at: usize,
+  pub end: usize,
 }
 
 /// The result of one pass over the DTD buffer.

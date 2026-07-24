@@ -120,6 +120,7 @@ version = "0.0.0"
 dependencies = [
  "xylograph-core",
  "xylograph-parser",
+ "xylograph-validate",
 ]
 
 [[package]]
@@ -136,4 +137,12 @@ dependencies = [
  "tokio",
  "tokio-test",
  "xylograph-core",
+]
+
+[[package]]
+name = "xylograph-validate"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-parser",
 ]
