@@ -81,9 +81,14 @@
 //! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
 //! - `tokio`: [`AsyncReader`], over `tokio`'s `AsyncRead`. Off by default; only
 //!   `tokio`'s `io-util` is pulled in, and the runtime remains the caller's choice.
+//! - `xml-base`: per-node base URI computation from `xml:base` and the entity's system
+//!   identifier (XML Base); read it with [`Parser::base_uri`].
+//! - `xml-id`: `xml:id` as an ID-typed attribute, with tokenized normalization; read it with
+//!   [`Parser::xml_id`]. Both are switched per parser through [`ParserConfig`].
 
 #[cfg(feature = "tokio")]
 pub mod async_reader;
+pub mod config;
 pub mod dtd;
 pub mod entity;
 pub mod event;
@@ -96,6 +101,7 @@ pub mod stream;
 
 #[cfg(feature = "tokio")]
 pub use async_reader::{AsyncReader, NoResolver};
+pub use config::ParserConfig;
 pub use dtd::Dtd;
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};

@@ -37,6 +37,9 @@ pub struct DtdValidator {
   ids: HashMap<String, Location>,
   /// Every `IDREF` value seen and where, checked at the end against `ids`.
   idrefs: Vec<(String, Location)>,
+  /// Whether `xml:id` attributes are checked as IDs (xml:id), recorded in the same `ids` space.
+  #[cfg(feature = "xml-id")]
+  xml_id: bool,
 }
 
 #[derive(Debug)]
@@ -70,7 +73,18 @@ impl DtdValidator {
       open: Vec::new(),
       ids: HashMap::new(),
       idrefs: Vec::new(),
+      #[cfg(feature = "xml-id")]
+      xml_id: false,
     }
+  }
+
+  /// Also check `xml:id` attributes as IDs (xml:id), sharing this validator's ID space so an
+  /// `xml:id` and a declared `ID` with the same value collide. Off by default.
+  #[cfg(feature = "xml-id")]
+  #[must_use]
+  pub fn with_xml_id(mut self, on: bool) -> Self {
+    self.xml_id = on;
+    self
   }
 
   /// Reports `error`, returning whether validation should continue.
@@ -351,6 +365,19 @@ impl DtdValidator {
     for attribute in attributes {
       if attribute.declares_namespace {
         continue; // namespace declarations are not in the DTD
+      }
+      // xml:id §4: an xml:id is an ID whether or not the DTD declares it. When the DTD does not
+      // declare it, check it here (NCName and uniqueness) and do not fault it as undeclared;
+      // when the DTD does declare it, the declaration below is honoured as usual, so the ID is
+      // not recorded twice.
+      #[cfg(feature = "xml-id")]
+      if self.xml_id && crate::ids::is_xml_id(attribute.name, pool) {
+        let declared =
+          pool.get(&Self::lexical(pool, attribute.name)).is_some_and(|id| defs.iter().any(|d| d.name == id));
+        if !declared {
+          crate::ids::check_xml_id(attribute.value, at, &mut self.ids, errors)?;
+          continue;
+        }
       }
       let lexical = Self::lexical(pool, attribute.name);
       let def = pool.get(&lexical).and_then(|id| defs.iter().find(|d| d.name == id));

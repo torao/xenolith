@@ -16,6 +16,10 @@ default = ["encodings"]
 encodings = ["xylograph-core/encodings"]
 # An asynchronous driver, `AsyncReader`, over tokio's AsyncRead.
 tokio = ["dep:tokio"]
+# Per-node base URI computation from xml:base and the entity's system id (XML Base).
+xml-base = []
+# xml:id as an ID-typed attribute: tokenized normalization and the xml:id accessor.
+xml-id = []
 
 [dependencies]
 xylograph-core = { workspace = true }

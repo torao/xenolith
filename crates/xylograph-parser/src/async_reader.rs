@@ -8,6 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use xylograph_core::error::{Error, ErrorKind, Location, Result};
 
+use crate::config::ParserConfig;
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
@@ -88,6 +89,16 @@ impl<R: AsyncRead + Unpin> AsyncReader<R> {
       finished: false,
       resolver: NoResolver,
     }
+  }
+
+  /// Sets the parser configuration: the optional `xml:base` and `xml:id` processing.
+  ///
+  /// See [`ParserConfig`]. Call before the first [`advance`](Self::advance), and before
+  /// [`with_resolver`](Self::with_resolver).
+  #[must_use]
+  pub fn with_config(mut self, config: ParserConfig) -> Self {
+    self.parser.set_config(config);
+    self
   }
 
   /// Attaches a resolver for external entities.

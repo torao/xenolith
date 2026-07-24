@@ -450,11 +450,13 @@ xylograph/
 - **成果物**: `xylograph-validate` クレート（`Validator` / `Schema` / `ErrorListener` / `DtdValidator`。テスト 5 + 統合 10 + doctest 1）
 - **完了条件**: xmlconf の invalid 群 **89/97 を検出**（0 失敗）。残る 8 件は特殊な妥当性制約として `KNOWN_DEVIATIONS` に理由付きで記録 — Proper Group / PE Nesting ×5、standalone トークン化正規化 ×2、既定値中の実体宣言順 ×1（いずれも本線の検証は全通過）
 
-**2c. XML Base / xml:id**（決定 6）
-- ノードごとの基底 URI 計算（起点は実体の system ID、`xml:base` で上書き）
-- `xml:id` の ID 型扱い、NCName 検査、xml:id error の報告、一意性検査（2b の ID 機構を共用）
-- `ParserConfig` の実行時フラグと feature `xml-base` / `xml-id`
-- 完了条件: xml:id 1.0 テストスイート、XML Base のテストケースを通す
+**2c. XML Base / xml:id**（決定 6）✅ 完了
+- ノードごとの基底 URI 計算（起点は実体の system ID、`xml:base` で上書き）。`xml:base` 値は RFC 3986 §5.3 で親の基底に対して解決。`Parser::base_uri()` で取得
+- `xml:id` の ID 型扱い（トークン化正規化を適用）と `Parser::xml_id()`。NCName 検査・一意性検査は検証層が担い、**2b の ID 機構（`ids` テーブル）を共用** — DTD 宣言の `ID` と同じ ID 空間で衝突を検出。DTD の有無を問わず検査（DTD あり: `DtdValidator`、なし: `XmlIdValidator`）
+- `ParserConfig` の実行時フラグ（`set_config` / `Reader::with_config`）と feature `xml-base` / `xml-id`（既定オフ。有効時はフラグ既定オン）
+- **成果物**: パーサに `ParserConfig` と `base_uri()` / `xml_id()`、検証に `XmlIdValidator` と共用 ID 検査（パーサテスト +3、検証統合テスト +6）
+- **完了条件**: XML Base（system ID 起点・`xml:base` 継承・相対解決・オフ切替）と xml:id（一意 NCName 受理・重複検出・非 NCName 検出・正規化・未宣言でも非エラー・宣言 ID との衝突）を、仕様の例に沿った的を絞ったテストで確認
+- **既知の範囲**: 外部実体境界での基底 URI（外部実体内の要素が実体自身の URI を基底とする XML Base §4 の規定）は未対応 — 外部実体は既定無効かつ resolver 必須のため優先度は低い。W3C の xml:id 1.0 / XML Base 公式スイートの取り込みは後続（他スイート同様 env var 方式で）
 
 ### Phase 3 — DOM とシリアライザ
 

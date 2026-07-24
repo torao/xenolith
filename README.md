@@ -22,8 +22,8 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | --- | --- | --- |
 | [`xylograph`](crates/xylograph) | facade | the entry point; re-exports the layers below under one name |
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
-| [`xylograph-parser`](crates/xylograph-parser) | Phase 2a | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, and a sans-I/O core |
-| [`xylograph-validate`](crates/xylograph-validate) | Phase 2b | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking |
+| [`xylograph-parser`](crates/xylograph-parser) | Phase 2c | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, and a sans-I/O core |
+| [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
 
 Crates for the DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
@@ -62,6 +62,8 @@ cargo test --workspace --no-default-features
 |---|---|---|
 | `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error naming the feature |
 | `tokio` | off | `AsyncReader`, over `tokio`'s `AsyncRead`. Only `io-util` is pulled in; the runtime stays the caller's choice |
+| `xml-base` | off | Per-node base URI computation from `xml:base` and the entity's system id (XML Base); read it with `Parser::base_uri` |
+| `xml-id` | off | `xml:id` as an ID-typed attribute, with tokenized normalization; checked for NCName validity and uniqueness in the same ID space as declared IDs |
 
 ## Conformance
 

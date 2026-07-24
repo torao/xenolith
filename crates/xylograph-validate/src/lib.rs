@@ -37,8 +37,12 @@
 mod content;
 mod driver;
 pub mod dtd;
+#[cfg(feature = "xml-id")]
+pub mod ids;
 
 pub use driver::{Report, validate, validate_reader};
+#[cfg(feature = "xml-id")]
+pub use ids::XmlIdValidator;
 
 use std::ops::ControlFlow;
 

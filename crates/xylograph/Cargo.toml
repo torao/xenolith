@@ -16,6 +16,10 @@ default = ["encodings"]
 encodings = ["xylograph-core/encodings", "xylograph-parser/encodings", "xylograph-validate/encodings"]
 # The asynchronous reader, over tokio's AsyncRead.
 tokio = ["xylograph-parser/tokio"]
+# Per-node base URI computation from xml:base and the entity's system id (XML Base).
+xml-base = ["xylograph-parser/xml-base"]
+# xml:id as an ID-typed attribute, and its NCName/uniqueness checking in validation.
+xml-id = ["xylograph-parser/xml-id", "xylograph-validate/xml-id"]
 
 [dependencies]
 xylograph-core = { workspace = true }

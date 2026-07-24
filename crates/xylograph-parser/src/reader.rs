@@ -9,6 +9,7 @@ use std::io::Read;
 
 use xylograph_core::error::{Error, ErrorKind, Location, Result};
 
+use crate::config::ParserConfig;
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
@@ -112,6 +113,15 @@ impl<R: Read> Reader<R> {
   #[must_use]
   pub fn with_resolver(mut self, resolver: impl UriResolver + 'static) -> Self {
     self.resolver = Some(Box::new(resolver));
+    self
+  }
+
+  /// Sets the parser configuration: the optional `xml:base` and `xml:id` processing.
+  ///
+  /// See [`ParserConfig`]. Call before the first [`advance`](Self::advance).
+  #[must_use]
+  pub fn with_config(mut self, config: ParserConfig) -> Self {
+    self.parser.set_config(config);
     self
   }
 

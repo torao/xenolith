@@ -51,6 +51,11 @@ jobs:
       - run: cargo test --workspace --no-default-features
       - run: cargo test --workspace --no-default-features --features encodings
       - run: cargo test -p xylograph-parser --no-default-features --features tokio
+      # Each optional layer built on its own, so a feature that only compiles alongside another
+      # does not slip through the all-features and no-features runs.
+      - run: cargo test -p xylograph-parser --no-default-features --features xml-base
+      - run: cargo test -p xylograph-parser --no-default-features --features xml-id
+      - run: cargo test -p xylograph-validate --no-default-features --features xml-id
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the

@@ -13,6 +13,8 @@ categories.workspace = true
 [features]
 default = ["encodings"]
 encodings = ["xylograph-parser/encodings"]
+# Check xml:id attributes: a valid NCName, unique in the document (reuses the ID machinery).
+xml-id = ["xylograph-parser/xml-id"]
 
 [dependencies]
 xylograph-core = { workspace = true }

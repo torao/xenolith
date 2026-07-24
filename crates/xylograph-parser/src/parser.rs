@@ -13,7 +13,10 @@ use std::ops::Range;
 use xylograph_core::chars;
 use xylograph_core::error::{Error, ErrorKind, Location, Result};
 use xylograph_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
+#[cfg(feature = "xml-base")]
+use xylograph_core::uri::UriReference;
 
+use crate::config::ParserConfig;
 use crate::dtd::{self, Dtd, GeneralEntity};
 use crate::entity::{Entity, EntityKind, EntityStack, Limits};
 use crate::event::Event;
@@ -98,6 +101,10 @@ struct OpenElement {
   namespace_mark: usize,
   xml_space: XmlSpace,
   xml_lang: Option<NameId>,
+  /// The base URI in effect within this element: the enclosing base, resolved with an
+  /// `xml:base` attribute if the tag carried one (XML Base).
+  #[cfg(feature = "xml-base")]
+  base: Option<UriReference>,
   /// The entity depth at which the start tag was read. An end tag must be read at the same
   /// depth, so that an element cannot start in one entity and end in another (WFC: the tags
   /// of an element must lie within one entity).
@@ -170,8 +177,15 @@ enum Phase {
 pub struct Parser {
   stack: EntityStack,
   pool: NamePool,
+  config: ParserConfig,
   space_name: NameId,
   lang_name: NameId,
+  /// The interned local name `base`, for spotting `xml:base` attributes.
+  #[cfg(feature = "xml-base")]
+  base_name: NameId,
+  /// The interned local name `id`, for spotting `xml:id` attributes.
+  #[cfg(feature = "xml-id")]
+  id_name: NameId,
   scope: NamespaceScope,
   open: Vec<OpenElement>,
   phase: Phase,
@@ -222,6 +236,9 @@ pub struct Parser {
   standalone: Option<bool>,
   xml_space: XmlSpace,
   xml_lang: Option<NameId>,
+  /// The base URI in effect for the current event (XML Base).
+  #[cfg(feature = "xml-base")]
+  base: Option<UriReference>,
 }
 
 impl Default for Parser {
@@ -258,11 +275,20 @@ impl Parser {
     let mut pool = NamePool::new();
     let space_name = pool.intern("space");
     let lang_name = pool.intern("lang");
+    #[cfg(feature = "xml-base")]
+    let base_name = pool.intern("base");
+    #[cfg(feature = "xml-id")]
+    let id_name = pool.intern("id");
     Self {
       stack: EntityStack::new(document, limits),
       pool,
+      config: ParserConfig::default(),
       space_name,
       lang_name,
+      #[cfg(feature = "xml-base")]
+      base_name,
+      #[cfg(feature = "xml-id")]
+      id_name,
       scope: NamespaceScope::new(),
       open: Vec::new(),
       phase: Phase::Prolog,
@@ -294,7 +320,32 @@ impl Parser {
       standalone: None,
       xml_space: XmlSpace::Default,
       xml_lang: None,
+      #[cfg(feature = "xml-base")]
+      base: None,
     }
+  }
+
+  /// Replaces the parser's configuration.
+  ///
+  /// Set it before parsing begins. The options it carries — `xml:base`, `xml:id` — take effect
+  /// only where the matching Cargo feature is compiled in; see [`ParserConfig`].
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_parser::{Parser, ParserConfig};
+  ///
+  /// let mut parser = Parser::new();
+  /// parser.set_config(ParserConfig::none());
+  /// ```
+  pub fn set_config(&mut self, config: ParserConfig) {
+    self.config = config;
+  }
+
+  /// The parser's configuration.
+  #[must_use]
+  pub const fn config(&self) -> &ParserConfig {
+    &self.config
   }
 
   /// Supplies bytes of the document, or of whatever entity is innermost.
@@ -428,6 +479,14 @@ impl Parser {
       // Everything else inherits the context of the enclosing element.
       self.xml_space = self.open.last().map_or(XmlSpace::Default, |e| e.xml_space);
       self.xml_lang = self.open.last().and_then(|e| e.xml_lang);
+      #[cfg(feature = "xml-base")]
+      {
+        self.base = if self.config.xml_base {
+          self.open.last().map_or_else(|| self.stack.base_uri().cloned(), |e| e.base.clone())
+        } else {
+          None
+        };
+      }
     }
     match token {
       Token::Pi => self.processing_instruction(text),
@@ -872,12 +931,29 @@ impl Parser {
     self.check_attribute_uniqueness()?;
 
     let (xml_space, xml_lang) = self.space_and_lang()?;
+    #[cfg(feature = "xml-id")]
+    self.normalize_xml_id();
+    #[cfg(feature = "xml-base")]
+    let base = self.element_base()?;
     let lexical = self.remember_name(text, 1, name_len);
     self.name = name;
     self.xml_space = xml_space;
     self.xml_lang = xml_lang;
+    #[cfg(feature = "xml-base")]
+    {
+      self.base = base.clone();
+    }
     let entity_depth = self.stack.depth();
-    self.open.push(OpenElement { name, lexical, namespace_mark, xml_space, xml_lang, entity_depth });
+    self.open.push(OpenElement {
+      name,
+      lexical,
+      namespace_mark,
+      xml_space,
+      xml_lang,
+      #[cfg(feature = "xml-base")]
+      base,
+      entity_depth,
+    });
     self.end_pending = empty;
     Ok(EventKind::StartElement)
   }
@@ -908,6 +984,12 @@ impl Parser {
     self.name = open.name;
     self.xml_space = open.xml_space;
     self.xml_lang = open.xml_lang;
+    // The end-tag event carries the closing element's own base, so a caller reading it here
+    // sees the same base URI the start tag did; the parent's is restored on the next event.
+    #[cfg(feature = "xml-base")]
+    {
+      self.base = open.base;
+    }
     self.scope.revert(open.namespace_mark);
     self.names.truncate(open.lexical.start);
     self.attributes.clear();
@@ -1157,6 +1239,50 @@ impl Parser {
     Ok((space, lang))
   }
 
+  /// Computes the base URI for the element being entered (XML Base): the enclosing base — the
+  /// nearest ancestor's, or the entity's system identifier — overridden by this tag's
+  /// `xml:base`, resolved against that enclosing base.
+  #[cfg(feature = "xml-base")]
+  fn element_base(&mut self) -> Result<Option<UriReference>> {
+    if !self.config.xml_base {
+      return Ok(None);
+    }
+    let inherited = self.open.last().map_or_else(|| self.stack.base_uri().cloned(), |e| e.base.clone());
+    for i in 0..self.attributes.len() {
+      let attribute = &self.attributes[i];
+      if attribute.name.namespace() != Some(NameId::XML_NS) || attribute.name.local() != self.base_name {
+        continue;
+      }
+      // XML Base §3.1: characters disallowed in a URI are escaped before the value is used.
+      let escaped = xylograph_core::uri::escape_uri(&self.attribute_text[attribute.value.clone()]);
+      let reference = UriReference::parse(&escaped).map_err(|e| {
+        self.error(ErrorKind::Uri, format!("xml:base value {escaped:?} is not a valid URI reference: {}", e.message()))
+      })?;
+      return Ok(Some(inherited.map_or_else(|| reference.clone(), |base| base.resolve(&reference))));
+    }
+    Ok(inherited)
+  }
+
+  /// Normalizes the `xml:id` attribute of the current tag as a tokenized ID, so its reported
+  /// value is the ID even when no DTD declared it (xml:id §4).
+  #[cfg(feature = "xml-id")]
+  fn normalize_xml_id(&mut self) {
+    if !self.config.xml_id {
+      return;
+    }
+    for i in 0..self.attributes.len() {
+      let attribute = &self.attributes[i];
+      if attribute.name.namespace() != Some(NameId::XML_NS) || attribute.name.local() != self.id_name {
+        continue;
+      }
+      let range = attribute.value.clone();
+      let normalized = dtd::normalize_tokenized(&self.attribute_text[range], true);
+      let start = self.attribute_text.len();
+      self.attribute_text.push_str(&normalized);
+      self.attributes[i].value = start..self.attribute_text.len();
+    }
+  }
+
   /// Records the lexical element name so its end tag can be compared with it.
   fn remember_name(&mut self, token: &str, from: usize, len: usize) -> Range<usize> {
     let start = self.names.len();
@@ -1364,6 +1490,39 @@ impl Parser {
   #[must_use]
   pub fn xml_lang(&self) -> Option<&str> {
     self.xml_lang.map(|l| self.pool.resolve(l))
+  }
+
+  /// The base URI in effect for the current event (XML Base), if one is known.
+  ///
+  /// It is the entity's system identifier as overridden by the `xml:base` attributes in scope,
+  /// resolved to an absolute (or the most resolved) URI. `None` when nothing establishes a base
+  /// — no system identifier and no `xml:base` — or when [`ParserConfig::xml_base`] is off.
+  ///
+  /// Available only with the `xml-base` feature.
+  #[cfg(feature = "xml-base")]
+  #[must_use]
+  pub fn base_uri(&self) -> Option<String> {
+    self.base.as_ref().map(ToString::to_string)
+  }
+
+  /// The normalized `xml:id` of the current start element, if it carried one (xml:id).
+  ///
+  /// Tokenized normalization has been applied, so the value is already trimmed and collapsed.
+  /// Whether it is a valid `NCName` and unique in the document is checked by the validation
+  /// layer, which reuses the ID machinery for it.
+  ///
+  /// Available only with the `xml-id` feature, and `None` when [`ParserConfig::xml_id`] is off.
+  #[cfg(feature = "xml-id")]
+  #[must_use]
+  pub fn xml_id(&self) -> Option<&str> {
+    if !self.config.xml_id {
+      return None;
+    }
+    self
+      .attributes
+      .iter()
+      .find(|a| a.name.namespace() == Some(NameId::XML_NS) && a.name.local() == self.id_name)
+      .map(|a| &self.attribute_text[a.value.clone()])
   }
 
   /// The version from the XML declaration, or an empty string if there was none.
@@ -1850,6 +2009,53 @@ mod tests {
         ("c".to_owned(), XmlSpace::Default, Some("ja".to_owned())),
       ]
     );
+  }
+
+  #[cfg(feature = "xml-base")]
+  #[test]
+  fn computes_base_uris_from_the_system_id_and_xml_base() {
+    let doc = Entity::document(CharStream::with_encoding("UTF-8").unwrap().with_system_id("file:///a/b/doc.xml"));
+    let mut parser = Parser::with_document(doc, Limits::default());
+    parser.feed(b"<a><b xml:base='../c/'><d xml:base='e.xml'/></b><f/></a>", true).unwrap();
+
+    let mut seen = Vec::new();
+    while let Progress::Event(kind) = parser.advance().unwrap() {
+      if kind == EventKind::StartElement {
+        seen.push((parser.local_name().to_owned(), parser.base_uri()));
+      }
+    }
+    assert_eq!(
+      seen,
+      [
+        ("a".to_owned(), Some("file:///a/b/doc.xml".to_owned())),
+        ("b".to_owned(), Some("file:///a/c/".to_owned())),
+        ("d".to_owned(), Some("file:///a/c/e.xml".to_owned())),
+        ("f".to_owned(), Some("file:///a/b/doc.xml".to_owned())),
+      ]
+    );
+  }
+
+  #[cfg(feature = "xml-base")]
+  #[test]
+  fn xml_base_can_be_turned_off() {
+    let doc = Entity::document(CharStream::with_encoding("UTF-8").unwrap().with_system_id("file:///doc.xml"));
+    let mut parser = Parser::with_document(doc, Limits::default());
+    parser.set_config(ParserConfig::none());
+    parser.feed(b"<a xml:base='sub/'/>", true).unwrap();
+    parser.advance().unwrap();
+    assert_eq!(parser.base_uri(), None);
+  }
+
+  #[cfg(feature = "xml-id")]
+  #[test]
+  fn normalizes_and_exposes_xml_id() {
+    let mut parser = Parser::new();
+    parser.feed(b"<a xml:id='  x1  '><b/></a>", true).unwrap();
+    parser.advance().unwrap(); // <a>
+    assert_eq!(parser.xml_id(), Some("x1"), "surrounding whitespace is collapsed away");
+    assert_eq!(parser.attribute_value(Some(XML_NS_URI), "id"), Some("x1"), "the reported value is normalized too");
+    parser.advance().unwrap(); // <b>
+    assert_eq!(parser.xml_id(), None);
   }
 
   #[test]

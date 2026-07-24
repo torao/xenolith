@@ -32,6 +32,8 @@
 //!
 //! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
 //! - `tokio`: the asynchronous reader, [`parser::AsyncReader`], over `tokio`'s `AsyncRead`.
+//! - `xml-base`: per-node base URI computation from `xml:base` (XML Base).
+//! - `xml-id`: `xml:id` as an ID-typed attribute, checked for NCName validity and uniqueness.
 
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
 pub use xylograph_parser as parser;

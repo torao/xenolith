@@ -65,6 +65,12 @@ pub fn validate<R: Read>(source: R) -> Result<Report> {
 pub fn validate_reader<R: Read>(mut reader: Reader<R>) -> Result<Report> {
   let mut validator: Option<DtdValidator> = None;
   let mut errors = CollectErrors::default();
+  // xml:id is checked whenever its feature is compiled and the parser is configured for it —
+  // with a DTD it folds into the DTD validator's ID space, without one it stands alone.
+  #[cfg(feature = "xml-id")]
+  let xml_id_on = reader.parser().config().xml_id;
+  #[cfg(feature = "xml-id")]
+  let mut xml_id_validator: Option<crate::ids::XmlIdValidator> = None;
 
   while let Some(kind) = reader.advance()? {
     match kind {
@@ -72,14 +78,28 @@ pub fn validate_reader<R: Read>(mut reader: Reader<R>) -> Result<Report> {
         // The schema is the document's own DTD, now available.
         let parser = reader.parser();
         if let (Some(dtd), Some(root)) = (parser.dtd(), parser.doctype_name()) {
-          validator = Some(DtdValidator::new(dtd.clone(), root));
+          let built = DtdValidator::new(dtd.clone(), root);
+          #[cfg(feature = "xml-id")]
+          let built = built.with_xml_id(xml_id_on);
+          validator = Some(built);
         }
       }
       _ => {
-        if let Some(validator) = validator.as_mut() {
-          if feed(validator, &reader, kind, &mut errors).is_break() {
-            break;
-          }
+        // With no DTD, xml:id still gets its own validator, created at the first content event.
+        #[cfg(feature = "xml-id")]
+        if xml_id_on && validator.is_none() && xml_id_validator.is_none() {
+          xml_id_validator = Some(crate::ids::XmlIdValidator::new());
+        }
+        if let Some(validator) = validator.as_mut()
+          && feed(validator, &reader, kind, &mut errors).is_break()
+        {
+          break;
+        }
+        #[cfg(feature = "xml-id")]
+        if let Some(validator) = xml_id_validator.as_mut()
+          && feed(validator, &reader, kind, &mut errors).is_break()
+        {
+          break;
         }
       }
     }
@@ -92,9 +112,9 @@ pub fn validate_reader<R: Read>(mut reader: Reader<R>) -> Result<Report> {
   Ok(Report { errors: errors.take(), had_dtd: validator.is_some() })
 }
 
-/// Passes one event to the validator.
+/// Passes one event to a validator.
 fn feed<R: Read>(
-  validator: &mut DtdValidator,
+  validator: &mut dyn Validator,
   reader: &Reader<R>,
   kind: EventKind,
   errors: &mut CollectErrors,
