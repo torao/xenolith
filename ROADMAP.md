@@ -15,7 +15,9 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 | XPath 1.0 | W3C REC | 必須（XSLT の前提） |
 | XSLT 1.0 | W3C REC | 必須（ゴール） |
 | XML Serialization (xsl:output の xml/html/text) | XSLT 1.0 §16 | 必須 |
-| DTD 妥当性検証（Validity Constraints 全件） | XML 1.0 §2–§5 | **必須**（決定 1） |
+| DTD 妥当性検証（Validity Constraints 全件） | XML 1.0 §2–§5 | **必須**（決定 1、`xylograph-validate`） |
+| W3C XML Schema (XSD) 1.0 | W3C REC | **将来トラック**（決定 8、設計の余地のみ確保） |
+| RELAX NG | ISO/IEC 19757-2 | **将来トラック**（決定 8、微分アルゴリズムで `Validator` に嵌まる） |
 | DOM Level 3 Core | W3C REC | インタフェースを踏襲（決定 3） |
 | EXSLT (common / strings / math / sets / dates-and-times) | 業界標準 | **必須**（決定 5） |
 | XInclude 1.0 (3rd Edition) | W3C REC | **必須**（決定 6、feature + 実行時切替） |
@@ -24,7 +26,8 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 | xml:id 1.0 | W3C REC | **必須**（決定 6） |
 | HTML / loose parsing | WHATWG | **対象外**（下記） |
 | XML 1.1 / Namespaces 1.1 | — | 対象外 |
-| XPath 2.0+ / XSLT 2.0+ / XML Schema | — | 対象外 |
+| XPath 2.0+ / XSLT 2.0+ | — | 対象外 |
+| XSD 1.1 | — | 対象外（XSD 1.0 の設計余地には乗る） |
 
 ### 非対象: HTML / loose parsing
 
@@ -315,8 +318,10 @@ let doc = ParserConfig::new()
 ```
 xylograph/
 ├── xylograph-core/       # QName, 名前プール, URI, エラー, 文字クラス, エンコーディング
-├── xylograph-parser/     # pull パーサ, DTD, 実体解決, 名前空間スタック
-├── xylograph-dtd/        # 内容モデル DFA, 妥当性検証（parser から分離して単体テスト可能に）
+├── xylograph-parser/     # pull パーサ, DTD の構文解析, 実体解決, 名前空間スタック
+├── xylograph-validate/   # 検証レイヤー: スキーマ非依存の Validator/ErrorListener + DTD 検証器
+├── xylograph-relaxng/    # 将来トラック: RELAX NG 検証器（微分アルゴリズム、Validator を実装、決定 8）
+├── xylograph-xsd/        # 将来トラック: XSD 検証器（Validator を実装、決定 8）
 ├── xylograph-dom/        # DOM Level 3 Core（W3C IDL 準拠）のツリー
 ├── xylograph-xinclude/   # XInclude + XPointer(framework/element/xmlns)。ツリー後処理
 ├── xylograph-xdm/        # XPath データモデルのビュー（DOM 等の背後実装を抽象化するトレイト）
@@ -339,6 +344,7 @@ xylograph/
 6. **RTF の表現**: 独立した小さなアリーナ（`DocumentFragment` ではなく専用ルート）とし、型システム上 node-set と区別する。ただし `exsl:node-set()`（決定 5）でゼロコピーに node-set へ昇格できるよう、**内部表現は通常のツリーと同一**にして型タグだけで区別する。
 7. **拡張関数の登録機構を先に作る**: EXSLT を最初から入れる（決定 5）なら、EXSLT 自身をその機構の最初の利用者にする。組み込みハードコードにしない。
 8. **パーサ本体は I/O を持たない（Sans-I/O）**: 決定 7。下記。
+9. **検証はスキーマ非依存レイヤー（決定 8）**: 検証は DTD だけではない。`xylograph-validate` に**スキーマ言語に依存しない `Validator` / `ErrorListener`** を置き、DTD 検証器をその最初の実装とする。妥当性エラーは recoverable、整形式エラーは fatal（Java の `setValidating(true)` と同じ切り分け）。XSD は同じ `Validator` を実装する将来トラック（`xylograph-xsd`、本線 XSLT 1.0 完了後、まず Structures + 主要 datatypes の実用サブセット、identity constraint / redefine / PSVI は当初除外）。この設計により XSD を後付けしても既存を作り直さない。
 
 ---
 
@@ -434,10 +440,13 @@ xylograph/
 
 **実装方式（決定: 完全ストリーミング / 再パース）**: DTD パーサを **DTD バッファに対する再入可能関数**にする。内部 PE 参照はその場で値を融合（`%ref;` を値で置換）して読み進める。**外部 PE / 外部サブセットの取得点で `NeedExternalPe` / `NeedExternalSubset` を返して中断**し、ドライバが `NeedEntity` 経由で取得、取得内容をバッファに融合してから**先頭から再パース**する。再パースにより宣言途中での中断・再開を回避しつつ、宣言内 PE も文字列融合で扱える（DTD は小さいので再パースのコストは許容）。内部サブセット（PE は宣言間のみ、条件セクション不可）と外部サブセット（PE は宣言内も可、条件セクション可）はバッファ境界で区別する。
 
-**2b. 妥当性検証**（決定 1）
-- 内容モデルの DFA コンパイルと照合、決定性制約の検査
-- 属性の妥当性、ID/IDREF、ルート要素名
+**2b. 妥当性検証**（決定 1・8、`xylograph-validate`）
+- **スキーマ非依存の検証インタフェース**: `Validator`（イベント列／後の DOM 木を受け取る）と `ErrorListener`（warning / error(recoverable) / fatal）。DTD 検証器をその最初の実装に
+- parser が DTD モデル（`Dtd` / `ContentSpec` / `AttDef` …）を公開 API として提供（現状 `pub(crate)`）
+- 内容モデルの DFA コンパイルと照合、決定性制約（付録 E）の検査
+- 属性の妥当性、ID の一意性・IDREF 解決、ルート要素名の一致
 - `ErrorListener` 経由の recoverable エラー報告と継続
+- ファサードから `xylograph::validate` として再エクスポート
 - 完了条件: **xmlconf の invalid 群を全件検出**し、valid 群で誤検出ゼロ。既知の逸脱は文書化
 
 **2c. XML Base / xml:id**（決定 6）
@@ -526,13 +535,14 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 | # | 論点 | 決定 | 影響 |
 |---|---|---|---|
-| 1 | DTD 妥当性検証 | **ゴールに含める** | Phase 2 を 2a（DTD 情報）/ 2b（検証）に分割。`xylograph-dtd` を独立クレート化。完了条件に xmlconf invalid 群の全件検出を追加 |
+| 1 | DTD 妥当性検証 | **ゴールに含める** | Phase 2 を 2a（DTD 情報）/ 2b（検証）に分割。検証は `xylograph-validate` に独立（決定 8）。完了条件に xmlconf invalid 群の全件検出を追加 |
 | 2 | `xsl:sort` の照合 | **ICU（ICU4X）依存で可** | `icu_collator` を feature `icu`（既定 ON）で導入。`lang` / `case-order` を CLDR 準拠に。`lang()` 関数の BCP 47 処理にも流用。データサイズ対策としてロケール絞り込みビルドを用意 |
 | 3 | API 設計 | **W3C 規定のインタフェースは踏襲、それ以外は Rust 的に再設計** | DOM Level 3 Core はメソッド名・例外コードまで規定どおり（命名のみ snake_case）。live NodeList も維持。パーサ設定・変換駆動・エラー通知・CLI は型付きビルダーと `Result` で再設計し、ファクトリ + 文字列 feature 方式は採らない |
 | 4 | 非 UTF エンコーディング | **外部ライブラリに委譲** | 自前は UTF-8/16・ASCII・Latin-1 まで。以降は `encoding_rs`（feature `encodings`、既定 ON）。`Decoder` トレイトで抽象化し差し替え可能に。出力側は符号化不能文字を文字参照へフォールバック |
 | 5 | EXSLT | **最初から入れる** | Phase 5 で拡張関数の登録機構を先に作り、EXSLT をその最初の利用者にする。RTF は `exsl:node-set()` でゼロコピー昇格できる内部表現にする。Phase 6.5 として common → strings → math → sets → functions → dates → regex の順に実装 |
 | 6 | XInclude / XML Base / xml:id | **必須。feature + 実行時フラグで切替** | XML Base と xml:id は Phase 2c、XInclude は Phase 3.5（XPointer framework / `element()` / `xmlns()` を含む）。基底 URI の起点は実体の system ID なので **Phase 1 の実体スタックに system ID を持たせる**。XInclude の実行時既定は無効（JAXP 準拠）、XML Base / xml:id は既定有効 |
 | 7 | パーサの I/O とイベント API | **Sans-I/O コア + 同期／非同期ドライバ。カーソル API が一次、所有イベント `Iterator` はその上のラッパ** | 下記「決定 7 の詳細」。`tokio` は feature（既定 OFF）に隔離 |
+| 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xylograph-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xylograph-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
 
 ### 決定 7 の詳細 — Sans-I/O パーサ
 
@@ -567,6 +577,44 @@ match parser.next()? {
 | カーソル | `reader.next()? -> Option<Event<'_>>`、値はリーダのバッファから借用 | 一次 API。割当なし。Java の `XMLStreamReader` に対応 |
 | 所有イベント | `reader.into_events() -> impl Iterator<Item = Result<OwnedEvent>>` | 薄いラッパ。`Iterator` が要る場面と、イベントを溜めたい場面向け |
 | push | `Handler` トレイトへの送出 | SAX 相当。カーソルの上に載せる |
+
+### 決定 8 の詳細 — スキーマ非依存の検証フレームワーク
+
+検証は「イベント列に対する制約検査」であり、スキーマ言語に依存しない。`xylograph-validate` に共通インタフェースを置き、各スキーマ言語はその実装として載る。Java の `Schema` / `ValidatorHandler` と同型。
+
+```rust
+// xylograph-validate（スキーマ言語非依存）
+pub trait Validator {
+  fn start_element(&mut self, name: QName, attrs: &[AttributeRef<'_>]) -> Result<()>;
+  fn characters(&mut self, text: &str) -> Result<()>;
+  fn end_element(&mut self, name: QName) -> Result<()>;
+  fn finish(&mut self) -> Result<()>;              // 文書末の検査（IDREF 解決など）
+}
+
+pub trait Schema {                                  // コンパイル済みスキーマ
+  fn validator(&self) -> Box<dyn Validator>;        // 文書ごとに新しい検証器
+}
+
+pub trait ErrorListener {                           // warning / error(recoverable) / fatal
+  fn error(&mut self, e: &Error) -> ControlFlow<()>;
+  // ...
+}
+```
+
+`ValidatingReader = Reader + Box<dyn Validator>` が、読み取ったイベントをパースと検証の両方へ流す。この `Validator` を実装すれば何でも検証器になる。
+
+**想定する実装例（拡張性の実証）**:
+
+| 実装 | クレート | 位置づけ | 備考 |
+|---|---|---|---|
+| DTD 検証器 | `xylograph-validate` | Phase 2b（最初の実装） | parser が公開する DTD モデルを読む |
+| RELAX NG | `xylograph-relaxng`（想定） | 将来トラック | **微分（Brzozowski derivative）アルゴリズム**がイベント列検証そのもので、`Validator` に素直に写る。XSD より小さく綺麗に嵌まる良い候補 |
+| XSD 1.0 | `xylograph-xsd`（想定） | 将来トラック | 実用サブセットから（識別制約・redefine・PSVI は当初除外） |
+| ユーザ独自 | 利用側 | 常時可能 | 「`<price>` は正数」等のルールや Schematron 風の検証を `Validator` 実装として差し込める |
+
+**設計の試金石**: 「RELAX NG の微分アルゴリズムがこのトレイトに素直に写るか」。Phase 2b で `Validator` を定義する際、DTD 都合でインタフェースを歪めない（DTD 固有の内容モデルや ATTLIST はインタフェースに露出させない）ことを、この写像で検証する。
+
+**境界（DTD の特殊性）**: DTD は検証と解析が絡む（実体展開・属性デフォルト・ID 型付けは「解析側」＝ Phase 2a で実装済み）。フレームワークの差し替え対象は制約検査のみで、実体・デフォルトの補完ではない。RELAX NG・XSD・ユーザ独自はイベント列 + 名前空間だけを必要とするため、この境界により綺麗に載る。
 
 ### 決定から導かれる依存クレート
 
