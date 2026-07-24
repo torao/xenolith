@@ -226,12 +226,12 @@ impl DtdValidator {
         }
         // VC: Attribute Default Value Syntactically Correct — a declared default must be a
         // legal value for its type. Check it without recording IDs or references.
-        if let Some(value) = def.default.value()
-          && !self.default_value_is_valid(&def.att_type, value, pool)
-        {
-          let name = pool.resolve(def.name);
-          let message = format!("the default value \"{value}\" of \"{name}\" is not valid for its declared type");
-          errors.report(ValidityError::new(message, at.clone()))?;
+        if let Some(value) = def.default.value() {
+          if !self.default_value_is_valid(&def.att_type, value, pool) {
+            let name = pool.resolve(def.name);
+            let message = format!("the default value \"{value}\" of \"{name}\" is not valid for its declared type");
+            errors.report(ValidityError::new(message, at.clone()))?;
+          }
         }
       }
       // VC: One ID per Element Type.
@@ -386,14 +386,14 @@ impl DtdValidator {
         continue;
       };
 
-      if let DefaultDecl::Fixed(fixed) = &def.default
-        && attribute.value != fixed
-      {
-        self.report(
-          errors,
-          at,
-          format!("attribute \"{lexical}\" is #FIXED as \"{fixed}\", but was given \"{}\"", attribute.value),
-        )?;
+      if let DefaultDecl::Fixed(fixed) = &def.default {
+        if attribute.value != fixed {
+          self.report(
+            errors,
+            at,
+            format!("attribute \"{lexical}\" is #FIXED as \"{fixed}\", but was given \"{}\"", attribute.value),
+          )?;
+        }
       }
 
       self.check_attribute_value(&lexical, &def.att_type, attribute.value, pool, at, errors)?;

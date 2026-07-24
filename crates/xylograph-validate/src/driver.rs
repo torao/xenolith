@@ -90,16 +90,16 @@ pub fn validate_reader<R: Read>(mut reader: Reader<R>) -> Result<Report> {
         if xml_id_on && validator.is_none() && xml_id_validator.is_none() {
           xml_id_validator = Some(crate::ids::XmlIdValidator::new());
         }
-        if let Some(validator) = validator.as_mut()
-          && feed(validator, &reader, kind, &mut errors).is_break()
-        {
-          break;
+        if let Some(validator) = validator.as_mut() {
+          if feed(validator, &reader, kind, &mut errors).is_break() {
+            break;
+          }
         }
         #[cfg(feature = "xml-id")]
-        if let Some(validator) = xml_id_validator.as_mut()
-          && feed(validator, &reader, kind, &mut errors).is_break()
-        {
-          break;
+        if let Some(validator) = xml_id_validator.as_mut() {
+          if feed(validator, &reader, kind, &mut errors).is_break() {
+            break;
+          }
         }
       }
     }
