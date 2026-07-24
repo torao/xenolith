@@ -9,13 +9,23 @@ See [ROADMAP.md](ROADMAP.md) for the feature inventory, design decisions and pha
 
 ## Crates
 
+Depend on [`xylograph`](crates/xylograph) — one dependency that gathers the layers under one
+name. The work is split into focused crates so that a caller who wants only the parser does not
+compile the collation tables or the transformation engine, and the facade re-exports them:
+
+```rust
+use xylograph::parser::Reader; // the parser lives in its own crate, reached through the facade
+use xylograph::{Error, QName}; // shared primitives are at the crate root
+```
+
 | Crate | Status | Contents |
 | --- | --- | --- |
+| [`xylograph`](crates/xylograph) | facade | the entry point; re-exports the layers below under one name |
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 2a | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, and a sans-I/O core |
 
-Crates for the DTD, DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later
-phases; see the roadmap.
+Crates for the DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later phases;
+each is re-exported through the facade as it lands. See the roadmap.
 
 ## Building
 

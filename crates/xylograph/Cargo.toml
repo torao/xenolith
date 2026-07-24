@@ -1,0 +1,25 @@
+[package]
+name = "xylograph"
+description = "A native Rust implementation of XML processing and XSLT 1.0, aiming for parity with Java's XML APIs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+# Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
+encodings = ["xylograph-core/encodings", "xylograph-parser/encodings"]
+# The asynchronous reader, over tokio's AsyncRead.
+tokio = ["xylograph-parser/tokio"]
+
+[dependencies]
+xylograph-core = { workspace = true }
+xylograph-parser = { workspace = true }
+
+[lints]
+workspace = true
