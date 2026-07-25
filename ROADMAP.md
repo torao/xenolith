@@ -499,9 +499,13 @@ xylograph/
 - **完了条件**: パース → DOM → 直列化が妥当な XML を出し、代表的な構造・名前空間・エスケープが往復する
 - **後続に回した点**: 出力は **UTF-8**。非 UTF / UTF-16 のバイト出力（`encoding_rs` の `encode` は UTF-16 を UTF-8 化するため独自処理が要る）は別途。DOCTYPE の public/system id は現状ビルダーが取り込まない（パーサが未公開）ため往復で欠落 → 3e で解消候補
 
-**3e. push/StAX アダプタとラウンドトリップ**
-- SAX 相当の push アダプタ、StAX Writer
-- **完了条件（Phase 3 全体）**: パース → DOM → 直列化のラウンドトリップが情報を落とさない
+**3e. push/StAX アダプタとラウンドトリップ**✅ 完了
+- **SAX 相当の push アダプタ**（`xylograph-parser` の `sax` モジュール）: `Handler` トレイト（既定実装つき）と `drive(reader, handler)`。要素イベントは `&Parser` を渡し、名前・名前空間・属性をアクセサで読む
+- **StAX Writer**（`xylograph-serialize` の `XmlWriter`）: `write_start_element` / `write_attribute` / `write_characters` / `write_cdata` / `write_comment` / `write_processing_instruction` / `write_end_element`。開始タグ直後の終了は `<a/>` に畳む。エスケープは自動
+- **DOCTYPE の外部 ID 往復を解消**: パーサに `doctype_public_id()` / `doctype_system_id()` を追加し、ビルダーが DocumentType に取り込む → シリアライザで往復
+- **成果物**: `sax` モジュール（ユニット 2 + doctest 1）、`XmlWriter`（ユニット 5 + doctest 1）、往復統合テスト
+- **完了条件（Phase 3 全体）✅**: パース → DOM → 直列化のラウンドトリップが情報を落とさない（名前空間・属性・混在内容・コメント・PI・CDATA・DOCTYPE 外部 ID を往復で確認）
+- **なお未対応**: DOCTYPE の内部サブセット（DOM `internalSubset` 未モデル）は往復で欠落。非 UTF/UTF-16 バイト出力も別途（3d 参照）
 
 ### Phase 3.5 — XInclude（決定 6）
 

@@ -29,8 +29,12 @@
 //! assert_eq!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?><note>hi</note>");
 //! # Ok::<(), xylograph_dom::DomException>(())
 //! ```
+//!
+//! For output produced call by call rather than from a tree, see [`XmlWriter`].
 
 mod escape;
 mod serializer;
+mod writer;
 
 pub use serializer::Serializer;
+pub use writer::XmlWriter;

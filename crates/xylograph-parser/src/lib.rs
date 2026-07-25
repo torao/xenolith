@@ -96,6 +96,7 @@ mod namespace;
 pub mod parser;
 pub mod reader;
 pub mod resolve;
+pub mod sax;
 mod scan;
 pub mod stream;
 

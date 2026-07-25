@@ -193,6 +193,10 @@ pub struct Parser {
   /// The root element name the `DOCTYPE` declared, interned; a validator matches the document
   /// root against it.
   doctype_name: Option<NameId>,
+  /// The public and system identifiers of the `DOCTYPE`'s external subset, kept for the
+  /// accessors after `dtd_external_id` has been consumed to fetch it.
+  doctype_public_id: Option<String>,
+  doctype_system_id: Option<String>,
   /// The document type definition, once a `DOCTYPE` has declared one.
   dtd: Option<Dtd>,
   /// True if the document declared an external DTD subset that was not read (no resolver), so
@@ -294,6 +298,8 @@ impl Parser {
       phase: Phase::Prolog,
       seen_doctype: false,
       doctype_name: None,
+      doctype_public_id: None,
+      doctype_system_id: None,
       dtd: None,
       external_subset_unread: false,
       dtd_buf: String::new(),
@@ -688,6 +694,11 @@ impl Parser {
       let message = format!("{external:?} is not a valid external identifier in the document type declaration");
       return Err(self.error(ErrorKind::WellFormedness, message));
     };
+    // Keep the identifiers for the accessors; `dtd_external_id` itself is consumed on fetch.
+    if let Some((public_id, system_id)) = &self.dtd_external_id {
+      self.doctype_public_id = public_id.clone();
+      self.doctype_system_id = Some(system_id.clone());
+    }
 
     // Keep the DOCTYPE text for the event, and set up the DTD to be parsed by `drive_dtd`,
     // which runs across the entity fetches an external subset or parameter entity may need.
@@ -1576,6 +1587,18 @@ impl Parser {
   #[must_use]
   pub const fn doctype_name(&self) -> Option<NameId> {
     self.doctype_name
+  }
+
+  /// The public identifier of the `DOCTYPE`'s external subset, if it declared one with `PUBLIC`.
+  #[must_use]
+  pub fn doctype_public_id(&self) -> Option<&str> {
+    self.doctype_public_id.as_deref()
+  }
+
+  /// The system identifier of the `DOCTYPE`'s external subset, if it declared one.
+  #[must_use]
+  pub fn doctype_system_id(&self) -> Option<&str> {
+    self.doctype_system_id.as_deref()
   }
 
   /// The external entity the parser is waiting on, after [`advance`](Self::advance) returned

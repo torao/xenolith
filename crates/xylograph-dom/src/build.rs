@@ -98,7 +98,9 @@ pub fn parse_reader<R: Read>(mut reader: Reader<R>) -> Result<Document> {
       EventKind::Doctype => {
         if let Some(name) = parser.doctype_name() {
           let name = parser.pool().resolve(name).to_owned();
-          let node = dom_result(doc.create_document_type(&name, None, None))?;
+          let public_id = parser.doctype_public_id().map(ToOwned::to_owned);
+          let system_id = parser.doctype_system_id().map(ToOwned::to_owned);
+          let node = dom_result(doc.create_document_type(&name, public_id.as_deref(), system_id.as_deref()))?;
           dom_result(doc.append_child(parent, node))?;
         }
       }

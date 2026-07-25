@@ -96,6 +96,27 @@ fn base_uri_is_none_without_a_system_id_or_xml_base() {
 }
 
 #[test]
+fn captures_the_doctype_public_and_system_ids() {
+  use xylograph_parser::Reader;
+  use xylograph_parser::resolve::{EntityRequest, UriResolver};
+
+  // A resolver that serves the external subset as empty — enough for the DOCTYPE to be read.
+  struct Empty;
+  impl UriResolver for Empty {
+    fn resolve(&mut self, _request: &EntityRequest) -> Result<Option<Vec<u8>>, xylograph_core::Error> {
+      Ok(Some(Vec::new()))
+    }
+  }
+
+  let xml = "<!DOCTYPE a PUBLIC \"pub-id\" \"a.dtd\"><a/>";
+  let doc = build::parse_reader(Reader::new(xml.as_bytes()).with_resolver(Empty)).expect("well-formed");
+  let doctype = doc.doctype().unwrap();
+  assert_eq!(doc.node_name(doctype), "a");
+  assert_eq!(doc.public_id(doctype), Some("pub-id"));
+  assert_eq!(doc.system_id(doctype), Some("a.dtd"));
+}
+
+#[test]
 fn a_dtd_id_attribute_is_marked() {
   let xml = "<!DOCTYPE r [<!ELEMENT r (item)><!ELEMENT item EMPTY><!ATTLIST item key ID #IMPLIED>]>\
              <r><item key='k1'/></r>";

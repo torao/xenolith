@@ -82,6 +82,16 @@ fn writes_a_doctype_with_public_and_system_ids() {
 }
 
 #[test]
+fn a_rich_document_round_trips_through_dom_and_back() {
+  // Namespaces, an escaped attribute, mixed content, a comment, a PI and a CDATA section — the
+  // Phase 3 completion condition: parse to a DOM and serialize back without losing anything.
+  let xml = "<doc xmlns=\"urn:d\" xmlns:p=\"urn:p\" id=\"1\">\
+             text<p:child a=\"x &amp; y\"/><!--c--><?pi d?><![CDATA[<raw>]]>tail</doc>";
+  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  assert_eq!(Serializer::new().to_string(&doc, doc.document_element().unwrap()), xml);
+}
+
+#[test]
 fn writes_a_whole_document_with_a_declaration_and_indent() {
   let doc = build::parse("<a><b/></a>".as_bytes()).unwrap();
   let out = Serializer::new().with_xml_declaration(true).with_indent("  ").to_string(&doc, doc.root());
