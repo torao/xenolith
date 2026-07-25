@@ -7,6 +7,7 @@
 //!
 //! - [`parser`] — the XML pull parser: readers, events, entity resolution, the DTD.
 //! - [`validate`] — validation: a schema-agnostic `Validator` and the DTD validator.
+//! - [`dom`] — an arena-based DOM tree: nodes, navigation, and mutation.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
@@ -41,6 +42,9 @@ pub use xylograph_parser as parser;
 /// Validation: the schema-agnostic [`Validator`](validate::Validator) and the DTD validator.
 pub use xylograph_validate as validate;
 
+/// The DOM tree: an arena of nodes with a W3C-shaped, Rust-idiomatic API.
+pub use xylograph_dom as dom;
+
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};
 pub use xylograph_core::{chars, encoding, error, name, uri};
@@ -59,6 +63,14 @@ mod tests {
       }
     }
     assert_eq!(starts, 2);
+  }
+
+  #[test]
+  fn the_facade_reaches_the_dom() {
+    let mut doc = crate::dom::Document::new();
+    let root = doc.create_element("a").unwrap();
+    doc.append_child(doc.root(), root).unwrap();
+    assert_eq!(doc.document_element(), Some(root));
   }
 
   #[test]

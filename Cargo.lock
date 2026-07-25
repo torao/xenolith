@@ -119,6 +119,7 @@ name = "xylograph"
 version = "0.0.0"
 dependencies = [
  "xylograph-core",
+ "xylograph-dom",
  "xylograph-parser",
  "xylograph-validate",
 ]
@@ -128,6 +129,13 @@ name = "xylograph-core"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
+]
+
+[[package]]
+name = "xylograph-dom"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
 ]
 
 [[package]]

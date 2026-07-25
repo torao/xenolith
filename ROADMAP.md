@@ -336,7 +336,7 @@ xylograph/
 ### 主要な設計判断（Phase 0 で確定させる）
 
 1. **ツリー表現**: アリーナ（`Vec<NodeData>` + `NodeId(u32)`）を採用する。`Rc<RefCell<Node>>` は DOM の親ポインタで循環参照になり、XPath の文書順比較も遅い。アリーナなら文書順は「(ドキュメントID, 進入順序番号)」の整数比較で O(1)、`generate-id()` も自明に実装できる。
-   - 代償: DOM API の「ノードを他文書へ移動」「ノードだけを保持し続ける」が素直に書けない → ハンドルは `(Arc<Document>, NodeId)` の薄いラッパにする。W3C IDL をそのまま出す（決定 3）以上、`Node` を単独で持ち回れることは必須要件。
+   - 代償: DOM API の「ノードを他文書へ移動」「ノードだけを保持し続ける」が素直に書けない。**採用（Phase 3a で確定）: コンテキスト方式**。アリーナは `Document` が所有し、読み取り・走査は `&Document`、変更は `&mut Document` 経由（`doc.append_child(parent, child)` など）。`tag_name()` 等が `&str` を返し高速・イディオマティック（indextree / xot 系）。ノードを単独で持ち回る必要（XPath/XSLT の読み取り主体フェーズ）は、`Arc<Document>` を束ねた自己完結ハンドル `NodeRef` で満たす。ツリーは一意アクセスで構築・変更し、読み取り時に `Arc` で共有する。
 2. **文字列**: 名前（要素名・属性名・名前空間 URI）はインターン。テキストは入力バッファからの借用（`Cow`）をパーサ層では許し、DOM 構築時に所有へ倒す。
 3. **XDM とツリーの分離**: XPath 評価器は `trait Node` に対して動く。これにより DOM ツリー・RTF・将来のストリーミング実装を同じ評価器で扱える。名前空間ノードは XDM 側で合成する（DOM には持たせない）。
 4. **XPath は「コンパイル」する**: AST をそのまま歩くのではなく、軸走査＋述語の閉包（あるいは簡易バイトコード）へ落とす。`xsl:key` とパターンマッチはここで最適化余地が大きい。
@@ -460,11 +460,34 @@ xylograph/
 
 ### Phase 3 — DOM とシリアライザ
 
-- アリーナツリー、**W3C DOM Level 3 Core の全インタフェース**（決定 3）、`DocumentBuilder`
-- DOM の live NodeList / NamedNodeMap、`DOMException` コード体系
+規模が大きいため、Phase 1・2 と同様にサブフェーズへ分割し、各サブフェーズの終わりにコミットする。
+
+**3a. アリーナツリーとノードモデル**（決定 1・3、`xylograph-dom`）✅ 完了
+- アリーナ（`Vec<NodeSlot>` + `NodeId(u32)`）を `Document` が所有。ノードハンドルは `Copy` の `NodeId`
+- ノード種別（`NodeType`、DOM `nodeType` コード）と種別ごとのペイロード（Element/Text/CDATA/Comment/PI/Document/DocumentType/DocumentFragment）
+- 構築（`create_element` / `create_element_ns` / `create_text_node` / `create_comment` / `create_cdata_section` / `create_processing_instruction` / `create_document_type` / `create_document_fragment`）
+- 走査（parent / first_child / last_child / previous_sibling / next_sibling / children / document_element / doctype）と、連鎖読み取り用の借用ハンドル `NodeRef`
+- 名前・値（node_name / node_value / local_name / prefix / namespace_uri / text_content）、属性の get/set/remove（最小）
+- 変更の基礎（append_child / insert_before / remove_child、サイクル・コンテナ・reference 検査）と `DomException` コード体系
+- **成果物**: `xylograph-dom` クレート（テスト 12 + doctest 3）。ファサードから `xylograph::dom`
+- **完了条件**: 木の構築・走査・値取得・基本的な変更が通る（本サブフェーズのユニット/doctest）
+
+**3b. 変更 API・live コレクション・名前空間**（`DOMException` を全面適用）
+- 変更 API の完全化（replaceChild、DocumentFragment の展開挿入、Document 直下の子制約）と残りの `DOMException`（WrongDocument 等）
+- live NodeList / NamedNodeMap、Attr をノードとして扱うモデル、`getElementsByTagName(NS)` / `getElementById`
+- `createElementNS` の名前空間検査（NAMESPACE_ERR）、名前空間正規化
+
+**3c. DocumentBuilder（パース → DOM）**
+- パーサのイベント列から DOM を構築。DTD・xml:base / xml:id 情報の取り込み
+- 完了条件: 代表的な文書が DOM に載る
+
+**3d. シリアライザ**（`xylograph-serialize`）
 - XML シリアライザ（エンコーディング、エスケープ、indent、名前空間修復）
+- 完了条件: DOM → 直列化が妥当な XML を出す
+
+**3e. push/StAX アダプタとラウンドトリップ**
 - SAX 相当の push アダプタ、StAX Writer
-- **完了条件**: パース → DOM → 直列化のラウンドトリップが情報を落とさない
+- **完了条件（Phase 3 全体）**: パース → DOM → 直列化のラウンドトリップが情報を落とさない
 
 ### Phase 3.5 — XInclude（決定 6）
 

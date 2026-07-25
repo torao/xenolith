@@ -1,0 +1,20 @@
+[package]
+name = "xylograph-dom"
+description = "A DOM tree for xylograph: an arena of nodes with a W3C-shaped, Rust-idiomatic API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+xylograph-core = { workspace = true }
+
+[lints]
+workspace = true

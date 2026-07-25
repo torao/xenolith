@@ -25,6 +25,7 @@ xml-id = ["xylograph-parser/xml-id", "xylograph-validate/xml-id"]
 xylograph-core = { workspace = true }
 xylograph-parser = { workspace = true }
 xylograph-validate = { workspace = true }
+xylograph-dom = { workspace = true }
 
 [lints]
 workspace = true
