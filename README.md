@@ -24,11 +24,13 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 3e | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, a SAX-style push adapter, and a sans-I/O core |
 | [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
-| [`xylograph-dom`](crates/xylograph-dom) | Phase 3e | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
+| [`xylograph-dom`](crates/xylograph-dom) | Phase 3.5a | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
 
 | [`xylograph-serialize`](crates/xylograph-serialize) | Phase 3e | a serializer from a DOM subtree to well-formed XML text (escaping, optional XML declaration and indentation, namespace repair) and a StAX-style streaming `XmlWriter`; UTF-8 output |
 
-Crates for XPath, XInclude, XSLT, EXSLT and the CLI arrive in later phases;
+| [`xylograph-xinclude`](crates/xylograph-xinclude) | Phase 3.5a | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, `xi:fallback`, recursion with loop detection and limits, and base URI fixup; resources are fetched through a caller-supplied `Loader` |
+
+Crates for XPath, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
 
 ## Building
@@ -65,6 +67,7 @@ cargo test --workspace --no-default-features
 |---|---|---|
 | `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error naming the feature |
 | `parse` | on | `dom::build`, which turns parsed XML into a DOM tree |
+| `xinclude` | off | `xinclude`, which expands `xi:include` over a DOM. Off by default: it fetches resources |
 | `tokio` | off | `AsyncReader`, over `tokio`'s `AsyncRead`. Only `io-util` is pulled in; the runtime stays the caller's choice |
 | `xml-base` | off | Per-node base URI computation from `xml:base` and the entity's system id (XML Base); read it with `Parser::base_uri` |
 | `xml-id` | off | `xml:id` as an ID-typed attribute, with tokenized normalization; checked for NCName validity and uniqueness in the same ID space as declared IDs |

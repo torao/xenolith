@@ -147,6 +147,8 @@ pub enum ErrorKind {
   Namespace,
   /// A resource limit was exceeded: entity expansion, nesting depth, node count.
   Limit,
+  /// An XInclude processing error: an inclusion loop, or a failed inclusion with no fallback.
+  XInclude,
   /// The requested capability was not compiled in; see the crate's feature flags.
   UnsupportedFeature,
   /// A bug in xylograph. Build these with [`Error::internal`].
@@ -164,6 +166,7 @@ impl fmt::Display for ErrorKind {
       Self::Validity => "not valid",
       Self::Namespace => "namespace error",
       Self::Limit => "limit exceeded",
+      Self::XInclude => "XInclude error",
       Self::UnsupportedFeature => "unsupported feature",
       Self::Internal => "internal error",
     })

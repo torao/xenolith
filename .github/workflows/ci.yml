@@ -57,6 +57,7 @@ jobs:
       - run: cargo test -p xylograph-parser --no-default-features --features xml-id
       - run: cargo test -p xylograph-validate --no-default-features --features xml-id
       - run: cargo test -p xylograph-dom --no-default-features --features parse
+      - run: cargo test -p xylograph-xinclude --no-default-features --features encodings
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the

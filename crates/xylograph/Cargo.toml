@@ -18,9 +18,12 @@ encodings = [
   "xylograph-parser/encodings",
   "xylograph-validate/encodings",
   "xylograph-dom/encodings",
+  "xylograph-xinclude?/encodings",
 ]
 # Build a DOM from parsed XML: xylograph::dom::build.
 parse = ["xylograph-dom/parse"]
+# XInclude processing: xylograph::xinclude. A resource-fetching layer, so opt-in.
+xinclude = ["dep:xylograph-xinclude"]
 # The asynchronous reader, over tokio's AsyncRead.
 tokio = ["xylograph-parser/tokio"]
 # Per-node base URI computation from xml:base and the entity's system id (XML Base).
@@ -34,6 +37,7 @@ xylograph-parser = { workspace = true }
 xylograph-validate = { workspace = true }
 xylograph-dom = { workspace = true }
 xylograph-serialize = { workspace = true }
+xylograph-xinclude = { workspace = true, optional = true }
 
 [lints]
 workspace = true

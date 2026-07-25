@@ -123,6 +123,7 @@ dependencies = [
  "xylograph-parser",
  "xylograph-serialize",
  "xylograph-validate",
+ "xylograph-xinclude",
 ]
 
 [[package]]
@@ -163,4 +164,13 @@ version = "0.0.0"
 dependencies = [
  "xylograph-core",
  "xylograph-parser",
+]
+
+[[package]]
+name = "xylograph-xinclude"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-dom",
+ "xylograph-serialize",
 ]

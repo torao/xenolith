@@ -151,6 +151,80 @@ impl Document {
     Ok(self.push(data))
   }
 
+  /// Copies a node from another document into this one, returning a new detached node.
+  ///
+  /// This is the DOM's `importNode`: the copy belongs to this document — its names are re-interned
+  /// here — and is detached, ready to be placed in the tree. With `deep`, the node's descendants
+  /// come too. An element's attributes always come with it. The base URI recorded on an element
+  /// is not copied; it is a computed property, and a caller that needs to preserve it (such as
+  /// XInclude) writes an `xml:base` attribute instead.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NotSupported`] for a node that cannot be imported — a document, a document
+  /// type, or a bare attribute.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_dom::Document;
+  ///
+  /// let mut source = Document::new();
+  /// let s = source.create_element("a")?;
+  /// let text = source.create_text_node("hi");
+  /// source.append_child(s, text)?;
+  ///
+  /// let mut doc = Document::new();
+  /// let copy = doc.import_node(&source, s, true)?;
+  /// doc.append_child(doc.root(), copy)?;
+  /// assert_eq!(doc.text_content(copy), "hi");
+  /// # Ok::<(), xylograph_dom::DomException>(())
+  /// ```
+  pub fn import_node(&mut self, source: &Document, node: NodeId, deep: bool) -> Result<NodeId> {
+    let imported = match &source.slot(node).data {
+      NodeData::Element(_) => {
+        let namespace = source.namespace_uri(node).map(ToOwned::to_owned);
+        let element = self.create_element_ns(namespace.as_deref(), &source.node_name(node))?;
+        let attributes: Vec<NodeId> = source.attributes(node).iter().collect();
+        for attr in attributes {
+          let name = source.node_name(attr);
+          let value = source.node_value(attr).unwrap_or_default();
+          match source.namespace_uri(attr) {
+            Some(namespace) => self.set_attribute_ns(element, Some(namespace), &name, value)?,
+            None => self.set_attribute(element, &name, value)?,
+          }
+        }
+        if deep {
+          for child in source.children(node).collect::<Vec<_>>() {
+            let child = self.import_node(source, child, true)?;
+            self.append_child(element, child)?;
+          }
+        }
+        element
+      }
+      NodeData::Text(data) => self.create_text_node(data),
+      NodeData::CdataSection(data) => self.create_cdata_section(data),
+      NodeData::Comment(data) => self.create_comment(data),
+      NodeData::ProcessingInstruction { .. } => {
+        self.create_processing_instruction(&source.node_name(node), source.node_value(node).unwrap_or_default())?
+      }
+      NodeData::DocumentFragment => {
+        let fragment = self.create_document_fragment();
+        if deep {
+          for child in source.children(node).collect::<Vec<_>>() {
+            let child = self.import_node(source, child, true)?;
+            self.append_child(fragment, child)?;
+          }
+        }
+        fragment
+      }
+      NodeData::Document | NodeData::DocumentType { .. } | NodeData::Attribute(_) => {
+        return Err(DomException::new(ExceptionCode::NotSupported, "this kind of node cannot be imported"));
+      }
+    };
+    Ok(imported)
+  }
+
   /// Interns a node and returns its handle. The node starts detached.
   fn push(&mut self, data: NodeData) -> NodeId {
     let id = NodeId(u32::try_from(self.nodes.len()).expect("a document holds fewer than 4 billion nodes"));

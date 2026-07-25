@@ -10,6 +10,7 @@
 //! - [`dom`] — an arena-based DOM tree: nodes, navigation, mutation, and `dom::build` to make
 //!   one from parsed XML.
 //! - [`serialize`] — writing a DOM subtree back to XML text.
+//! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
@@ -49,6 +50,10 @@ pub use xylograph_dom as dom;
 
 /// Serialization: a DOM subtree to well-formed XML text.
 pub use xylograph_serialize as serialize;
+
+/// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
+#[cfg(feature = "xinclude")]
+pub use xylograph_xinclude as xinclude;
 
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};

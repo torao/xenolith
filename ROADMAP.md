@@ -509,14 +509,26 @@ xylograph/
 
 ### Phase 3.5 — XInclude（決定 6）
 
-Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る後処理層。
+Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る後処理層。規模が大きいためサブフェーズに分割する。
 
-- XPointer フレームワーク、`element()` scheme、`xmlns()` scheme、短縮ポインタ
-- `xi:include` の全属性、`xi:fallback`、`parse="text"` の符号化決定
-- base URI fixup / language fixup、再帰処理とループ検出、深さ・取得数の上限
-- `UriResolver` 経由の取得と既定無効の実行時フラグ、feature `xinclude`
-- 妥当性検証との順序を定義（検証 → 展開）
-- **完了条件**: XInclude 1.0 テストスイート（W3C）を通す。fixup の ON/OFF 双方でテスト
+**3.5a. XInclude コア**（`xylograph-xinclude`）✅ 完了
+- `xi:include` の `parse="xml"`（全体・文書要素を取り込み）/ `parse="text"`（`encoding` で復号）
+- **href を基底 URI に対して解決**（3c の `base_uri` の上に載る）。取り込みは `import_node`（DOM に追加したクロス文書ディープコピー）で
+- **`xi:fallback`**: 取得失敗（リソースエラー）時に使用。fallback 内の `xi:include` も展開。fallback 無しの失敗・取り込みループ・誤配置 fallback は致命（`ErrorKind::XInclude` を追加）
+- **再帰処理**（取り込んだ文書内の `xi:include` も展開）、ループ検出、深さ・取得数の上限（`with_max_depth` / `with_max_includes`）
+- **base URI fixup**（`with_base_fixup`、既定 ON/OFF 双方をテスト）: 取り込んだ要素に `xml:base` を付与して基底を保存
+- **取得は `Loader` トレイト経由**（既定で何も取得しない = fetch 攻撃面を持たない）。crate = feature `xinclude`（ファサードで opt-in）
+- **成果物**: `xylograph-xinclude` クレート（統合テスト 9 + doctest 1）、DOM に `import_node` と `build::parse_with_system_id`、パーサ doctype 外部 ID 公開
+- **完了条件**: 取り込み・再帰・text・fallback・ループ・上限・base fixup(ON/OFF) が通る
+
+**3.5b. XPointer**（部分選択）
+- XPointer フレームワーク、短縮ポインタ（ID）、`element()` scheme、`xmlns()` scheme
+- `xi:include` の `xpointer` 属性で部分リソースを選択（現状は未対応で fallback）
+
+**3.5c. fixup 完全化・検証順序・適合**
+- language fixup（`xml:lang`）、base URI fixup の規則精緻化
+- 妥当性検証との順序（検証 → 展開）を定義
+- **完了条件**: XInclude 1.0 テストスイート（W3C）を通す
 
 ### Phase 4 — XPath 1.0
 

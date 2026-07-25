@@ -47,6 +47,18 @@ pub fn parse<R: Read>(source: R) -> Result<Document> {
   parse_reader(Reader::new(source))
 }
 
+/// Builds a [`Document`] from XML read from `source`, with its system identifier known.
+///
+/// The identifier is the document's base URI, so relative `xml:base` values in it resolve
+/// correctly — what a post-processor such as XInclude needs when it parses an included resource.
+///
+/// # Errors
+///
+/// As [`parse`].
+pub fn parse_with_system_id<R: Read>(source: R, system_id: &str) -> Result<Document> {
+  parse_reader(Reader::with_system_id(source, system_id))
+}
+
 /// Builds a [`Document`] from a prepared [`Reader`], so a resolver or configuration can be set
 /// first.
 ///
