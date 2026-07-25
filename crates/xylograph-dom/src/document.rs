@@ -6,10 +6,11 @@
 //! [`NodeRef`](crate::NodeRef) for chained reads.
 
 use xylograph_core::chars;
-use xylograph_core::name::{NameId, NamePool, QName};
+use xylograph_core::name::{NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 
+use crate::collection::{NamedNodeMap, NodeList, Query};
 use crate::exception::{DomException, ExceptionCode, Result};
-use crate::node::{Attribute, ElementData, NodeData, NodeId, NodeSlot, NodeType};
+use crate::node::{AttrData, ElementData, NodeData, NodeId, NodeSlot, NodeType};
 use crate::noderef::NodeRef;
 
 /// An XML document: an arena of nodes with a tree over them.
@@ -77,8 +78,11 @@ impl Document {
   ///
   /// # Errors
   ///
-  /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name.
+  /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name;
+  /// [`ExceptionCode::Namespace`] if the prefix and the namespace are inconsistent (a prefix
+  /// with no namespace, or the `xml` prefix bound to anything but the XML namespace).
   pub fn create_element_ns(&mut self, namespace: Option<&str>, qualified_name: &str) -> Result<NodeId> {
+    check_qname_namespace(namespace, qualified_name, false)?;
     let namespace = namespace.map(|ns| self.pool.intern(ns));
     let name = self.parse_qname(qualified_name, namespace)?;
     Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new() })))
@@ -238,6 +242,7 @@ impl Document {
   pub fn node_name(&self, id: NodeId) -> String {
     match &self.slot(id).data {
       NodeData::Element(element) => element.name.to_lexical(&self.pool),
+      NodeData::Attribute(attr) => attr.name.to_lexical(&self.pool),
       NodeData::ProcessingInstruction { target, .. } => self.pool.resolve(*target).to_owned(),
       NodeData::DocumentType { name, .. } => self.pool.resolve(*name).to_owned(),
       NodeData::Text(_) => "#text".to_owned(),
@@ -248,42 +253,43 @@ impl Document {
     }
   }
 
-  /// The DOM `nodeValue`: the character data of a text, CDATA, comment or PI node; `None` for
-  /// the kinds that have no value of their own.
+  /// The DOM `nodeValue`: the value of an attribute, or the character data of a text, CDATA,
+  /// comment or PI node; `None` for the kinds that have no value of their own.
   #[must_use]
   pub fn node_value(&self, id: NodeId) -> Option<&str> {
     match &self.slot(id).data {
+      NodeData::Attribute(attr) => Some(&attr.value),
       NodeData::Text(data) | NodeData::CdataSection(data) | NodeData::Comment(data) => Some(data),
       NodeData::ProcessingInstruction { data, .. } => Some(data),
       _ => None,
     }
   }
 
-  /// The local part of an element's name.
+  /// The name of an element or attribute node, if this is one.
+  fn name_of(&self, id: NodeId) -> Option<&QName> {
+    match &self.slot(id).data {
+      NodeData::Element(element) => Some(&element.name),
+      NodeData::Attribute(attr) => Some(&attr.name),
+      _ => None,
+    }
+  }
+
+  /// The local part of an element's or attribute's name.
   #[must_use]
   pub fn local_name(&self, id: NodeId) -> Option<&str> {
-    match &self.slot(id).data {
-      NodeData::Element(element) => Some(self.pool.resolve(element.name.local())),
-      _ => None,
-    }
+    self.name_of(id).map(|name| self.pool.resolve(name.local()))
   }
 
-  /// The namespace prefix of an element's name, if it has one.
+  /// The namespace prefix of an element's or attribute's name, if it has one.
   #[must_use]
   pub fn prefix(&self, id: NodeId) -> Option<&str> {
-    match &self.slot(id).data {
-      NodeData::Element(element) => element.name.prefix.map(|p| self.pool.resolve(p)),
-      _ => None,
-    }
+    self.name_of(id).and_then(|name| name.prefix).map(|p| self.pool.resolve(p))
   }
 
-  /// The namespace name of an element, if it is in one.
+  /// The namespace name of an element or attribute, if it is in one.
   #[must_use]
   pub fn namespace_uri(&self, id: NodeId) -> Option<&str> {
-    match &self.slot(id).data {
-      NodeData::Element(element) => element.name.namespace().map(|ns| self.pool.resolve(ns)),
-      _ => None,
-    }
+    self.name_of(id).and_then(|name| name.namespace()).map(|ns| self.pool.resolve(ns))
   }
 
   /// The public identifier of a document type node, if it has one.
@@ -328,6 +334,29 @@ impl Document {
 
   // --- Attributes ---------------------------------------------------------------------------
 
+  /// Creates a detached attribute node with a qualified name and no namespace.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name.
+  pub fn create_attribute(&mut self, qualified_name: &str) -> Result<NodeId> {
+    let name = self.parse_qname(qualified_name, None)?;
+    Ok(self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false })))
+  }
+
+  /// Creates a detached attribute node in a namespace.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name;
+  /// [`ExceptionCode::Namespace`] if the prefix and namespace are inconsistent.
+  pub fn create_attribute_ns(&mut self, namespace: Option<&str>, qualified_name: &str) -> Result<NodeId> {
+    check_qname_namespace(namespace, qualified_name, true)?;
+    let namespace = namespace.map(|ns| self.pool.intern(ns));
+    let name = self.parse_qname(qualified_name, namespace)?;
+    Ok(self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false })))
+  }
+
   /// Sets an attribute by qualified name, adding it or replacing its value.
   ///
   /// # Errors
@@ -335,8 +364,10 @@ impl Document {
   /// [`ExceptionCode::NotSupported`] if the node is not an element, or
   /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name.
   pub fn set_attribute(&mut self, element: NodeId, qualified_name: &str, value: &str) -> Result<()> {
+    self.require_element(element)?;
     let name = self.parse_qname(qualified_name, None)?;
-    self.put_attribute(element, name, value)
+    self.put_attribute(element, name, value);
+    Ok(())
   }
 
   /// Sets an attribute in a namespace, adding it or replacing the value of the one with the same
@@ -344,7 +375,8 @@ impl Document {
   ///
   /// # Errors
   ///
-  /// As [`set_attribute`](Self::set_attribute).
+  /// As [`set_attribute`](Self::set_attribute), plus [`ExceptionCode::Namespace`] if the prefix
+  /// and namespace are inconsistent.
   pub fn set_attribute_ns(
     &mut self,
     element: NodeId,
@@ -352,61 +384,86 @@ impl Document {
     qualified_name: &str,
     value: &str,
   ) -> Result<()> {
+    self.require_element(element)?;
+    check_qname_namespace(namespace, qualified_name, true)?;
     let namespace = namespace.map(|ns| self.pool.intern(ns));
     let name = self.parse_qname(qualified_name, namespace)?;
-    self.put_attribute(element, name, value)
-  }
-
-  fn put_attribute(&mut self, element: NodeId, name: QName, value: &str) -> Result<()> {
-    let attributes = self.element_attributes_mut(element)?;
-    if let Some(existing) = attributes.iter_mut().find(|a| a.name.expanded == name.expanded) {
-      existing.value = value.to_owned();
-    } else {
-      attributes.push(Attribute { name, value: value.to_owned() });
-    }
+    self.put_attribute(element, name, value);
     Ok(())
   }
 
-  /// The value of an element's attribute, by qualified name.
+  /// Adds or updates the attribute of `element` with `name`, giving it `value`.
+  fn put_attribute(&mut self, element: NodeId, name: QName, value: &str) {
+    if let Some(attr) = self.find_attribute(element, |a| a.name.expanded == name.expanded) {
+      self.attr_data_mut(attr).value = value.to_owned();
+      return;
+    }
+    let attr =
+      self.push(NodeData::Attribute(AttrData { name, value: value.to_owned(), owner: Some(element), is_id: false }));
+    self.element_data_mut(element).attributes.push(attr);
+  }
+
+  /// The attribute node of `element` whose data satisfies `predicate`, if any.
+  fn find_attribute(&self, element: NodeId, predicate: impl Fn(&AttrData) -> bool) -> Option<NodeId> {
+    let data = self.element_data(element)?;
+    data.attributes.iter().copied().find(|&attr| match &self.slot(attr).data {
+      NodeData::Attribute(attr) => predicate(attr),
+      _ => false,
+    })
+  }
+
+  /// The attribute node of an element by qualified name, if it has one.
   #[must_use]
-  pub fn attribute(&self, element: NodeId, qualified_name: &str) -> Option<&str> {
+  pub fn get_attribute_node(&self, element: NodeId, qualified_name: &str) -> Option<NodeId> {
     let (prefix, local) = chars::split_qname(qualified_name)?;
     let prefix = match prefix {
       Some(p) => Some(self.pool.get(p)?),
       None => None,
     };
     let local = self.pool.get(local)?;
-    let attributes = self.element_data(element)?;
-    attributes.attributes.iter().find(|a| a.name.prefix == prefix && a.name.local() == local).map(|a| a.value.as_str())
+    self.find_attribute(element, |a| a.name.prefix == prefix && a.name.local() == local)
   }
 
-  /// The value of an element's attribute, by namespace name and local name.
+  /// The attribute node of an element by namespace and local name, if it has one.
   #[must_use]
-  pub fn attribute_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<&str> {
+  pub fn get_attribute_node_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<NodeId> {
     let namespace = match namespace {
       Some(ns) => Some(self.pool.get(ns)?),
       None => None,
     };
     let local = self.pool.get(local)?;
-    let attributes = self.element_data(element)?;
-    attributes
-      .attributes
-      .iter()
-      .find(|a| a.name.namespace() == namespace && a.name.local() == local)
-      .map(|a| a.value.as_str())
+    self.find_attribute(element, |a| a.name.namespace() == namespace && a.name.local() == local)
+  }
+
+  /// The value of an element's attribute, by qualified name.
+  #[must_use]
+  pub fn attribute(&self, element: NodeId, qualified_name: &str) -> Option<&str> {
+    self.get_attribute_node(element, qualified_name).and_then(|attr| self.node_value(attr))
+  }
+
+  /// The value of an element's attribute, by namespace name and local name.
+  #[must_use]
+  pub fn attribute_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<&str> {
+    self.get_attribute_node_ns(element, namespace, local).and_then(|attr| self.node_value(attr))
   }
 
   /// Whether an element has an attribute with the given qualified name.
   #[must_use]
   pub fn has_attribute(&self, element: NodeId, qualified_name: &str) -> bool {
-    self.attribute(element, qualified_name).is_some()
+    self.get_attribute_node(element, qualified_name).is_some()
+  }
+
+  /// The attributes of an element, as a live [`NamedNodeMap`] of attribute nodes.
+  #[must_use]
+  pub fn attributes(&self, element: NodeId) -> NamedNodeMap<'_> {
+    NamedNodeMap::new(self, element)
   }
 
   /// The qualified names of an element's attributes, in document order.
   #[must_use]
   pub fn attribute_names(&self, element: NodeId) -> Vec<String> {
     match self.element_data(element) {
-      Some(data) => data.attributes.iter().map(|a| a.name.to_lexical(&self.pool)).collect(),
+      Some(data) => data.attributes.iter().map(|&attr| self.node_name(attr)).collect(),
       None => Vec::new(),
     }
   }
@@ -417,12 +474,83 @@ impl Document {
   ///
   /// [`ExceptionCode::NotSupported`] if the node is not an element.
   pub fn remove_attribute(&mut self, element: NodeId, qualified_name: &str) -> Result<()> {
-    let Some((prefix, local)) = chars::split_qname(qualified_name) else { return Ok(()) };
-    let prefix = prefix.and_then(|p| self.pool.get(p));
-    let Some(local) = self.pool.get(local) else { return Ok(()) };
-    let attributes = self.element_attributes_mut(element)?;
-    attributes.retain(|a| !(a.name.prefix == prefix && a.name.local() == local));
+    self.require_element(element)?;
+    if let Some(attr) = self.get_attribute_node(element, qualified_name) {
+      self.remove_attribute_node(element, attr)?;
+    }
     Ok(())
+  }
+
+  /// Attaches an attribute node to an element, replacing any it already has with the same name.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NotSupported`] if `element` is not an element or `attr` is not an
+  /// attribute; [`ExceptionCode::InuseAttribute`] if `attr` already belongs to another element.
+  pub fn set_attribute_node(&mut self, element: NodeId, attr: NodeId) -> Result<()> {
+    self.require_element(element)?;
+    let name = match &self.slot(attr).data {
+      NodeData::Attribute(data) => data.name,
+      _ => return Err(DomException::new(ExceptionCode::NotSupported, "not an attribute node")),
+    };
+    match self.attr_data(attr).owner {
+      Some(owner) if owner != element => {
+        return Err(DomException::new(ExceptionCode::InuseAttribute, "the attribute already belongs to an element"));
+      }
+      _ => {}
+    }
+    if let Some(existing) = self.find_attribute(element, |a| a.name.expanded == name.expanded) {
+      self.remove_attribute_node(element, existing)?;
+    }
+    self.attr_data_mut(attr).owner = Some(element);
+    self.element_data_mut(element).attributes.push(attr);
+    Ok(())
+  }
+
+  /// Detaches an attribute node from its element.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NotFound`] if `attr` is not an attribute of `element`.
+  pub fn remove_attribute_node(&mut self, element: NodeId, attr: NodeId) -> Result<NodeId> {
+    let attributes = &mut self.element_data_mut(element).attributes;
+    let Some(position) = attributes.iter().position(|&a| a == attr) else {
+      return Err(DomException::new(ExceptionCode::NotFound, "the attribute does not belong to the element"));
+    };
+    attributes.remove(position);
+    self.attr_data_mut(attr).owner = None;
+    Ok(attr)
+  }
+
+  /// Marks (or unmarks) an element's attribute as being of type `ID`, so
+  /// [`get_element_by_id`](Self::get_element_by_id) will find the element through it.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NotFound`] if `element` has no such attribute.
+  pub fn set_id_attribute(&mut self, element: NodeId, qualified_name: &str, is_id: bool) -> Result<()> {
+    let Some(attr) = self.get_attribute_node(element, qualified_name) else {
+      return Err(DomException::new(ExceptionCode::NotFound, "the element has no such attribute"));
+    };
+    self.attr_data_mut(attr).is_id = is_id;
+    Ok(())
+  }
+
+  /// The element carrying an `ID`-typed attribute equal to `id`, in document order, if any.
+  ///
+  /// An attribute counts only if it was marked with [`set_id_attribute`](Self::set_id_attribute)
+  /// (the document builder does this for DTD- and `xml:id`-typed attributes).
+  #[must_use]
+  pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
+    self.descendants(self.root()).find(|&node| {
+      matches!(self.node_type(node), NodeType::Element)
+        && self.element_data(node).is_some_and(|data| {
+          data.attributes.iter().any(|&attr| match &self.slot(attr).data {
+            NodeData::Attribute(attr) => attr.is_id && attr.value == id,
+            _ => false,
+          })
+        })
+    })
   }
 
   fn element_data(&self, id: NodeId) -> Option<&ElementData> {
@@ -432,11 +560,68 @@ impl Document {
     }
   }
 
-  fn element_attributes_mut(&mut self, id: NodeId) -> Result<&mut Vec<Attribute>> {
+  fn element_data_mut(&mut self, id: NodeId) -> &mut ElementData {
     match &mut self.nodes[id.index()].data {
-      NodeData::Element(data) => Ok(&mut data.attributes),
-      _ => Err(DomException::new(ExceptionCode::NotSupported, "attributes belong to elements only")),
+      NodeData::Element(data) => data,
+      _ => unreachable!("caller checked the node is an element"),
     }
+  }
+
+  fn attr_data(&self, id: NodeId) -> &AttrData {
+    match &self.slot(id).data {
+      NodeData::Attribute(data) => data,
+      _ => unreachable!("caller checked the node is an attribute"),
+    }
+  }
+
+  fn attr_data_mut(&mut self, id: NodeId) -> &mut AttrData {
+    match &mut self.nodes[id.index()].data {
+      NodeData::Attribute(data) => data,
+      _ => unreachable!("caller checked the node is an attribute"),
+    }
+  }
+
+  fn require_element(&self, id: NodeId) -> Result<()> {
+    if matches!(self.slot(id).data, NodeData::Element(_)) {
+      Ok(())
+    } else {
+      Err(DomException::new(ExceptionCode::NotSupported, "attributes belong to elements only"))
+    }
+  }
+
+  // --- Collections --------------------------------------------------------------------------
+
+  /// The children of a node as a live [`NodeList`].
+  #[must_use]
+  pub fn child_nodes(&self, id: NodeId) -> NodeList<'_> {
+    NodeList::new(self, Query::Children(id))
+  }
+
+  /// The descendant elements with a given qualified name, in document order, as a live
+  /// [`NodeList`]. The name `"*"` matches every element.
+  #[must_use]
+  pub fn get_elements_by_tag_name(&self, name: &str) -> NodeList<'_> {
+    NodeList::new(self, Query::by_tag_name(self.root(), name))
+  }
+
+  /// The descendant elements with a given namespace and local name, in document order, as a
+  /// live [`NodeList`]. Either argument may be `"*"` to match any.
+  #[must_use]
+  pub fn get_elements_by_tag_name_ns(&self, namespace: Option<&str>, local: &str) -> NodeList<'_> {
+    NodeList::new(self, Query::by_tag_name_ns(self.root(), namespace, local))
+  }
+
+  /// The descendants of a node in document order (preorder), excluding attribute nodes.
+  pub(crate) fn descendants(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+    let mut stack: Vec<NodeId> = self.children(id).collect();
+    stack.reverse();
+    std::iter::from_fn(move || {
+      let node = stack.pop()?;
+      let mut children: Vec<NodeId> = self.children(node).collect();
+      children.reverse();
+      stack.extend(children);
+      Some(node)
+    })
   }
 
   // --- Mutation -----------------------------------------------------------------------------
@@ -454,14 +639,58 @@ impl Document {
   /// Inserts `child` under `parent` before `reference`, or at the end when `reference` is
   /// `None`. Detaches `child` from any current parent first.
   ///
+  /// A [document fragment](Self::create_document_fragment) is not itself inserted: its children
+  /// are moved in, in order, and the fragment is left empty — the DOM's behaviour.
+  ///
   /// # Errors
   ///
-  /// [`ExceptionCode::HierarchyRequest`] if `parent` cannot hold children, or the insertion
-  /// would make a cycle; [`ExceptionCode::NotFound`] if `reference` is not a child of `parent`.
+  /// [`ExceptionCode::HierarchyRequest`] if `parent` cannot hold children, if `child` cannot be
+  /// a child, if the insertion would make a cycle, or if it would break the document's own rules
+  /// (one root element, one doctype, no text directly under the document);
+  /// [`ExceptionCode::NotFound`] if `reference` is not a child of `parent`.
   pub fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) -> Result<NodeId> {
+    self.check_insertion(parent, child, reference)?;
+
+    // A fragment inserts its children in its place, not itself.
+    if matches!(self.slot(child).data, NodeData::DocumentFragment) {
+      for grandchild in self.children(child).collect::<Vec<_>>() {
+        self.detach(grandchild);
+        self.place(parent, grandchild, reference);
+      }
+      return Ok(child);
+    }
+
+    self.detach(child);
+    self.place(parent, child, reference);
+    Ok(child)
+  }
+
+  /// Replaces `old_child` with `new_child` under `parent`, returning the node removed.
+  ///
+  /// # Errors
+  ///
+  /// As [`insert_before`](Self::insert_before); [`ExceptionCode::NotFound`] if `old_child` is
+  /// not a child of `parent`.
+  pub fn replace_child(&mut self, parent: NodeId, new_child: NodeId, old_child: NodeId) -> Result<NodeId> {
+    if self.slot(old_child).parent != Some(parent) {
+      return Err(DomException::new(ExceptionCode::NotFound, "the node to replace is not a child of the parent"));
+    }
+    // Insert the new child before the old one, then take the old one out. Insertion is validated
+    // first (so a bad new child leaves the tree untouched); the reference is the old child.
+    self.insert_before(parent, new_child, Some(old_child))?;
+    self.detach(old_child);
+    Ok(old_child)
+  }
+
+  /// The shared validity checks for inserting `child` under `parent` before `reference`.
+  fn check_insertion(&self, parent: NodeId, child: NodeId, reference: Option<NodeId>) -> Result<()> {
     if !self.slot(parent).data.is_container() {
       let name = self.node_name(parent);
       return Err(DomException::new(ExceptionCode::HierarchyRequest, format!("\"{name}\" cannot have children")));
+    }
+    if !self.slot(child).data.can_be_child() {
+      let name = self.node_name(child);
+      return Err(DomException::new(ExceptionCode::HierarchyRequest, format!("\"{name}\" cannot be a child")));
     }
     if child == parent || self.is_ancestor(child, parent) {
       return Err(DomException::new(ExceptionCode::HierarchyRequest, "a node cannot be made a descendant of itself"));
@@ -471,13 +700,48 @@ impl Document {
         return Err(DomException::new(ExceptionCode::NotFound, "the reference node is not a child of the parent"));
       }
     }
+    if matches!(self.slot(child).data, NodeData::DocumentFragment) {
+      self.check_fragment_into_document(parent, child)?;
+    } else {
+      self.check_child_of_document(parent, child)?;
+    }
+    Ok(())
+  }
 
-    self.detach(child);
+  /// Enforces the document node's own child rules for a single node: at most one element and one
+  /// doctype, and no character data directly under it. A no-op when `parent` is not the document.
+  fn check_child_of_document(&self, parent: NodeId, child: NodeId) -> Result<()> {
+    if !matches!(self.slot(parent).data, NodeData::Document) {
+      return Ok(());
+    }
+    let has_element = self.document_element().is_some_and(|e| e != child);
+    let has_doctype = self.doctype().is_some_and(|d| d != child);
+    document_child_error(self.slot(child).data.node_type(), has_element, has_doctype)
+  }
+
+  /// Enforces the document's child rules for every node a fragment would bring in at once, so a
+  /// fragment with two elements is refused before any of it is inserted.
+  fn check_fragment_into_document(&self, parent: NodeId, fragment: NodeId) -> Result<()> {
+    if !matches!(self.slot(parent).data, NodeData::Document) {
+      return Ok(());
+    }
+    let mut has_element = self.document_element().is_some();
+    let mut has_doctype = self.doctype().is_some();
+    for grandchild in self.children(fragment) {
+      let node_type = self.slot(grandchild).data.node_type();
+      document_child_error(node_type, has_element, has_doctype)?;
+      has_element |= node_type == NodeType::Element;
+      has_doctype |= node_type == NodeType::DocumentType;
+    }
+    Ok(())
+  }
+
+  /// Links an already-detached node under `parent`, at `reference` or at the end.
+  fn place(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
     match reference {
       Some(reference) => self.link_before(parent, child, reference),
       None => self.link_last(parent, child),
     }
-    Ok(child)
   }
 
   /// Removes `child` from `parent`, leaving it detached.
@@ -559,9 +823,54 @@ impl Document {
     }
   }
 
-  fn slot(&self, id: NodeId) -> &NodeSlot {
+  pub(crate) fn slot(&self, id: NodeId) -> &NodeSlot {
     &self.nodes[id.index()]
   }
+}
+
+/// The error, if any, of putting a node of this type directly under the document, given whether
+/// the document already has an element and a doctype.
+fn document_child_error(node_type: NodeType, has_element: bool, has_doctype: bool) -> Result<()> {
+  let offending = match node_type {
+    NodeType::Text | NodeType::CdataSection => Some("character data"),
+    NodeType::Element if has_element => Some("a second root element"),
+    NodeType::DocumentType if has_doctype => Some("a second document type"),
+    _ => None,
+  };
+  match offending {
+    Some(what) => Err(DomException::new(ExceptionCode::HierarchyRequest, format!("a document may not contain {what}"))),
+    None => Ok(()),
+  }
+}
+
+/// Checks a qualified name against a namespace for the `*NS` constructors (Namespaces in XML,
+/// as the DOM applies it). `is_attribute` turns on the extra `xmlns` rules that apply to
+/// attribute names.
+fn check_qname_namespace(namespace: Option<&str>, qualified_name: &str, is_attribute: bool) -> Result<()> {
+  let Some((prefix, _)) = chars::split_qname(qualified_name) else {
+    return Err(DomException::new(
+      ExceptionCode::InvalidCharacter,
+      format!("{qualified_name:?} is not a valid qualified name"),
+    ));
+  };
+  let namespace_error = |message: &str| Err(DomException::new(ExceptionCode::Namespace, message.to_owned()));
+
+  if prefix.is_some() && namespace.is_none() {
+    return namespace_error("a prefixed name must have a namespace");
+  }
+  if prefix == Some("xml") && namespace != Some(XML_NS_URI) {
+    return namespace_error("the prefix \"xml\" may only name the XML namespace");
+  }
+  if is_attribute {
+    let is_xmlns = qualified_name == "xmlns" || prefix == Some("xmlns");
+    if is_xmlns && namespace != Some(XMLNS_NS_URI) {
+      return namespace_error("\"xmlns\" may only name the XMLNS namespace");
+    }
+    if namespace == Some(XMLNS_NS_URI) && !is_xmlns {
+      return namespace_error("the XMLNS namespace is only for \"xmlns\" attributes");
+    }
+  }
+  Ok(())
 }
 
 #[cfg(test)]
@@ -696,5 +1005,146 @@ mod tests {
   fn an_invalid_name_is_rejected() {
     let mut doc = Document::new();
     assert_eq!(doc.create_element("1bad").unwrap_err().code(), ExceptionCode::InvalidCharacter);
+  }
+
+  #[test]
+  fn attributes_are_nodes() {
+    let (doc, r, _, _) = sample();
+    let attr = doc.get_attribute_node(r, "a").unwrap();
+    assert_eq!(doc.node_type(attr), NodeType::Attribute);
+    assert_eq!(doc.node_name(attr), "a");
+    assert_eq!(doc.node_value(attr), Some("1"));
+    let map = doc.attributes(r);
+    assert_eq!(map.length(), 1);
+    assert_eq!(map.item(0), Some(attr));
+    assert_eq!(map.get_named_item("a"), Some(attr));
+  }
+
+  #[test]
+  fn set_and_remove_attribute_node() {
+    let mut doc = Document::new();
+    let e = doc.create_element("e").unwrap();
+    let attr = doc.create_attribute("k").unwrap();
+    doc.set_attribute_node(e, attr).unwrap();
+    assert_eq!(doc.node_type(attr), NodeType::Attribute);
+    assert_eq!(doc.attributes(e).length(), 1);
+    doc.remove_attribute_node(e, attr).unwrap();
+    assert!(doc.attributes(e).is_empty());
+  }
+
+  #[test]
+  fn an_attribute_cannot_belong_to_two_elements() {
+    let mut doc = Document::new();
+    let (a, b) = (doc.create_element("a").unwrap(), doc.create_element("b").unwrap());
+    let attr = doc.create_attribute("k").unwrap();
+    doc.set_attribute_node(a, attr).unwrap();
+    assert_eq!(doc.set_attribute_node(b, attr).unwrap_err().code(), ExceptionCode::InuseAttribute);
+  }
+
+  #[test]
+  fn an_attribute_is_not_a_child() {
+    let mut doc = Document::new();
+    let e = doc.create_element("e").unwrap();
+    let attr = doc.create_attribute("k").unwrap();
+    assert_eq!(doc.append_child(e, attr).unwrap_err().code(), ExceptionCode::HierarchyRequest);
+  }
+
+  #[test]
+  fn get_elements_by_tag_name_walks_in_document_order() {
+    let (doc, _, _, _) = sample();
+    let names: Vec<_> = doc.get_elements_by_tag_name("*").iter().map(|n| doc.node_name(n)).collect();
+    assert_eq!(names, ["r", "b", "c"]);
+    assert_eq!(doc.get_elements_by_tag_name("b").length(), 1);
+  }
+
+  #[test]
+  fn get_elements_by_tag_name_ns_filters_on_namespace() {
+    let mut doc = Document::new();
+    let root = doc.create_element_ns(Some("urn:x"), "p:a").unwrap();
+    let child = doc.create_element_ns(Some("urn:y"), "q:a").unwrap();
+    doc.append_child(root, child).unwrap();
+    doc.append_child(doc.root(), root).unwrap();
+    assert_eq!(doc.get_elements_by_tag_name_ns(Some("urn:x"), "a").length(), 1);
+    assert_eq!(doc.get_elements_by_tag_name_ns(Some("*"), "a").length(), 2);
+    assert_eq!(doc.get_elements_by_tag_name_ns(Some("urn:y"), "*").length(), 1);
+  }
+
+  #[test]
+  fn get_element_by_id_finds_marked_ids() {
+    let mut doc = Document::new();
+    let root = doc.create_element("root").unwrap();
+    doc.set_attribute(root, "id", "top").unwrap();
+    doc.append_child(doc.root(), root).unwrap();
+    // Not an ID until marked as one.
+    assert_eq!(doc.get_element_by_id("top"), None);
+    doc.set_id_attribute(root, "id", true).unwrap();
+    assert_eq!(doc.get_element_by_id("top"), Some(root));
+  }
+
+  #[test]
+  fn replace_child_swaps_a_node() {
+    let (mut doc, r, b, c) = sample();
+    let x = doc.create_element("x").unwrap();
+    let removed = doc.replace_child(r, x, b).unwrap();
+    assert_eq!(removed, b);
+    assert_eq!(doc.parent(b), None);
+    assert_eq!(doc.first_child(r), Some(x));
+    assert_eq!(doc.last_child(r), Some(c));
+  }
+
+  #[test]
+  fn a_document_fragment_inserts_its_children() {
+    let mut doc = Document::new();
+    let root = doc.create_element("root").unwrap();
+    doc.append_child(doc.root(), root).unwrap();
+    let fragment = doc.create_document_fragment();
+    let (a, b) = (doc.create_element("a").unwrap(), doc.create_element("b").unwrap());
+    doc.append_child(fragment, a).unwrap();
+    doc.append_child(fragment, b).unwrap();
+    doc.append_child(root, fragment).unwrap();
+    // The fragment's children moved in; the fragment is left empty.
+    let names: Vec<_> = doc.children(root).map(|n| doc.node_name(n)).collect();
+    assert_eq!(names, ["a", "b"]);
+    assert_eq!(doc.first_child(fragment), None);
+  }
+
+  #[test]
+  fn a_document_takes_only_one_root_element() {
+    let mut doc = Document::new();
+    let first = doc.create_element("a").unwrap();
+    let second = doc.create_element("b").unwrap();
+    doc.append_child(doc.root(), first).unwrap();
+    assert_eq!(doc.append_child(doc.root(), second).unwrap_err().code(), ExceptionCode::HierarchyRequest);
+  }
+
+  #[test]
+  fn a_document_refuses_bare_text() {
+    let mut doc = Document::new();
+    let text = doc.create_text_node("x");
+    assert_eq!(doc.append_child(doc.root(), text).unwrap_err().code(), ExceptionCode::HierarchyRequest);
+  }
+
+  #[test]
+  fn a_fragment_of_two_elements_is_refused_by_the_document_whole() {
+    let mut doc = Document::new();
+    let fragment = doc.create_document_fragment();
+    let (a, b) = (doc.create_element("a").unwrap(), doc.create_element("b").unwrap());
+    doc.append_child(fragment, a).unwrap();
+    doc.append_child(fragment, b).unwrap();
+    // Two root elements at once: refused before anything is inserted.
+    assert_eq!(doc.append_child(doc.root(), fragment).unwrap_err().code(), ExceptionCode::HierarchyRequest);
+    assert!(doc.document_element().is_none(), "the tree is untouched by the failed insert");
+  }
+
+  #[test]
+  fn namespace_rules_are_enforced() {
+    let mut doc = Document::new();
+    // A prefix with no namespace.
+    assert_eq!(doc.create_element_ns(None, "p:a").unwrap_err().code(), ExceptionCode::Namespace);
+    // The xml prefix bound to the wrong namespace.
+    assert_eq!(doc.create_element_ns(Some("urn:x"), "xml:a").unwrap_err().code(), ExceptionCode::Namespace);
+    // An xmlns attribute in the wrong namespace.
+    let e = doc.create_element("e").unwrap();
+    assert_eq!(doc.set_attribute_ns(e, Some("urn:x"), "xmlns:p", "v").unwrap_err().code(), ExceptionCode::Namespace);
   }
 }

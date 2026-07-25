@@ -44,11 +44,13 @@
 //! # Ok::<(), xylograph_dom::DomException>(())
 //! ```
 
+mod collection;
 mod document;
 mod exception;
 mod node;
 mod noderef;
 
+pub use collection::{NamedNodeMap, NodeList};
 pub use document::Document;
 pub use exception::{DomException, ExceptionCode, Result};
 pub use node::{NodeId, NodeType};

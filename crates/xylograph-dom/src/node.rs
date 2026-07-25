@@ -28,6 +28,8 @@ impl NodeId {
 pub enum NodeType {
   /// An element: `<a/>`.
   Element = 1,
+  /// An attribute: `name="value"`.
+  Attribute = 2,
   /// Character data: text.
   Text = 3,
   /// A CDATA section: `<![CDATA[ ... ]]>`.
@@ -52,18 +54,23 @@ impl NodeType {
   }
 }
 
-/// One attribute of an element: its name and its normalized value.
+/// An attribute node's data: its name, value, owning element, and whether it is of type ID.
 #[derive(Clone, Debug)]
-pub(crate) struct Attribute {
+pub(crate) struct AttrData {
   pub(crate) name: QName,
   pub(crate) value: String,
+  /// The element this attribute belongs to, or `None` while it is detached.
+  pub(crate) owner: Option<NodeId>,
+  /// Whether the attribute is of type `ID`, so [`get_element_by_id`](crate::Document::get_element_by_id)
+  /// considers it.
+  pub(crate) is_id: bool,
 }
 
-/// An element's own data: its name and its attributes, in document order.
+/// An element's own data: its name and its attribute nodes, in document order.
 #[derive(Clone, Debug)]
 pub(crate) struct ElementData {
   pub(crate) name: QName,
-  pub(crate) attributes: Vec<Attribute>,
+  pub(crate) attributes: Vec<NodeId>,
 }
 
 /// The kind-specific payload of a node.
@@ -77,6 +84,9 @@ pub(crate) enum NodeData {
   DocumentFragment,
   /// An element.
   Element(ElementData),
+  /// An attribute. It is a node, but not a child: an element reaches it through its attribute
+  /// list, not `first_child`.
+  Attribute(AttrData),
   /// Character data.
   Text(String),
   /// A CDATA section's character data.
@@ -95,6 +105,7 @@ impl NodeData {
       NodeData::DocumentType { .. } => NodeType::DocumentType,
       NodeData::DocumentFragment => NodeType::DocumentFragment,
       NodeData::Element(_) => NodeType::Element,
+      NodeData::Attribute(_) => NodeType::Attribute,
       NodeData::Text(_) => NodeType::Text,
       NodeData::CdataSection(_) => NodeType::CdataSection,
       NodeData::Comment(_) => NodeType::Comment,
@@ -105,6 +116,12 @@ impl NodeData {
   /// Whether this kind of node may contain child nodes.
   pub(crate) const fn is_container(&self) -> bool {
     matches!(self, NodeData::Document | NodeData::DocumentFragment | NodeData::Element(_))
+  }
+
+  /// Whether this kind of node may itself be a child in the tree. Attributes and the document
+  /// are the ones that may not.
+  pub(crate) const fn can_be_child(&self) -> bool {
+    !matches!(self, NodeData::Document | NodeData::Attribute(_))
   }
 }
 

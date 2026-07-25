@@ -24,7 +24,7 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 2c | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, and a sans-I/O core |
 | [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
-| [`xylograph-dom`](crates/xylograph-dom) | Phase 3a | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds, navigation, values, attributes, mutation, and `DOMException` |
+| [`xylograph-dom`](crates/xylograph-dom) | Phase 3b | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, and namespace checks |
 
 Crates for the DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.

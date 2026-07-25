@@ -5,8 +5,8 @@
 //! walk reads as `doc.node(root).first_child()` rather than a chain of `doc.method(id)` calls.
 //! It is a read-only view; mutation goes through [`Document`] with `&mut` access.
 
-use crate::Document;
 use crate::node::{NodeId, NodeType};
+use crate::{Document, NamedNodeMap, NodeList};
 
 /// A read-only view of one node, borrowing its [`Document`].
 ///
@@ -88,6 +88,18 @@ impl<'a> NodeRef<'a> {
   /// The children, first to last.
   pub fn children(self) -> impl Iterator<Item = NodeRef<'a>> {
     self.doc.children(self.id).map(move |id| NodeRef::new(self.doc, id))
+  }
+
+  /// The children as a live [`NodeList`].
+  #[must_use]
+  pub fn child_nodes(self) -> NodeList<'a> {
+    self.doc.child_nodes(self.id)
+  }
+
+  /// The attributes as a live [`NamedNodeMap`].
+  #[must_use]
+  pub fn attributes(self) -> NamedNodeMap<'a> {
+    self.doc.attributes(self.id)
   }
 
   /// The DOM `nodeName`.

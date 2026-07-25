@@ -472,10 +472,14 @@ xylograph/
 - **成果物**: `xylograph-dom` クレート（テスト 12 + doctest 3）。ファサードから `xylograph::dom`
 - **完了条件**: 木の構築・走査・値取得・基本的な変更が通る（本サブフェーズのユニット/doctest）
 
-**3b. 変更 API・live コレクション・名前空間**（`DOMException` を全面適用）
-- 変更 API の完全化（replaceChild、DocumentFragment の展開挿入、Document 直下の子制約）と残りの `DOMException`（WrongDocument 等）
-- live NodeList / NamedNodeMap、Attr をノードとして扱うモデル、`getElementsByTagName(NS)` / `getElementById`
-- `createElementNS` の名前空間検査（NAMESPACE_ERR）、名前空間正規化
+**3b. 変更 API・live コレクション・名前空間**（`DOMException` を全面適用）✅ 完了
+- 変更 API の完全化: `replace_child`、DocumentFragment の展開挿入（フラグメントの子を順に移し、フラグメントは空になる）、Document 直下の子制約（ルート要素 1 つ・doctype 1 つ・直下のテキスト不可、フラグメント挿入は全体を事前検査）
+- **Attr をアリーナノードとして扱う**（`NodeType::Attribute`、owner・is_id を保持）: `create_attribute(_ns)` / `get_attribute_node(_ns)` / `set_attribute_node` / `remove_attribute_node`。既存の属性 API も属性ノード経由に
+- **live コレクション**: `NodeList`（`child_nodes` / `get_elements_by_tag_name(_ns)`、`*` ワイルドカード対応）と `NamedNodeMap`（`attributes`）。借用ごとに木を評価して live 性を得る
+- `get_element_by_id`（`set_id_attribute` で印を付けた ID を文書順で探索。3c で DTD / xml:id を印付け）
+- `create_element_ns` / `create_attribute_ns` / `set_attribute_ns` の名前空間検査（NAMESPACE_ERR: 接頭辞のみで名前空間なし・`xml` / `xmlns` の不整合）
+- **成果物**: `xylograph-dom` に変更 API・コレクション・名前空間検査を追加（テスト 25 + doctest 4）
+- **完了条件**: 変更・コレクション・名前空間・ID の各操作が本サブフェーズのテストで通る
 
 **3c. DocumentBuilder（パース → DOM）**
 - パーサのイベント列から DOM を構築。DTD・xml:base / xml:id 情報の取り込み
