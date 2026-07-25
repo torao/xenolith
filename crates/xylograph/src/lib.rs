@@ -11,6 +11,7 @@
 //!   one from parsed XML.
 //! - [`serialize`] — writing a DOM subtree back to XML text.
 //! - [`xdm`] — the XPath data model: a node-model trait and its DOM implementation.
+//! - [`xpath`] — XPath 1.0: parsing an expression into a tree.
 //! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
@@ -55,6 +56,9 @@ pub use xylograph_serialize as serialize;
 /// The XPath 1.0 data model: a node-model trait and its DOM implementation.
 pub use xylograph_xdm as xdm;
 
+/// XPath 1.0: the lexer, the parser, and the expression tree.
+pub use xylograph_xpath as xpath;
+
 /// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
 #[cfg(feature = "xinclude")]
 pub use xylograph_xinclude as xinclude;
@@ -94,6 +98,12 @@ mod tests {
     let root = doc.document_element().unwrap();
     assert_eq!(doc.node_name(root), "a");
     assert_eq!(doc.text_content(root), "x");
+  }
+
+  #[test]
+  fn the_facade_parses_an_xpath_expression() {
+    let expr = crate::xpath::parse("//a[1]").unwrap();
+    assert_eq!(expr.to_string(), "/descendant-or-self::node()/child::a[1]");
   }
 
   #[test]

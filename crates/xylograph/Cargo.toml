@@ -38,6 +38,7 @@ xylograph-validate = { workspace = true }
 xylograph-dom = { workspace = true }
 xylograph-serialize = { workspace = true }
 xylograph-xdm = { workspace = true }
+xylograph-xpath = { workspace = true }
 xylograph-xinclude = { workspace = true, optional = true }
 
 [lints]

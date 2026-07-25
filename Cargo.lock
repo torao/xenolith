@@ -125,6 +125,7 @@ dependencies = [
  "xylograph-validate",
  "xylograph-xdm",
  "xylograph-xinclude",
+ "xylograph-xpath",
 ]
 
 [[package]]
@@ -182,4 +183,11 @@ dependencies = [
  "xylograph-core",
  "xylograph-dom",
  "xylograph-serialize",
+]
+
+[[package]]
+name = "xylograph-xpath"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
 ]

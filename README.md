@@ -32,6 +32,8 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4a | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
 
+| [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4b | XPath 1.0: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an expression tree with the abbreviations (`//`, `.`, `..`, `@`) expanded |
+
 Crates for the XPath evaluator, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
 

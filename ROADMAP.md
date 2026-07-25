@@ -550,9 +550,14 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `xylograph-xdm` クレート（統合テスト 8 + doctest 1）
 - **完了条件**: 親子・兄弟・属性・名前空間・文書順・string-value・expanded-name がトレイト越しに辿れる
 
-**4b. 字句・構文解析**（`xylograph-xpath`）
-- トークナイザ（XPath 特有の文脈依存字句規則）、文法 → AST
-- 完了条件: 代表的な式が AST になる
+**4b. 字句・構文解析**（`xylograph-xpath`）✅ 完了
+- **トークナイザ**: XPath 1.0 §3.7 の文脈依存規則を字句段階で解決 — `*` は名前テスト位置なら wildcard・オペランドの後なら乗算、`and`/`or`/`div`/`mod` は演算子位置でのみ演算子、`::` が続けば軸名、`(` が続けば NodeType か関数名。パーサは曖昧さのないトークンだけを見る
+- **文法 → AST**（再帰下降、優先順位テーブル）: OrExpr〜UnaryExpr、UnionExpr、PathExpr／FilterExpr、13 軸、全ノードテスト、述語、関数呼び出し、変数参照
+- **略記を AST 構築時に展開**: `//`→`descendant-or-self::node()`、`.`→`self::node()`、`..`→`parent::node()`、`@x`→`attribute::x`、軸省略→`child::`。評価器（4c）は単一の平坦な形だけを扱えばよい
+- **`Display`** が展開後の形を XPath として書き戻す（二項式は括弧付きで優先順位が見える）→ テストの検証手段
+- エラーは `ErrorKind::XPath`（core に追加）で式中の位置を示す
+- **成果物**: `xylograph-xpath` クレート（ユニット 7 + 統合 13 + doctest 3）。ファサードから `xylograph::xpath`
+- **完了条件**: 略記・軸・ノードテスト・述語・優先順位・関数/変数/リテラルが AST になり、エラーが位置を示す
 
 **4c. 評価器コア**
 - 13 軸、ノードテスト、述語、4 値型（node-set/boolean/number/string）と型変換、評価コンテキスト

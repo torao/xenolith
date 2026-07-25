@@ -149,6 +149,8 @@ pub enum ErrorKind {
   Limit,
   /// An XInclude processing error: an inclusion loop, or a failed inclusion with no fallback.
   XInclude,
+  /// An XPath expression could not be parsed, or failed while being evaluated.
+  XPath,
   /// The requested capability was not compiled in; see the crate's feature flags.
   UnsupportedFeature,
   /// A bug in xylograph. Build these with [`Error::internal`].
@@ -167,6 +169,7 @@ impl fmt::Display for ErrorKind {
       Self::Namespace => "namespace error",
       Self::Limit => "limit exceeded",
       Self::XInclude => "XInclude error",
+      Self::XPath => "XPath error",
       Self::UnsupportedFeature => "unsupported feature",
       Self::Internal => "internal error",
     })
