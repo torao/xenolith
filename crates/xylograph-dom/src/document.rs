@@ -362,11 +362,13 @@ impl Document {
   }
 
   /// Records the document's own base URI (its system identifier). Used by the builder.
+  #[cfg(feature = "parse")]
   pub(crate) fn set_document_base(&mut self, base: Option<&str>) {
     self.base = base.map(|base| self.pool.intern(base));
   }
 
   /// Records the effective base URI of an element. Used by the builder.
+  #[cfg(feature = "parse")]
   pub(crate) fn set_element_base(&mut self, element: NodeId, base: Option<&str>) {
     let base = base.map(|base| self.pool.intern(base));
     if let NodeData::Element(data) = &mut self.nodes[element.index()].data {
@@ -1209,6 +1211,7 @@ mod tests {
     assert_eq!(doc.set_attribute_ns(e, Some("urn:x"), "xmlns:p", "v").unwrap_err().code(), ExceptionCode::Namespace);
   }
 
+  #[cfg(feature = "parse")]
   #[test]
   fn base_uri_walks_to_the_nearest_recorded_base() {
     let mut doc = Document::new();
