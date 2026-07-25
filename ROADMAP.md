@@ -559,10 +559,17 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `xylograph-xpath` クレート（ユニット 7 + 統合 13 + doctest 3）。ファサードから `xylograph::xpath`
 - **完了条件**: 略記・軸・ノードテスト・述語・優先順位・関数/変数/リテラルが AST になり、エラーが位置を示す
 
-**4c. 評価器コア**
-- 13 軸、ノードテスト、述語、4 値型（node-set/boolean/number/string）と型変換、評価コンテキスト
-- 決定 4 に沿って AST を軸走査＋述語へ
-- 完了条件: ロケーションパスと演算子式が評価できる
+**4c. 評価器コア**✅ 完了
+- **4 値型と型変換**（`Value`、§3・§4）: `boolean()` / `number(model)` / `string(model)`。XPath の数値書式（指数なし、`NaN` / `Infinity`、`-0`→`0`）と数値解析（指数・先頭 `+` を認めない）を厳密に実装
+- **評価コンテキスト**: `Context`（コンテキストノード・位置・サイズ）と `Environment`（変数束縛・接頭辞→名前空間）。`Context` は参照のみ保持で `Copy`
+- **13 軸**を軸順（前方軸は文書順、逆方向軸 `ancestor`/`ancestor-or-self`/`preceding`/`preceding-sibling` は逆文書順）で走査。述語の位置は §2.4 のとおり軸順で数えるので、呼び出し側は軸の向きを意識しない
+- **ノードテスト**: 名前テスト（軸の principal node type で絞る）・`node()`/`text()`/`comment()`/`processing-instruction(literal?)`。接頭辞は `Environment` で解決（未束縛はエラー）
+- **述語**: 数値結果は位置テスト（§3.3）、それ以外は boolean 変換。複数述語は順に適用し、位置は直前の述語が残した集合内で数える
+- **演算子**: 算術（IEEE 754、`mod` は切り捨て除算の剰余）、比較（§3.4 の node-set / boolean / number / string の変換規則を網羅）、`or`/`and` の短絡、`|` の合併（文書順・重複排除）
+- 関数は述語に必要な 6 個（`position`/`last`/`count`/`not`/`true`/`false`）のみ。残りは 4d
+- **成果物**: `value` / `context` / `axis` / `eval` / `functions` モジュール、`evaluate` / `evaluate_with`（ユニット +2、統合 14、doctest +2）
+- **完了条件**: ロケーションパス・全軸・ノードテスト・述語・演算子式・変数が評価できる
+- **決定 4 について**: 現状は AST の再帰評価。閉包／バイトコードへのコンパイルは意味論が固まりテストで守られた後の最適化として Phase 8 に回す（正しさを先に確定させるため）
 
 **4d. コア関数ライブラリ（27 関数）**
 - node-set / string / boolean / number の各関数と型セマンティクス

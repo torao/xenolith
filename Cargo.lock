@@ -190,4 +190,6 @@ name = "xylograph-xpath"
 version = "0.0.0"
 dependencies = [
  "xylograph-core",
+ "xylograph-dom",
+ "xylograph-xdm",
 ]

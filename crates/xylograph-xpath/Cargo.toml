@@ -15,6 +15,10 @@ default = []
 
 [dependencies]
 xylograph-core = { workspace = true }
+xylograph-xdm = { workspace = true }
+
+[dev-dependencies]
+xylograph-dom = { workspace = true, features = ["parse"] }
 
 [lints]
 workspace = true
