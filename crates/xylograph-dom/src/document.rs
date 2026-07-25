@@ -35,6 +35,9 @@ use crate::noderef::NodeRef;
 pub struct Document {
   nodes: Vec<NodeSlot>,
   pool: NamePool,
+  /// The document's own base URI (its system identifier), interned; the fallback for a node
+  /// with no nearer base. `None` unless recorded when the tree was built.
+  base: Option<NameId>,
 }
 
 impl Default for Document {
@@ -47,7 +50,7 @@ impl Document {
   /// Creates an empty document — a lone document node, with no children yet.
   #[must_use]
   pub fn new() -> Self {
-    Self { nodes: vec![NodeSlot::new(NodeData::Document)], pool: NamePool::new() }
+    Self { nodes: vec![NodeSlot::new(NodeData::Document)], pool: NamePool::new(), base: None }
   }
 
   /// The document node: the root of the tree, and the node every other one descends from.
@@ -71,7 +74,7 @@ impl Document {
   /// [`ExceptionCode::InvalidCharacter`] if `qualified_name` is not a legal name.
   pub fn create_element(&mut self, qualified_name: &str) -> Result<NodeId> {
     let name = self.parse_qname(qualified_name, None)?;
-    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new() })))
+    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None })))
   }
 
   /// Creates an element in a namespace, from a namespace name and a qualified name.
@@ -85,7 +88,7 @@ impl Document {
     check_qname_namespace(namespace, qualified_name, false)?;
     let namespace = namespace.map(|ns| self.pool.intern(ns));
     let name = self.parse_qname(qualified_name, namespace)?;
-    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new() })))
+    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None })))
   }
 
   /// Creates a text node.
@@ -332,6 +335,45 @@ impl Document {
     }
   }
 
+  /// The DOM `baseURI` of a node (XML Base): the base URI in effect where the node is.
+  ///
+  /// It is the base recorded on the nearest element at or above the node — the document builder
+  /// records each element's, resolved from `xml:base` and the document's system identifier — or,
+  /// failing that, the document's own base URI. `None` for a tree built by hand without base
+  /// information, or a document parsed without a system identifier and without `xml:base`.
+  ///
+  /// The base of an attribute is that of its owning element.
+  #[must_use]
+  pub fn base_uri(&self, id: NodeId) -> Option<String> {
+    let start = match &self.slot(id).data {
+      NodeData::Attribute(attr) => attr.owner,
+      _ => Some(id),
+    };
+    let mut current = start;
+    while let Some(node) = current {
+      if let NodeData::Element(element) = &self.slot(node).data {
+        if let Some(base) = element.base {
+          return Some(self.pool.resolve(base).to_owned());
+        }
+      }
+      current = self.slot(node).parent;
+    }
+    self.base.map(|base| self.pool.resolve(base).to_owned())
+  }
+
+  /// Records the document's own base URI (its system identifier). Used by the builder.
+  pub(crate) fn set_document_base(&mut self, base: Option<&str>) {
+    self.base = base.map(|base| self.pool.intern(base));
+  }
+
+  /// Records the effective base URI of an element. Used by the builder.
+  pub(crate) fn set_element_base(&mut self, element: NodeId, base: Option<&str>) {
+    let base = base.map(|base| self.pool.intern(base));
+    if let NodeData::Element(data) = &mut self.nodes[element.index()].data {
+      data.base = base;
+    }
+  }
+
   // --- Attributes ---------------------------------------------------------------------------
 
   /// Creates a detached attribute node with a qualified name and no namespace.
@@ -538,8 +580,27 @@ impl Document {
 
   /// The element carrying an `ID`-typed attribute equal to `id`, in document order, if any.
   ///
-  /// An attribute counts only if it was marked with [`set_id_attribute`](Self::set_id_attribute)
-  /// (the document builder does this for DTD- and `xml:id`-typed attributes).
+  /// An attribute counts only if it was marked with [`set_id_attribute`](Self::set_id_attribute):
+  /// the DOM has no way to know an attribute named `id` is an ID unless a DTD, a schema, or the
+  /// caller says so. The [document builder](crate::build) marks DTD- and `xml:id`-typed
+  /// attributes for you.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_dom::Document;
+  ///
+  /// let mut doc = Document::new();
+  /// let e = doc.create_element("section")?;
+  /// doc.set_attribute(e, "id", "intro")?;
+  /// doc.append_child(doc.root(), e)?;
+  ///
+  /// // Not found until the attribute is declared to be an ID.
+  /// assert_eq!(doc.get_element_by_id("intro"), None);
+  /// doc.set_id_attribute(e, "id", true)?;
+  /// assert_eq!(doc.get_element_by_id("intro"), Some(e));
+  /// # Ok::<(), xylograph_dom::DomException>(())
+  /// ```
   #[must_use]
   pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
     self.descendants(self.root()).find(|&node| {
@@ -1146,5 +1207,23 @@ mod tests {
     // An xmlns attribute in the wrong namespace.
     let e = doc.create_element("e").unwrap();
     assert_eq!(doc.set_attribute_ns(e, Some("urn:x"), "xmlns:p", "v").unwrap_err().code(), ExceptionCode::Namespace);
+  }
+
+  #[test]
+  fn base_uri_walks_to_the_nearest_recorded_base() {
+    let mut doc = Document::new();
+    doc.set_document_base(Some("file:///doc.xml"));
+    let a = doc.create_element("a").unwrap();
+    doc.append_child(doc.root(), a).unwrap();
+    let b = doc.create_element("b").unwrap();
+    doc.append_child(a, b).unwrap();
+    doc.set_element_base(b, Some("file:///sub/"));
+    let text = doc.create_text_node("x");
+    doc.append_child(b, text).unwrap();
+
+    assert_eq!(doc.base_uri(a).as_deref(), Some("file:///doc.xml"), "falls back to the document base");
+    assert_eq!(doc.base_uri(b).as_deref(), Some("file:///sub/"), "uses its own recorded base");
+    assert_eq!(doc.base_uri(text).as_deref(), Some("file:///sub/"), "a text node inherits the nearest element's base");
+    assert_eq!(Document::new().base_uri(NodeId(0)), None, "no base information means no base URI");
   }
 }

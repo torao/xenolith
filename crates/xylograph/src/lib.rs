@@ -7,7 +7,8 @@
 //!
 //! - [`parser`] — the XML pull parser: readers, events, entity resolution, the DTD.
 //! - [`validate`] — validation: a schema-agnostic `Validator` and the DTD validator.
-//! - [`dom`] — an arena-based DOM tree: nodes, navigation, and mutation.
+//! - [`dom`] — an arena-based DOM tree: nodes, navigation, mutation, and `dom::build` to make
+//!   one from parsed XML.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
@@ -71,6 +72,15 @@ mod tests {
     let root = doc.create_element("a").unwrap();
     doc.append_child(doc.root(), root).unwrap();
     assert_eq!(doc.document_element(), Some(root));
+  }
+
+  #[cfg(feature = "parse")]
+  #[test]
+  fn the_facade_builds_a_dom_from_xml() {
+    let doc = crate::dom::build::parse("<a><b>x</b></a>".as_bytes()).unwrap();
+    let root = doc.document_element().unwrap();
+    assert_eq!(doc.node_name(root), "a");
+    assert_eq!(doc.text_content(root), "x");
   }
 
   #[test]

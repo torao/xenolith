@@ -11,9 +11,16 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["encodings"]
+default = ["encodings", "parse"]
 # Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
-encodings = ["xylograph-core/encodings", "xylograph-parser/encodings", "xylograph-validate/encodings"]
+encodings = [
+  "xylograph-core/encodings",
+  "xylograph-parser/encodings",
+  "xylograph-validate/encodings",
+  "xylograph-dom/encodings",
+]
+# Build a DOM from parsed XML: xylograph::dom::build.
+parse = ["xylograph-dom/parse"]
 # The asynchronous reader, over tokio's AsyncRead.
 tokio = ["xylograph-parser/tokio"]
 # Per-node base URI computation from xml:base and the entity's system id (XML Base).

@@ -66,11 +66,15 @@ pub(crate) struct AttrData {
   pub(crate) is_id: bool,
 }
 
-/// An element's own data: its name and its attribute nodes, in document order.
+/// An element's own data: its name, its attribute nodes in document order, and its effective
+/// base URI (XML Base) if one was recorded when the tree was built.
 #[derive(Clone, Debug)]
 pub(crate) struct ElementData {
   pub(crate) name: QName,
   pub(crate) attributes: Vec<NodeId>,
+  /// The fully resolved base URI in effect at this element, interned; `None` for a
+  /// hand-built element or when no base is known.
+  pub(crate) base: Option<NameId>,
 }
 
 /// The kind-specific payload of a node.

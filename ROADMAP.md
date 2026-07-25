@@ -481,9 +481,14 @@ xylograph/
 - **成果物**: `xylograph-dom` に変更 API・コレクション・名前空間検査を追加（テスト 25 + doctest 4）
 - **完了条件**: 変更・コレクション・名前空間・ID の各操作が本サブフェーズのテストで通る
 
-**3c. DocumentBuilder（パース → DOM）**
-- パーサのイベント列から DOM を構築。DTD・xml:base / xml:id 情報の取り込み
-- 完了条件: 代表的な文書が DOM に載る
+**3c. DocumentBuilder（パース → DOM）**✅ 完了
+- パーサのイベント列から DOM を構築（`xylograph-dom` の `build` モジュール、feature `parse`）: 要素＋属性、テキスト／CDATA／コメント／PI ノード、`DOCTYPE`。パーサが解決した名前空間を要素・属性名へ引き継ぐ
+- **ID 型属性を構築時に印付け**: `xml:id`、および DTD が `ID` 宣言した属性を `set_id_attribute` でマーク → `get_element_by_id` が動く
+- **基底 URI の取り込み（XML Base）**: 各要素の実効基底 URI（`xml:base` と system id から解決済み）を interned で記録し、`Document::base_uri()`（DOM `baseURI`）で取得。属性は所有要素、テキスト等は最寄り要素の基底を継承、無ければ文書の基底へフォールバック
+- `parse(source)` / `parse_reader(reader)`（resolver・limits・system id は reader 経由）。ファサードから `xylograph::dom::build`（既定で有効）
+- feature 構成: `parse`（parser 依存＋`xml-base`/`xml-id` を引き込む）、`encodings`（weak 転送）。DOM 単体（parser なし）ビルドは維持
+- **成果物**: `build` モジュールと `base_uri`（ユニット +1、統合テスト 10）
+- **完了条件**: 代表的な文書（名前空間・DTD・PI/コメント/CDATA・xml:id・xml:base）が DOM に載り、走査・ID 検索・基底 URI 取得が通る
 
 **3d. シリアライザ**（`xylograph-serialize`）
 - XML シリアライザ（エンコーディング、エスケープ、indent、名前空間修復）

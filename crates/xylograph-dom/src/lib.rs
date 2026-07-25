@@ -44,6 +44,8 @@
 //! # Ok::<(), xylograph_dom::DomException>(())
 //! ```
 
+#[cfg(feature = "parse")]
+pub mod build;
 mod collection;
 mod document;
 mod exception;

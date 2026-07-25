@@ -1,15 +1,20 @@
-//! Live views over the tree: [`NodeList`] and [`NamedNodeMap`].
+//! Views over the tree: [`NodeList`] and [`NamedNodeMap`].
 //!
-//! Both are *live*, as the DOM requires: they hold no snapshot, only a borrow of the
-//! [`Document`] and a description of what to gather, and answer `length` and `item` by looking
-//! at the tree as it is now. A node inserted after the list was made is in it; one removed is
-//! gone from it. Because the view borrows the document, it is read-only — mutation goes through
-//! `&mut Document`, which cannot coexist with the borrow.
+//! Each holds no snapshot — only a borrow of the [`Document`] and a description of what to
+//! gather — and answers `length` and `item` by reading the tree as it is at that moment. So a
+//! view is always current: obtain one, and it reflects the tree right then.
+//!
+//! This is the arena's version of the DOM's *live* collection, with one difference the borrow
+//! checker makes. A W3C `NodeList` is held while the document is mutated through another path
+//! and updates under you; here the view borrows the document, and mutation needs `&mut`, so the
+//! two cannot overlap. You do not watch a held list change — you re-obtain it after the change,
+//! and what you get is current. The liveness is in *how* it is computed, not in holding one
+//! across a mutation.
 
 use crate::Document;
 use crate::node::{NodeData, NodeId, NodeType};
 
-/// What a [`NodeList`] gathers, evaluated afresh on each read so the list stays live.
+/// What a [`NodeList`] gathers, evaluated afresh on each read so the list is always current.
 #[derive(Clone, Debug)]
 pub(crate) enum Query {
   /// The children of a node.
@@ -81,7 +86,12 @@ impl NameFilter {
   }
 }
 
-/// A live, ordered list of nodes: the DOM's `NodeList`.
+/// An ordered list of nodes, computed on demand: the arena's take on the DOM's `NodeList`.
+///
+/// It holds no snapshot: each read looks at the tree as it is then, so a list obtained after a
+/// change reflects that change. Unlike a W3C `NodeList` it cannot be held *across* a change — it
+/// borrows the document, and a change needs `&mut` — so you re-obtain it rather than watch one
+/// update under you.
 ///
 /// # Examples
 ///
@@ -91,12 +101,11 @@ impl NameFilter {
 /// let mut doc = Document::new();
 /// let root = doc.create_element("ul")?;
 /// doc.append_child(doc.root(), root)?;
-/// let items = doc.get_elements_by_tag_name("li");
-/// assert_eq!(items.length(), 0);
+/// assert_eq!(doc.get_elements_by_tag_name("li").length(), 0);
 ///
 /// let li = doc.create_element("li")?;
 /// doc.append_child(root, li)?;
-/// // The same list now reflects the new child: it is live.
+/// // A list obtained now sees the new child.
 /// let items = doc.get_elements_by_tag_name("li");
 /// assert_eq!(items.length(), 1);
 /// assert_eq!(items.item(0), Some(li));
@@ -148,10 +157,10 @@ impl<'a> NodeList<'a> {
   }
 }
 
-/// A live map of an element's attribute nodes: the DOM's `NamedNodeMap`.
+/// A map of an element's attribute nodes, computed on demand: the DOM's `NamedNodeMap`.
 ///
-/// Ordered like the attribute list and addressable by index or by name, and live for the same
-/// reason a [`NodeList`] is.
+/// Ordered like the attribute list and addressable by index or by name. Computed on each read
+/// and so always current, with the same borrow caveat as a [`NodeList`].
 #[derive(Clone, Debug)]
 pub struct NamedNodeMap<'a> {
   doc: &'a Document,
