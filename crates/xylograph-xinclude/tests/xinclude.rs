@@ -171,6 +171,40 @@ fn xpointer_is_rejected_with_parse_text() {
 }
 
 #[test]
+fn language_fixup_preserves_the_included_language() {
+  // The selected <p> inherits fr from <sec>; included under an en context, it must keep fr.
+  let out = run(
+    &format!("<doc xml:lang='en'{NS}><xi:include href='part.xml' xpointer='element(/1/1)'/></doc>"),
+    &[("file:///d/part.xml", "<sec xml:lang='fr'><p>bonjour</p></sec>")],
+    XInclude::new().with_base_fixup(false),
+  )
+  .unwrap();
+  assert_eq!(out, format!("<doc xml:lang=\"en\"{XI}><p xml:lang=\"fr\">bonjour</p></doc>"));
+}
+
+#[test]
+fn language_fixup_can_be_turned_off() {
+  let out = run(
+    &format!("<doc xml:lang='en'{NS}><xi:include href='part.xml' xpointer='element(/1/1)'/></doc>"),
+    &[("file:///d/part.xml", "<sec xml:lang='fr'><p>bonjour</p></sec>")],
+    XInclude::new().with_base_fixup(false).with_language_fixup(false),
+  )
+  .unwrap();
+  assert_eq!(out, format!("<doc xml:lang=\"en\"{XI}><p>bonjour</p></doc>"));
+}
+
+#[test]
+fn language_fixup_skips_when_the_language_already_matches() {
+  let out = run(
+    &format!("<doc xml:lang='fr'{NS}><xi:include href='part.xml' xpointer='element(/1/1)'/></doc>"),
+    &[("file:///d/part.xml", "<sec xml:lang='fr'><p>x</p></sec>")],
+    XInclude::new().with_base_fixup(false),
+  )
+  .unwrap();
+  assert_eq!(out, format!("<doc xml:lang=\"fr\"{XI}><p>x</p></doc>"));
+}
+
+#[test]
 fn base_fixup_records_the_included_resources_base() {
   // With fixup on, the included element carries xml:base so its own base is preserved.
   let out = run(

@@ -17,13 +17,14 @@ const XI_NS: &str = "http://www.w3.org/2001/XInclude";
 #[derive(Clone, Debug)]
 pub struct XInclude {
   base_fixup: bool,
+  language_fixup: bool,
   max_depth: usize,
   max_includes: usize,
 }
 
 impl Default for XInclude {
   fn default() -> Self {
-    Self { base_fixup: true, max_depth: 40, max_includes: 65_536 }
+    Self { base_fixup: true, language_fixup: true, max_depth: 40, max_includes: 65_536 }
   }
 }
 
@@ -39,6 +40,14 @@ impl XInclude {
   #[must_use]
   pub fn with_base_fixup(mut self, on: bool) -> Self {
     self.base_fixup = on;
+    self
+  }
+
+  /// Whether to add an `xml:lang` to an included element so its language is preserved (XInclude
+  /// language fixup). On by default.
+  #[must_use]
+  pub fn with_language_fixup(mut self, on: bool) -> Self {
+    self.language_fixup = on;
     self
   }
 
@@ -199,8 +208,11 @@ impl XInclude {
     result.map_err(Fault::Fatal)?;
 
     let source = self.select(&included, xpointer, included.document_element())?;
+    let source_base = included.base_uri(source);
+    let source_language = effective_language(&included, source);
     let imported = doc.import_node(&included, source, true).map_err(dom_fault)?;
-    self.fix_base(doc, include, imported, included.base_uri(source).as_deref());
+    self.fix_base(doc, include, imported, source_base.as_deref());
+    self.fix_language(doc, include, imported, source_language.as_deref());
     Ok(vec![imported])
   }
 
@@ -221,6 +233,7 @@ impl XInclude {
     }
     let source = self.select(doc, Some(xpointer), None)?;
     let source_base = doc.base_uri(source);
+    let source_language = effective_language(doc, source);
     let clone = doc.clone_node(source, true).map_err(dom_fault)?;
     // Expand any includes inside the copied region.
     state.chain.push(key);
@@ -228,6 +241,7 @@ impl XInclude {
     state.chain.pop();
     result.map_err(Fault::Fatal)?;
     self.fix_base(doc, include, clone, source_base.as_deref());
+    self.fix_language(doc, include, clone, source_language.as_deref());
     Ok(vec![clone])
   }
 
@@ -262,6 +276,36 @@ impl XInclude {
       let _ = doc.set_attribute_ns(element, Some(XML_NS_URI), "xml:base", source_base);
     }
   }
+
+  /// Records an included element's own language as an `xml:lang`, when it differs from the
+  /// language already in effect where the include sits and the element does not set it itself.
+  fn fix_language(&self, doc: &mut Document, include: NodeId, element: NodeId, source_language: Option<&str>) {
+    if !self.language_fixup {
+      return;
+    }
+    // Only an element that actually has a language in scope carries one across.
+    let Some(source_language) = source_language else { return };
+    if effective_language(doc, include).as_deref() == Some(source_language) {
+      return;
+    }
+    if doc.attribute_ns(element, Some(XML_NS_URI), "lang").is_none() {
+      let _ = doc.set_attribute_ns(element, Some(XML_NS_URI), "xml:lang", source_language);
+    }
+  }
+}
+
+/// The language in effect at a node: the value of the nearest `xml:lang` at or above it, if any.
+fn effective_language(doc: &Document, node: NodeId) -> Option<String> {
+  let mut current = Some(node);
+  while let Some(node) = current {
+    if doc.node_type(node) == NodeType::Element {
+      if let Some(language) = doc.attribute_ns(node, Some(XML_NS_URI), "lang") {
+        return Some(language.to_owned());
+      }
+    }
+    current = doc.parent(node);
+  }
+  None
 }
 
 /// The state threaded through an expansion: the loader, a running count, and the chain of

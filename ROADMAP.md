@@ -530,10 +530,13 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `xpointer` モジュール、統合テスト +6
 - **完了条件**: 短縮/element()/同一文書/未選択→fallback/text 併用拒否 が通る
 
-**3.5c. fixup 完全化・検証順序・適合**
-- language fixup（`xml:lang`）、base URI fixup の規則精緻化
-- 妥当性検証との順序（検証 → 展開）を定義
-- **完了条件**: XInclude 1.0 テストスイート（W3C）を通す
+**3.5c. fixup 完全化・検証順序**✅ 完了
+- **language fixup（`xml:lang`）**: 取り込んだ要素が元の言語（祖先から継承した `xml:lang`）を保つよう、取り込み先の言語と異なり要素自身が `xml:lang` を持たない場合に付与。`with_language_fixup`（既定 ON、ON/OFF をテスト）
+- **base URI fixup 精緻化**: 元要素の実効基底（`base_uri`）と取り込み点の基底が異なるときのみ付与（3.5a から継続、xpointer 選択要素の基底も考慮）
+- **検証との順序を明文化**: XInclude は解析・検証と独立したパスで、順序は呼び出し側が選択。推奨は **解析 → 展開 → 検証**（展開後の文書を検証）。crate doc に記載
+- **成果物**: `fix_language` と `effective_language`、統合テスト +3（計 18）
+- **完了条件**: language fixup(ON/OFF/一致時スキップ) と検証順序ドキュメントが通る
+- **後続に回した点**: W3C XInclude 1.0 公式テストスイートの取り込み（他の公式スイート同様、未 vendored。env var 方式のハーネスは今後）。独自テストで機能面は網羅
 
 ### Phase 4 — XPath 1.0
 

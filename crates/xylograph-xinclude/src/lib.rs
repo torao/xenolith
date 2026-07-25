@@ -12,9 +12,22 @@
 //! Inclusion loops are detected, and the depth and count of inclusions are bounded.
 //!
 //! `parse="xml"` (the default) parses the resource and includes its document element;
-//! `parse="text"` includes it as a text node, decoded per the `encoding` attribute. Selecting a
-//! sub-resource with `xpointer` is not yet supported — an `xi:include` that asks for one falls
-//! back, or fails if it has no fallback.
+//! `parse="text"` includes it as a text node, decoded per the `encoding` attribute. An
+//! `xpointer` narrows the inclusion to one element of the resource (a shorthand pointer, or the
+//! `element()` scheme); with no `href` it selects from the document that holds the `xi:include`.
+//!
+//! An included element keeps the base URI and language it had in its source: base URI fixup
+//! writes an `xml:base`, and language fixup an `xml:lang`, where these differ from what is in
+//! effect at the inclusion point. Both are on by default and can be turned off.
+//!
+//! # Order with validation
+//!
+//! XInclude is a pass over a tree, separate from parsing and from validation, so the caller
+//! chooses the order. The usual one is **parse → expand → validate**: expand first, then
+//! validate the assembled document, so a schema sees the whole thing. Validating *before*
+//! expansion checks only the skeleton with its `xi:include` elements in place, which a schema
+//! written for the assembled document will reject; do that only with a schema that permits the
+//! XInclude elements. This crate does not validate; run `xylograph-validate` over the result.
 //!
 //! # Examples
 //!
