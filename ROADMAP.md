@@ -540,11 +540,33 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 ### Phase 4 — XPath 1.0
 
-- XDM トレイトと DOM への実装（名前空間ノード合成、文書順）
-- 字句・構文解析、コンパイラ、評価器、13 軸
-- コア関数 27 個、型変換
-- `javax.xml.xpath` 相当の API
-- **完了条件**: XPath テストスイートを通す。CLI で `xylo xpath` が動く
+規模が大きいためサブフェーズに分割する（決定 3: XDM をツリーと分離し `trait` に対して評価器を動かす／名前空間ノードは XDM 側で合成。決定 4: AST を軸走査＋述語へ）。
+
+**4a. XDM（データモデル）**（`xylograph-xdm`）✅ 完了
+- 7 ノード型（root/element/attribute/namespace/text/comment/PI）を表す `Model` トレイト（`type Node` でツリー実装を抽象化）。`NodeKind` / `ExpandedName`
+- **DOM 実装 `DomModel`**（`&Document` を借用、書き換えない）: 隣接 text/CDATA を 1 テキストノードに結合、**名前空間ノードの合成**（in-scope 宣言＋暗黙の `xml`、xmlns 属性は属性軸から除外）、各ノード型の string-value と expanded-name、属性の親＝所有要素
+- **文書順**を構築時に全ノードへ付番（要素→名前空間ノード→属性→子の順）、`document_order` で比較
+- DOM に `owner_element`（属性の所有要素）を追加。ファサードから `xylograph::xdm`
+- **成果物**: `xylograph-xdm` クレート（統合テスト 8 + doctest 1）
+- **完了条件**: 親子・兄弟・属性・名前空間・文書順・string-value・expanded-name がトレイト越しに辿れる
+
+**4b. 字句・構文解析**（`xylograph-xpath`）
+- トークナイザ（XPath 特有の文脈依存字句規則）、文法 → AST
+- 完了条件: 代表的な式が AST になる
+
+**4c. 評価器コア**
+- 13 軸、ノードテスト、述語、4 値型（node-set/boolean/number/string）と型変換、評価コンテキスト
+- 決定 4 に沿って AST を軸走査＋述語へ
+- 完了条件: ロケーションパスと演算子式が評価できる
+
+**4d. コア関数ライブラリ（27 関数）**
+- node-set / string / boolean / number の各関数と型セマンティクス
+- 完了条件: 全 27 関数がテストで通る
+
+**4e. 公開 API と適合**
+- `javax.xml.xpath` 相当の入口、ファサードから `xylograph::xpath`
+- XPath テストスイートのハーネス
+- **完了条件（Phase 4 全体）**: XPath テストスイートを通す。CLI で `xylo xpath` が動く（CLI は後段）
 
 ### Phase 5 — XSLT 骨格
 

@@ -627,6 +627,16 @@ impl Document {
     self.find_attribute(element, |a| a.name.namespace() == namespace && a.name.local() == local)
   }
 
+  /// The element an attribute node belongs to (the DOM's `ownerElement`), or `None` for a
+  /// detached attribute or a node that is not an attribute.
+  #[must_use]
+  pub fn owner_element(&self, attr: NodeId) -> Option<NodeId> {
+    match &self.slot(attr).data {
+      NodeData::Attribute(data) => data.owner,
+      _ => None,
+    }
+  }
+
   /// The value of an element's attribute, by qualified name.
   #[must_use]
   pub fn attribute(&self, element: NodeId, qualified_name: &str) -> Option<&str> {

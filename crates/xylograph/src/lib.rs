@@ -10,6 +10,7 @@
 //! - [`dom`] — an arena-based DOM tree: nodes, navigation, mutation, and `dom::build` to make
 //!   one from parsed XML.
 //! - [`serialize`] — writing a DOM subtree back to XML text.
+//! - [`xdm`] — the XPath data model: a node-model trait and its DOM implementation.
 //! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
@@ -50,6 +51,9 @@ pub use xylograph_dom as dom;
 
 /// Serialization: a DOM subtree to well-formed XML text.
 pub use xylograph_serialize as serialize;
+
+/// The XPath 1.0 data model: a node-model trait and its DOM implementation.
+pub use xylograph_xdm as xdm;
 
 /// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
 #[cfg(feature = "xinclude")]

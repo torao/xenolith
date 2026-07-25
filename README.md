@@ -24,13 +24,15 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-core`](crates/xylograph-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 3e | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, a SAX-style push adapter, and a sans-I/O core |
 | [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
-| [`xylograph-dom`](crates/xylograph-dom) | Phase 3.5b | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
+| [`xylograph-dom`](crates/xylograph-dom) | Phase 4a | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
 
 | [`xylograph-serialize`](crates/xylograph-serialize) | Phase 3e | a serializer from a DOM subtree to well-formed XML text (escaping, optional XML declaration and indentation, namespace repair) and a StAX-style streaming `XmlWriter`; UTF-8 output |
 
 | [`xylograph-xinclude`](crates/xylograph-xinclude) | Phase 3.5c | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, XPointer subresource selection (shorthand and `element()`), `xi:fallback`, recursion with loop detection and limits, and base URI / language fixup; resources are fetched through a caller-supplied `Loader` |
 
-Crates for XPath, XSLT, EXSLT and the CLI arrive in later phases;
+| [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4a | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
+
+Crates for the XPath evaluator, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
 
 ## Building
