@@ -225,6 +225,80 @@ impl Document {
     Ok(imported)
   }
 
+  /// Copies a node within this document, returning a new detached node — the DOM's `cloneNode`.
+  ///
+  /// With `deep`, descendants come too; an element's attributes always do. As with
+  /// [`import_node`](Self::import_node), the computed base URI is not copied.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NotSupported`] for a node that cannot be cloned this way — a document, a
+  /// document type, or a bare attribute.
+  pub fn clone_node(&mut self, node: NodeId, deep: bool) -> Result<NodeId> {
+    let cloned = match self.slot(node).data.node_type() {
+      NodeType::Element => {
+        let name = self.node_name(node);
+        let namespace = self.namespace_uri(node).map(ToOwned::to_owned);
+        let attributes: Vec<(String, Option<String>, String)> = self
+          .attributes(node)
+          .iter()
+          .map(|attr| {
+            (
+              self.node_name(attr),
+              self.namespace_uri(attr).map(ToOwned::to_owned),
+              self.node_value(attr).unwrap_or_default().to_owned(),
+            )
+          })
+          .collect();
+        let element = self.create_element_ns(namespace.as_deref(), &name)?;
+        for (name, namespace, value) in attributes {
+          match namespace {
+            Some(namespace) => self.set_attribute_ns(element, Some(&namespace), &name, &value)?,
+            None => self.set_attribute(element, &name, &value)?,
+          }
+        }
+        if deep {
+          for child in self.children(node).collect::<Vec<_>>() {
+            let child = self.clone_node(child, true)?;
+            self.append_child(element, child)?;
+          }
+        }
+        element
+      }
+      NodeType::Text => {
+        let data = self.node_value(node).unwrap_or_default().to_owned();
+        self.create_text_node(&data)
+      }
+      NodeType::CdataSection => {
+        let data = self.node_value(node).unwrap_or_default().to_owned();
+        self.create_cdata_section(&data)
+      }
+      NodeType::Comment => {
+        let data = self.node_value(node).unwrap_or_default().to_owned();
+        self.create_comment(&data)
+      }
+      NodeType::ProcessingInstruction => {
+        let target = self.node_name(node);
+        let data = self.node_value(node).unwrap_or_default().to_owned();
+        self.create_processing_instruction(&target, &data)?
+      }
+      NodeType::DocumentFragment => {
+        let fragment = self.create_document_fragment();
+        if deep {
+          for child in self.children(node).collect::<Vec<_>>() {
+            let child = self.clone_node(child, true)?;
+            self.append_child(fragment, child)?;
+          }
+        }
+        fragment
+      }
+      NodeType::Document | NodeType::DocumentType | NodeType::Attribute => {
+        return Err(DomException::new(ExceptionCode::NotSupported, "this kind of node cannot be cloned"));
+      }
+    };
+    Ok(cloned)
+  }
+
   /// Interns a node and returns its handle. The node starts detached.
   fn push(&mut self, data: NodeData) -> NodeId {
     let id = NodeId(u32::try_from(self.nodes.len()).expect("a document holds fewer than 4 billion nodes"));

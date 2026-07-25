@@ -521,9 +521,14 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `xylograph-xinclude` クレート（統合テスト 9 + doctest 1）、DOM に `import_node` と `build::parse_with_system_id`、パーサ doctype 外部 ID 公開
 - **完了条件**: 取り込み・再帰・text・fallback・ループ・上限・base fixup(ON/OFF) が通る
 
-**3.5b. XPointer**（部分選択）
-- XPointer フレームワーク、短縮ポインタ（ID）、`element()` scheme、`xmlns()` scheme
-- `xi:include` の `xpointer` 属性で部分リソースを選択（現状は未対応で fallback）
+**3.5b. XPointer**（部分選択）✅ 完了
+- **短縮ポインタ**（bare NCName → ID で要素選択、`get_element_by_id` を利用）
+- **`element()` scheme**: `element(id/2/1)`（ID 起点の子シーケンス）/ `element(/1/2)`（ルート起点、各ステップは子「要素」の位置）
+- **`xmlns()` scheme** はパースする（scheme ベースの列に含められる）が、位置指定の `element()` には不要
+- `xi:include` の `xpointer` で部分リソースを選択: **外部リソース**（`href`＋`xpointer`）と**同一文書**（`href` 無し＋`xpointer`、`clone_node` で複製し複製内の include も展開、自己ループ検出）。選択できなければ fallback。`parse="text"` との併用は致命
+- **支援した追加**: DOM に `clone_node`（同一文書ディープコピー = `cloneNode`）
+- **成果物**: `xpointer` モジュール、統合テスト +6
+- **完了条件**: 短縮/element()/同一文書/未選択→fallback/text 併用拒否 が通る
 
 **3.5c. fixup 完全化・検証順序・適合**
 - language fixup（`xml:lang`）、base URI fixup の規則精緻化

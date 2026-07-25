@@ -5,6 +5,7 @@ use xylograph_core::{Error, ErrorKind, uri};
 use xylograph_dom::{Document, NodeId, NodeType, build};
 
 use crate::Loader;
+use crate::xpointer;
 
 /// The XInclude namespace.
 const XI_NS: &str = "http://www.w3.org/2001/XInclude";
@@ -147,35 +148,49 @@ impl XInclude {
     if parse != "xml" && parse != "text" {
       return Err(Fault::Fatal(xinclude_error(&format!("parse must be \"xml\" or \"text\", not {parse:?}"))));
     }
-    // A sub-resource selector is not handled yet, so such an include cannot be satisfied.
-    if doc.attribute(include, "xpointer").is_some() {
-      return Err(Fault::Recoverable(xinclude_error("xpointer is not yet supported")));
-    }
-    let Some(href) = doc.attribute(include, "href").map(ToOwned::to_owned) else {
-      return Err(Fault::Fatal(xinclude_error("xi:include without href or a supported xpointer")));
-    };
-    if href.is_empty() {
-      return Err(Fault::Recoverable(xinclude_error(
-        "an empty href selects the including document, not yet supported",
-      )));
-    }
-
-    let target = match doc.base_uri(include) {
-      Some(base) => uri::resolve(&base, &href).map_err(Fault::Recoverable)?,
-      None => href.clone(),
-    };
-    if state.chain.iter().any(|open| open == &target) {
-      return Err(Fault::Fatal(xinclude_error(&format!("inclusion loop through {target:?}"))));
-    }
-    let bytes = state.loader.load(&target).map_err(Fault::Recoverable)?;
+    let xpointer = doc.attribute(include, "xpointer").map(ToOwned::to_owned);
+    let href = doc.attribute(include, "href").map(ToOwned::to_owned).filter(|href| !href.is_empty());
 
     if parse == "text" {
+      if xpointer.is_some() {
+        return Err(Fault::Fatal(xinclude_error("xpointer may not be used with parse=\"text\"")));
+      }
+      let Some(href) = href else {
+        return Err(Fault::Fatal(xinclude_error("xi:include with parse=\"text\" needs an href")));
+      };
+      let target = self.resolve(doc, include, &href)?;
+      let bytes = state.loader.load(&target).map_err(Fault::Recoverable)?;
       let encoding = doc.attribute(include, "encoding").unwrap_or("UTF-8");
       let text = decode(&bytes, encoding).map_err(Fault::Fatal)?;
       return Ok(vec![doc.create_text_node(&text)]);
     }
 
-    // parse == "xml": a malformed resource is fatal, not a fallback case.
+    match href {
+      Some(href) => self.acquire_resource(doc, include, &href, xpointer.as_deref(), state, depth),
+      None => match xpointer {
+        Some(xpointer) => self.acquire_same_document(doc, include, &xpointer, state, depth),
+        None => Err(Fault::Fatal(xinclude_error("xi:include needs an href or an xpointer"))),
+      },
+    }
+  }
+
+  /// Includes a fetched resource, optionally narrowed to the element an `xpointer` selects.
+  fn acquire_resource<L: Loader>(
+    &self,
+    doc: &mut Document,
+    include: NodeId,
+    href: &str,
+    xpointer: Option<&str>,
+    state: &mut State<'_, L>,
+    depth: usize,
+  ) -> Result<Vec<NodeId>, Fault> {
+    let target = self.resolve(doc, include, href)?;
+    if state.chain.iter().any(|open| open == &target) {
+      return Err(Fault::Fatal(xinclude_error(&format!("inclusion loop through {target:?}"))));
+    }
+    let bytes = state.loader.load(&target).map_err(Fault::Recoverable)?;
+
+    // A malformed resource is fatal, not a fallback case.
     let mut included = build::parse_with_system_id(&bytes[..], &target).map_err(Fault::Fatal)?;
     let included_root = included.root();
     state.chain.push(target.clone());
@@ -183,20 +198,68 @@ impl XInclude {
     state.chain.pop();
     result.map_err(Fault::Fatal)?;
 
-    let Some(source_root) = included.document_element() else {
-      return Err(Fault::Fatal(xinclude_error(&format!("{target:?} has no document element to include"))));
-    };
-    let imported = doc.import_node(&included, source_root, true).map_err(dom_fault)?;
-    if self.base_fixup && doc.base_uri(include).as_deref() != Some(target.as_str()) {
-      self.fix_base(doc, imported, &target);
-    }
+    let source = self.select(&included, xpointer, included.document_element())?;
+    let imported = doc.import_node(&included, source, true).map_err(dom_fault)?;
+    self.fix_base(doc, include, imported, included.base_uri(source).as_deref());
     Ok(vec![imported])
   }
 
-  /// Records the included element's own base URI as an `xml:base`, unless it already has one.
-  fn fix_base(&self, doc: &mut Document, element: NodeId, base: &str) {
+  /// Includes part of the document that contains the `xi:include` (an `xpointer` with no href).
+  fn acquire_same_document<L: Loader>(
+    &self,
+    doc: &mut Document,
+    include: NodeId,
+    xpointer: &str,
+    state: &mut State<'_, L>,
+    depth: usize,
+  ) -> Result<Vec<NodeId>, Fault> {
+    // A synthetic key guards against a same-document include selecting a region that holds it.
+    let base = doc.base_uri(include).unwrap_or_default();
+    let key = format!("{base}#{xpointer}");
+    if state.chain.iter().any(|open| open == &key) {
+      return Err(Fault::Fatal(xinclude_error(&format!("inclusion loop through {xpointer:?}"))));
+    }
+    let source = self.select(doc, Some(xpointer), None)?;
+    let source_base = doc.base_uri(source);
+    let clone = doc.clone_node(source, true).map_err(dom_fault)?;
+    // Expand any includes inside the copied region.
+    state.chain.push(key);
+    let result = self.process_children(doc, clone, state, depth + 1);
+    state.chain.pop();
+    result.map_err(Fault::Fatal)?;
+    self.fix_base(doc, include, clone, source_base.as_deref());
+    Ok(vec![clone])
+  }
+
+  /// Resolves an `href` against the base URI in effect at the `xi:include`.
+  fn resolve(&self, doc: &Document, include: NodeId, href: &str) -> Result<String, Fault> {
+    match doc.base_uri(include) {
+      Some(base) => uri::resolve(&base, href).map_err(Fault::Recoverable),
+      None => Ok(href.to_owned()),
+    }
+  }
+
+  /// Selects the element an `xpointer` identifies, or the default when there is none.
+  fn select(&self, doc: &Document, xpointer: Option<&str>, default: Option<NodeId>) -> Result<NodeId, Fault> {
+    match xpointer {
+      Some(xpointer) => xpointer::select(doc, xpointer)
+        .ok_or_else(|| Fault::Recoverable(xinclude_error(&format!("xpointer {xpointer:?} selected nothing")))),
+      None => default.ok_or_else(|| Fault::Fatal(xinclude_error("the resource has no document element to include"))),
+    }
+  }
+
+  /// Records an included element's own base URI as an `xml:base`, unless it already has one and
+  /// unless it matches the base already in effect where the include sits.
+  fn fix_base(&self, doc: &mut Document, include: NodeId, element: NodeId, source_base: Option<&str>) {
+    if !self.base_fixup {
+      return;
+    }
+    let Some(source_base) = source_base else { return };
+    if doc.base_uri(include).as_deref() == Some(source_base) {
+      return;
+    }
     if doc.attribute_ns(element, Some(XML_NS_URI), "base").is_none() {
-      let _ = doc.set_attribute_ns(element, Some(XML_NS_URI), "xml:base", base);
+      let _ = doc.set_attribute_ns(element, Some(XML_NS_URI), "xml:base", source_base);
     }
   }
 }

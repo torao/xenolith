@@ -47,6 +47,7 @@
 
 mod include;
 mod loader;
+mod xpointer;
 
 pub use include::XInclude;
 pub use loader::Loader;

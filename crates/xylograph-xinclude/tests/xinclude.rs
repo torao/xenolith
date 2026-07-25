@@ -114,6 +114,63 @@ fn the_inclusion_count_is_bounded() {
 }
 
 #[test]
+fn xpointer_shorthand_selects_an_element_by_id() {
+  let out = expand(
+    &format!("<doc{NS}><xi:include href='parts.xml' xpointer='s1'/></doc>"),
+    &[("file:///d/parts.xml", "<root><sec xml:id='s1'><p>a</p></sec><sec xml:id='s2'/></root>")],
+  );
+  assert_eq!(out, format!("<doc{XI}><sec xml:id=\"s1\"><p>a</p></sec></doc>"));
+}
+
+#[test]
+fn xpointer_element_scheme_walks_child_positions() {
+  // /1 is the document element; /1/2 is its second child element.
+  let out = expand(
+    &format!("<doc{NS}><xi:include href='parts.xml' xpointer='element(/1/2)'/></doc>"),
+    &[("file:///d/parts.xml", "<root><a/><b>hit</b></root>")],
+  );
+  assert_eq!(out, format!("<doc{XI}><b>hit</b></doc>"));
+}
+
+#[test]
+fn xpointer_element_scheme_starts_from_an_id() {
+  let out = expand(
+    &format!("<doc{NS}><xi:include href='parts.xml' xpointer='element(s1/1)'/></doc>"),
+    &[("file:///d/parts.xml", "<root><sec xml:id='s1'><p>x</p><q/></sec></root>")],
+  );
+  assert_eq!(out, format!("<doc{XI}><p>x</p></doc>"));
+}
+
+#[test]
+fn xpointer_can_select_from_the_same_document() {
+  // No href: the xpointer selects part of the document that contains the include.
+  let out = expand(&format!("<doc{NS}><data><item xml:id='i'>X</item></data><xi:include xpointer='i'/></doc>"), &[]);
+  assert_eq!(out, format!("<doc{XI}><data><item xml:id=\"i\">X</item></data><item xml:id=\"i\">X</item></doc>"));
+}
+
+#[test]
+fn a_missing_xpointer_target_uses_the_fallback() {
+  let out = expand(
+    &format!(
+      "<doc{NS}><xi:include href='parts.xml' xpointer='nope'><xi:fallback>gone</xi:fallback></xi:include></doc>"
+    ),
+    &[("file:///d/parts.xml", "<root/>")],
+  );
+  assert_eq!(out, format!("<doc{XI}>gone</doc>"));
+}
+
+#[test]
+fn xpointer_is_rejected_with_parse_text() {
+  let error = run(
+    &format!("<doc{NS}><xi:include href='n.txt' parse='text' xpointer='x'/></doc>"),
+    &[("file:///d/n.txt", "hi")],
+    XInclude::new(),
+  )
+  .unwrap_err();
+  assert_eq!(error.kind(), ErrorKind::XInclude);
+}
+
+#[test]
 fn base_fixup_records_the_included_resources_base() {
   // With fixup on, the included element carries xml:base so its own base is preserved.
   let out = run(
