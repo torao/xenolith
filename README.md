@@ -26,7 +26,9 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
 | [`xylograph-dom`](crates/xylograph-dom) | Phase 3c | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
 
-Crates for the DOM, XPath, XInclude, serializer, XSLT, EXSLT and the CLI arrive in later phases;
+| [`xylograph-serialize`](crates/xylograph-serialize) | Phase 3d | a serializer from a DOM subtree to well-formed XML text: escaping, optional XML declaration and indentation, and namespace repair (UTF-8 output) |
+
+Crates for XPath, XInclude, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
 
 ## Building

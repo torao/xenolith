@@ -9,6 +9,7 @@
 //! - [`validate`] — validation: a schema-agnostic `Validator` and the DTD validator.
 //! - [`dom`] — an arena-based DOM tree: nodes, navigation, mutation, and `dom::build` to make
 //!   one from parsed XML.
+//! - [`serialize`] — writing a DOM subtree back to XML text.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
@@ -46,6 +47,9 @@ pub use xylograph_validate as validate;
 /// The DOM tree: an arena of nodes with a W3C-shaped, Rust-idiomatic API.
 pub use xylograph_dom as dom;
 
+/// Serialization: a DOM subtree to well-formed XML text.
+pub use xylograph_serialize as serialize;
+
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};
 pub use xylograph_core::{chars, encoding, error, name, uri};
@@ -81,6 +85,14 @@ mod tests {
     let root = doc.document_element().unwrap();
     assert_eq!(doc.node_name(root), "a");
     assert_eq!(doc.text_content(root), "x");
+  }
+
+  #[test]
+  fn the_facade_serializes_a_dom() {
+    let mut doc = crate::dom::Document::new();
+    let a = doc.create_element("a").unwrap();
+    doc.append_child(doc.root(), a).unwrap();
+    assert_eq!(crate::serialize::Serializer::new().to_string(&doc, a), "<a/>");
   }
 
   #[test]

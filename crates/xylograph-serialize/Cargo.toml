@@ -1,0 +1,24 @@
+[package]
+name = "xylograph-serialize"
+description = "XML serialization for xylograph: a DOM tree to well-formed XML text, with escaping, indentation and namespace repair"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+xylograph-core = { workspace = true }
+xylograph-dom = { workspace = true }
+
+[dev-dependencies]
+xylograph-dom = { workspace = true, features = ["parse"] }
+
+[lints]
+workspace = true

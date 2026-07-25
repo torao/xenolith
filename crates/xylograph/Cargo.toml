@@ -33,6 +33,7 @@ xylograph-core = { workspace = true }
 xylograph-parser = { workspace = true }
 xylograph-validate = { workspace = true }
 xylograph-dom = { workspace = true }
+xylograph-serialize = { workspace = true }
 
 [lints]
 workspace = true

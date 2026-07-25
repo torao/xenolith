@@ -121,6 +121,7 @@ dependencies = [
  "xylograph-core",
  "xylograph-dom",
  "xylograph-parser",
+ "xylograph-serialize",
  "xylograph-validate",
 ]
 
@@ -146,6 +147,14 @@ dependencies = [
  "tokio",
  "tokio-test",
  "xylograph-core",
+]
+
+[[package]]
+name = "xylograph-serialize"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-dom",
 ]
 
 [[package]]

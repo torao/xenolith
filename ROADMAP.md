@@ -490,9 +490,14 @@ xylograph/
 - **成果物**: `build` モジュールと `base_uri`（ユニット +1、統合テスト 10）
 - **完了条件**: 代表的な文書（名前空間・DTD・PI/コメント/CDATA・xml:id・xml:base）が DOM に載り、走査・ID 検索・基底 URI 取得が通る
 
-**3d. シリアライザ**（`xylograph-serialize`）
-- XML シリアライザ（エンコーディング、エスケープ、indent、名前空間修復）
-- 完了条件: DOM → 直列化が妥当な XML を出す
+**3d. シリアライザ**（`xylograph-serialize`）✅ 完了
+- `Serializer`（ビルダー: `with_xml_declaration` / `with_standalone` / `with_indent`）で DOM 部分木を XML テキストへ。`to_string` と `write<W: io::Write>`
+- **エスケープ**: テキスト（`& < >`、`\r`）と属性値（`& < "`、`\t \n \r` を文字参照）、CDATA の `]]>` 分割
+- **名前空間修復**: 宣言が in-scope に無い接頭辞・既定名前空間を要素に補って整形式化（`create_element_ns` のみで作った木も直列化可能）。既存の xmlns 属性は重複させない
+- **indent**: 要素内容のみ字下げ（文字データを含む要素はインラインで折り返さない）、PI・コメント・DOCTYPE
+- **成果物**: `xylograph-serialize` クレート（ユニット 3 + 統合 9 + doctest 2）。ファサードから `xylograph::serialize`
+- **完了条件**: パース → DOM → 直列化が妥当な XML を出し、代表的な構造・名前空間・エスケープが往復する
+- **後続に回した点**: 出力は **UTF-8**。非 UTF / UTF-16 のバイト出力（`encoding_rs` の `encode` は UTF-16 を UTF-8 化するため独自処理が要る）は別途。DOCTYPE の public/system id は現状ビルダーが取り込まない（パーサが未公開）ため往復で欠落 → 3e で解消候補
 
 **3e. push/StAX アダプタとラウンドトリップ**
 - SAX 相当の push アダプタ、StAX Writer
