@@ -149,7 +149,15 @@ impl Alternative {
     self.priority
   }
 
-  fn matches_with<M: Model>(
+  /// Whether `node` matches this alternative alone.
+  ///
+  /// A template rule is one alternative, not a whole pattern, so the engine asks each in turn
+  /// rather than asking the pattern.
+  ///
+  /// # Errors
+  ///
+  /// Whatever evaluating a predicate raises.
+  pub fn matches_with<M: Model>(
     &self,
     model: &M,
     node: M::Node,

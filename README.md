@@ -34,7 +34,7 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
 
-| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 5a | XSLT 1.0, under construction: so far template match patterns — matching by walking a pattern's steps up from the node, and the default priorities that settle which template wins |
+| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 5b | XSLT 1.0, under construction: template match patterns, and stylesheet compilation — `xsl:import` / `xsl:include` with their import precedence, and the conflict resolution that settles which template rule applies to a node |
 
 Crates for EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
