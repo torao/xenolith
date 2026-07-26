@@ -19,5 +19,8 @@ xylograph-dom = { workspace = true, features = ["parse"] }
 xylograph-xdm = { workspace = true }
 xylograph-xpath = { workspace = true }
 
+[dev-dependencies]
+xylograph-serialize = { workspace = true }
+
 [lints]
 workspace = true

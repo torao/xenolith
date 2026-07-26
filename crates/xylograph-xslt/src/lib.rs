@@ -23,10 +23,13 @@
 //! [import precedence of §2.6.2]: https://www.w3.org/TR/1999/REC-xslt-19991116#import
 //! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
 
+mod avt;
+mod engine;
 mod loader;
 mod pattern;
 mod stylesheet;
 
+pub use engine::{DEFAULT_MAX_DEPTH, ResultTree, Transform, transform};
 pub use loader::{Loader, NoLoader};
 pub use pattern::{Alternative, Pattern};
 pub use stylesheet::{Stylesheet, Template, Variable, XSLT_NAMESPACE};

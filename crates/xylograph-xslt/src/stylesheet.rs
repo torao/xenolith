@@ -549,7 +549,7 @@ fn read_priority(text: &str) -> Result<f64> {
 ///
 /// A prefix written in a pattern or an expression means what the stylesheet's own declarations
 /// say it means, so they have to be gathered from the element the expression was written on.
-fn in_scope_namespaces(document: &Document, element: NodeId) -> Namespaces {
+pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Namespaces {
   let mut namespaces = Namespaces::new();
   let mut bound: Vec<String> = Vec::new();
   let mut current = Some(element);

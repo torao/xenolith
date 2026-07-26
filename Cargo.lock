@@ -474,6 +474,7 @@ version = "0.0.0"
 dependencies = [
  "xylograph-core",
  "xylograph-dom",
+ "xylograph-serialize",
  "xylograph-xdm",
  "xylograph-xpath",
 ]

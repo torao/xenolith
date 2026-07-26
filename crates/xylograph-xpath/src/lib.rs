@@ -182,6 +182,20 @@ pub fn evaluate_with<M: Model>(
   eval::eval(expr, &context)
 }
 
+/// Evaluates an expression tree in a context the caller put together.
+///
+/// The other entry points evaluate a node on its own, at position 1 of a set of 1. XSLT needs
+/// more than that: inside `xsl:for-each`, `position()` and `last()` report where the node sits
+/// in the list being processed, so the caller has to say. Build the context with
+/// [`Context::new`] and move it with [`Context::at`].
+///
+/// # Errors
+///
+/// As [`evaluate`].
+pub fn evaluate_in<M: Model>(expr: &Expr, context: &Context<'_, M>) -> Result<Value<M::Node>> {
+  eval::eval(expr, context)
+}
+
 /// Selects the nodes one [`Step`] reaches from `node`: the axis walked, the node test applied,
 /// then the predicates, in document order.
 ///
