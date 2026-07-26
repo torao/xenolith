@@ -16,10 +16,10 @@
 //! attribute value templates run throughout.
 //!
 //! On top of XPath's own functions, the expressions in a stylesheet can call the ones XSLT adds
-//! in [`functions`](crate::functions) — `current()`, `generate-id()`, `system-property()`,
-//! `element-available()` and `function-available()`.
+//! in [`functions`](crate::functions) — `current()`, `key()`, `generate-id()`,
+//! `system-property()`, `element-available()` and `function-available()`.
 //!
-//! What is still missing is `xsl:sort`, `xsl:key`, `xsl:number`, `xsl:decimal-format`,
+//! What is still missing is `xsl:sort`, `xsl:number`, `xsl:decimal-format`,
 //! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
 //! half-runs in silence — and `element-available()` says so beforehand, from the same list.
@@ -267,6 +267,9 @@ impl Transform {
       max_depth: self.max_depth,
     };
     engine.bind_global_variables(node)?;
+    // Keys are built before the walk: a global variable may call key(), and a key's `use` may
+    // read a global variable, so the variables go first and then the tables.
+    engine.build_keys(node)?;
     engine.apply(Focus { node, position: 1, size: 1 }, None)?;
     Ok(ResultTree { document: engine.output, root, messages: engine.messages })
   }
@@ -321,7 +324,7 @@ impl<M: Model> Engine<'_, M> {
       let message = format!("the transformation is more than {} templates deep", self.max_depth);
       return Err(Error::new(ErrorKind::Xslt, message));
     }
-    let matched = self.stylesheet.template_for(self.model, focus.node, mode)?;
+    let matched = self.stylesheet.template_for_using(self.model, focus.node, mode, self.running.as_ref())?;
     let Some(template) = matched else {
       return self.built_in(focus, mode);
     };
@@ -442,7 +445,7 @@ impl<M: Model> Engine<'_, M> {
       "copy-of" => self.copy_of(module, element, focus),
       "message" => self.message(module, element, focus),
       // A top-level declaration reached here is not an instruction; it was read at compile time.
-      "attribute-set" | "output" | "import" | "include" | "template" => Ok(()),
+      "attribute-set" | "output" | "import" | "include" | "template" | "key" => Ok(()),
       other => self.not_implemented(other),
     }
   }
@@ -573,7 +576,7 @@ impl<M: Model> Engine<'_, M> {
       let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
       let matched: Option<(usize, NodeId)> = self
         .stylesheet
-        .template_for(self.model, inner.node, mode.as_deref())?
+        .template_for_using(self.model, inner.node, mode.as_deref(), self.running.as_ref())?
         .map(|template: &Template| (template.module(), template.element()));
       match matched {
         Some((template_module, template_element)) => {
@@ -970,6 +973,49 @@ impl<M: Model> Engine<'_, M> {
     Ok(())
   }
 
+  /// Fills the key tables `key()` reads (XSLT 1.0 §12.2).
+  ///
+  /// Every node of the tree is offered to every key's pattern, and a node the pattern covers has
+  /// the key's `use` expression evaluated over it. Doing this up front rather than when a key is
+  /// first asked for is what lets `key()` be a plain lookup: building a table needs the
+  /// stylesheet and the model, and a registered function can hold neither.
+  fn build_keys(&mut self, root: M::Node) -> Result<()> {
+    if self.stylesheet.keys().is_empty() {
+      return Ok(());
+    }
+    let mut nodes = Vec::new();
+    gather(self.model, self.model.root(root), &mut nodes);
+
+    for index in 0..self.stylesheet.keys().len() {
+      let key = &self.stylesheet.keys()[index];
+      let (namespace, local) = (key.namespace().map(ToOwned::to_owned), key.name().to_owned());
+      let (module, element) = (key.module(), key.element());
+      let use_expression = key.use_expression().to_owned();
+      let namespaces = key.namespaces().clone();
+      let pattern = key.pattern().clone();
+
+      for node in &nodes {
+        let variables = self.variables();
+        // A key's own `match` may not itself be anchored at a key — §12.2 forbids it — so the
+        // tables being half-filled here cannot be observed.
+        if !pattern.matches_with(self.model, *node, &namespaces, &variables)? {
+          continue;
+        }
+        let focus = Focus { node: *node, position: 1, size: 1 };
+        // §12.2: a `use` that gives a node-set puts the node under each of its nodes' string
+        // values, so one node can be found by several keys.
+        let values = match self.evaluate(&use_expression, module, element, focus)? {
+          Value::NodeSet(found) => found.iter().map(|found| self.model.string_value(*found)).collect(),
+          other => vec![other.string(self.model)],
+        };
+        for value in values {
+          self.running.add_key_entry(namespace.as_deref(), &local, &value, *node);
+        }
+      }
+    }
+    Ok(())
+  }
+
   /// Evaluates an expression written on a stylesheet element.
   fn evaluate(
     &mut self,
@@ -1076,6 +1122,18 @@ impl<M: Model> Engine<'_, M> {
       .attribute(element, attribute)
       .map(ToOwned::to_owned)
       .ok_or_else(|| Error::new(ErrorKind::Xslt, format!("{what} needs a {attribute}")))
+  }
+}
+
+/// Collects a node and everything below it, attributes included.
+///
+/// A key may cover an attribute as readily as an element, so the walk visits the attribute axis
+/// too. Namespace nodes are left out: a pattern cannot select one.
+fn gather<M: Model>(model: &M, node: M::Node, into: &mut Vec<M::Node>) {
+  into.push(node);
+  into.extend(model.attributes(node));
+  for child in model.children(node) {
+    gather(model, child, into);
   }
 }
 

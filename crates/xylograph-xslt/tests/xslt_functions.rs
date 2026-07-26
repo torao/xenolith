@@ -119,8 +119,10 @@ fn function_available_asks_the_registry_rather_than_a_list() {
   assert_eq!(value_of("function-available('substring-before')", "<a/>"), "true");
   assert_eq!(value_of("function-available('current')", "<a/>"), "true");
   assert_eq!(value_of("function-available('generate-id')", "<a/>"), "true");
-  // XSLT's, but not built yet.
-  assert_eq!(value_of("function-available('key')", "<a/>"), "false");
+  assert_eq!(value_of("function-available('key')", "<a/>"), "true");
+  // XSLT's, but not built yet — and this answer turns true of its own accord when it is,
+  // because the registry is what is asked.
+  assert_eq!(value_of("function-available('format-number')", "<a/>"), "false");
   assert_eq!(value_of("function-available('nosuch')", "<a/>"), "false");
 }
 

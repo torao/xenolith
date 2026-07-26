@@ -13,10 +13,13 @@
 //! # Specifications
 //!
 //! - [`current()` (§12.4)], [`generate-id()` (§12.4)], [`system-property()` (§12.4)]
+//! - [`key()` and `xsl:key` (§12.2)] — the tables it reads are filled by the engine before the
+//!   walk begins
 //! - [`element-available()` and `function-available()` (§15)] — the two that let a stylesheet ask
 //!   what the processor can do before it relies on it
 //!
 //! [`current()` (§12.4)]: https://www.w3.org/TR/1999/REC-xslt-19991116#function-current
+//! [`key()` and `xsl:key` (§12.2)]: https://www.w3.org/TR/1999/REC-xslt-19991116#key
 //! [`generate-id()` (§12.4)]: https://www.w3.org/TR/1999/REC-xslt-19991116#function-generate-id
 //! [`system-property()` (§12.4)]: https://www.w3.org/TR/1999/REC-xslt-19991116#function-system-property
 //! [`element-available()` and `function-available()` (§15)]: https://www.w3.org/TR/1999/REC-xslt-19991116#function-element-available
@@ -29,6 +32,7 @@ use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_xdm::Model;
 use xylograph_xpath::{Context, Functions, Value, is_core_function};
 
+use crate::pattern::KeyTable;
 use crate::stylesheet::XSLT_NAMESPACE;
 
 /// What the transformation is doing, as far as the XSLT functions need to know.
@@ -47,12 +51,31 @@ pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   current: Cell<Option<N>>,
   /// The identifiers `generate-id()` has handed out, so that a node keeps the one it was given.
   identifiers: RefCell<HashMap<N, String>>,
+  /// What `key()` looks in: the nodes found by a key name and a value.
+  ///
+  /// Built before the transformation starts rather than when a key is first asked for. Building
+  /// one means walking the whole tree testing a pattern, which needs the stylesheet and the
+  /// model — neither of which a registered function can hold, since both are borrowed. Nodes
+  /// are what comes out, and a node handle owns nothing, so the table can be kept here.
+  keys: RefCell<HashMap<KeyEntry, Vec<N>>>,
 }
+
+/// A key name and the value being looked up, which is what indexes a key table.
+type KeyEntry = (Option<String>, String, String);
 
 impl<N: Copy + Eq + std::hash::Hash> Running<N> {
   /// A transformation that has not started.
   pub(crate) fn new() -> Self {
-    Self { current: Cell::new(None), identifiers: RefCell::new(HashMap::new()) }
+    Self { current: Cell::new(None), identifiers: RefCell::new(HashMap::new()), keys: RefCell::new(HashMap::new()) }
+  }
+
+  /// Records that `node` is found by `value` under a key name.
+  ///
+  /// §12.2 has every `xsl:key` of a name contribute, and a node may be reached by more than one
+  /// value, so entries add up rather than replace.
+  pub(crate) fn add_key_entry(&self, namespace: Option<&str>, local: &str, value: &str, node: N) {
+    let entry = (namespace.map(ToOwned::to_owned), local.to_owned(), value.to_owned());
+    self.keys.borrow_mut().entry(entry).or_default().push(node);
   }
 
   /// Records the node the instruction about to run is working on.
@@ -73,6 +96,14 @@ impl<N: Copy + Eq + std::hash::Hash> Running<N> {
   }
 }
 
+/// The key tables are also what a pattern beginning `key(…)` is matched against.
+impl<N: Copy + Eq + std::hash::Hash> KeyTable<N> for Running<N> {
+  fn lookup(&self, namespace: Option<&str>, local: &str, value: &str) -> Vec<N> {
+    let entry = (namespace.map(ToOwned::to_owned), local.to_owned(), value.to_owned());
+    self.keys.borrow().get(&entry).cloned().unwrap_or_default()
+  }
+}
+
 /// Adds XSLT's own functions to the ones the caller supplied.
 ///
 /// `instructions` is what the engine will actually run, so that `element-available()` answers
@@ -84,8 +115,32 @@ pub(crate) fn register<M: Model>(
 ) -> Functions<M> {
   let for_current = Rc::clone(running);
   let for_identifier = Rc::clone(running);
+  let for_key = Rc::clone(running);
 
   functions
+    .with("", "key", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
+      arity("key", &arguments, 2, Some(2))?;
+      let (namespace, local) = expand(&arguments[0].string(context.model), context)?;
+      // §12.2: a node-set second argument asks for the union over each of its nodes' string
+      // values, which is what makes `key('k', $set)` a join rather than a single lookup.
+      let wanted: Vec<String> = match &arguments[1] {
+        Value::NodeSet(nodes) => nodes.iter().map(|node| context.model.string_value(*node)).collect(),
+        other => vec![other.string(context.model)],
+      };
+      let table = for_key.keys.borrow();
+      let mut found: Vec<M::Node> = Vec::new();
+      for value in wanted {
+        let entry = (namespace.clone(), local.clone(), value);
+        if let Some(nodes) = table.get(&entry) {
+          found.extend(nodes.iter().copied());
+        }
+      }
+      // A node-set holds each node once and comes out in document order, however the values
+      // that reached it were spelled.
+      found.sort_by(|a, b| context.model.document_order(*a, *b));
+      found.dedup();
+      Ok(Value::NodeSet(found))
+    })
     .with("", "current", move |arguments: Vec<Value<M::Node>>, _: &Context<'_, M>| {
       arity("current", &arguments, 0, Some(0))?;
       // There is always a current node once a transformation is running, and these functions

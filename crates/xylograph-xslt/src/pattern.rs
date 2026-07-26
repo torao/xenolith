@@ -90,6 +90,9 @@ impl Pattern {
   /// Whether `node` matches any alternative, with the given bindings in scope for the
   /// predicates.
   ///
+  /// No key tables, so an alternative beginning `key(…)` matches nothing; use
+  /// [`matches_using`](Self::matches_using) where they exist.
+  ///
   /// # Errors
   ///
   /// Whatever evaluating a predicate raises — an unbound variable or prefix, say.
@@ -100,12 +103,48 @@ impl Pattern {
     namespaces: &Namespaces,
     variables: &Variables<M::Node>,
   ) -> Result<bool> {
+    self.matches_using(model, node, namespaces, variables, &NoKeys)
+  }
+
+  /// Whether `node` matches any alternative, with key tables for an alternative that begins
+  /// `key(…)`.
+  ///
+  /// # Errors
+  ///
+  /// As [`matches_with`](Self::matches_with).
+  pub fn matches_using<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    namespaces: &Namespaces,
+    variables: &Variables<M::Node>,
+    keys: &dyn KeyTable<M::Node>,
+  ) -> Result<bool> {
     for alternative in &self.alternatives {
-      if alternative.matches_with(model, node, namespaces, variables)? {
+      if alternative.matches_using(model, node, namespaces, variables, keys)? {
         return Ok(true);
       }
     }
     Ok(false)
+  }
+}
+
+/// Where a pattern that begins `key('name', 'value')` looks (XSLT 1.0 §5.2, §12.2).
+///
+/// A pattern can be written and compiled without a transformation, but it cannot be *matched*
+/// against a key without the tables one built. This is how they are handed over, so that a
+/// pattern needs no knowledge of the engine that fills them.
+pub trait KeyTable<N> {
+  /// The nodes a key name and value find, in any order.
+  fn lookup(&self, namespace: Option<&str>, local: &str, value: &str) -> Vec<N>;
+}
+
+/// The tables of a caller who has none: every lookup is empty.
+pub(crate) struct NoKeys;
+
+impl<N> KeyTable<N> for NoKeys {
+  fn lookup(&self, _namespace: Option<&str>, _local: &str, _value: &str) -> Vec<N> {
+    Vec::new()
   }
 }
 
@@ -126,8 +165,8 @@ enum Anchor {
   Root,
   /// Written `id('...')/...`.
   Id(String),
-  /// Written `key('name', 'value')/...`. Matching needs the stylesheet's key tables, which do
-  /// not exist yet, so an alternative anchored this way never matches.
+  /// Written `key('name', 'value')/...`. Matching asks the [`KeyTable`] the caller supplies; a
+  /// caller with none finds nothing.
   Key { name: String, value: String },
 }
 
@@ -152,7 +191,8 @@ impl Alternative {
   /// Whether `node` matches this alternative alone.
   ///
   /// A template rule is one alternative, not a whole pattern, so the engine asks each in turn
-  /// rather than asking the pattern.
+  /// rather than asking the pattern. No key tables — see
+  /// [`matches_using`](Self::matches_using).
   ///
   /// # Errors
   ///
@@ -164,12 +204,28 @@ impl Alternative {
     namespaces: &Namespaces,
     variables: &Variables<M::Node>,
   ) -> Result<bool> {
+    self.matches_using(model, node, namespaces, variables, &NoKeys)
+  }
+
+  /// Whether `node` matches this alternative alone, with key tables available.
+  ///
+  /// # Errors
+  ///
+  /// Whatever evaluating a predicate raises.
+  pub fn matches_using<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    namespaces: &Namespaces,
+    variables: &Variables<M::Node>,
+    keys: &dyn KeyTable<M::Node>,
+  ) -> Result<bool> {
     // A pattern with no steps is `/`, `id('x')` or `key(...)`, and asks a different question:
     // not whether the node hangs below the anchor, but whether it *is* the anchor.
     let Some(last) = self.steps.len().checked_sub(1) else {
-      return Ok(self.is_anchor_target(model, node));
+      return Ok(self.is_anchor_target(model, node, namespaces, keys));
     };
-    self.matches_from(model, node, last, namespaces, variables)
+    self.matches_from(model, node, last, namespaces, variables, keys)
   }
 
   /// Whether `node` matches the step at `index`, and the steps to its left match its ancestors.
@@ -180,20 +236,21 @@ impl Alternative {
     index: usize,
     namespaces: &Namespaces,
     variables: &Variables<M::Node>,
+    keys: &dyn KeyTable<M::Node>,
   ) -> Result<bool> {
     let step = &self.steps[index];
     if !step_matches(model, node, step, namespaces, variables)? {
       return Ok(false);
     }
     let Some(next) = index.checked_sub(1) else {
-      return Ok(self.anchor_holds(model, node, step.after_any_ancestor));
+      return Ok(self.anchor_holds(model, node, step.after_any_ancestor, namespaces, keys));
     };
     if step.after_any_ancestor {
       // A `//` stood here, so the step to the left may match any ancestor. Trying them in turn
       // is a search, but only up the one chain of ancestors.
       let mut current = model.parent(node);
       while let Some(ancestor) = current {
-        if self.matches_from(model, ancestor, next, namespaces, variables)? {
+        if self.matches_from(model, ancestor, next, namespaces, variables, keys)? {
           return Ok(true);
         }
         current = model.parent(ancestor);
@@ -201,20 +258,25 @@ impl Alternative {
       return Ok(false);
     }
     match model.parent(node) {
-      Some(parent) => self.matches_from(model, parent, next, namespaces, variables),
+      Some(parent) => self.matches_from(model, parent, next, namespaces, variables, keys),
       None => Ok(false),
     }
   }
 
   /// Whether the node *is* what the anchor names, for a pattern that has no steps at all.
-  fn is_anchor_target<M: Model>(&self, model: &M, node: M::Node) -> bool {
+  fn is_anchor_target<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    namespaces: &Namespaces,
+    keys: &dyn KeyTable<M::Node>,
+  ) -> bool {
     match &self.anchor {
       // A relative pattern always has at least one step, so this cannot arise.
       Anchor::Anywhere => false,
       Anchor::Root => node == model.root(node),
       Anchor::Id(id) => model.element_by_id(id) == Some(node),
-      // The key tables arrive with the stylesheet; until then nothing matches.
-      Anchor::Key { .. } => false,
+      Anchor::Key { name, value } => self.key_nodes(name, value, namespaces, keys).contains(&node),
     }
   }
 
@@ -222,28 +284,58 @@ impl Alternative {
   ///
   /// `loose` is true when a `//` stood before that step, which lets any ancestor satisfy the
   /// anchor rather than the immediate parent.
-  fn anchor_holds<M: Model>(&self, model: &M, node: M::Node, loose: bool) -> bool {
+  fn anchor_holds<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    loose: bool,
+    namespaces: &Namespaces,
+    keys: &dyn KeyTable<M::Node>,
+  ) -> bool {
     match &self.anchor {
       Anchor::Anywhere => true,
       // Everything descends from the root, so `//a` is satisfied by any `a` at all.
       Anchor::Root => loose || model.parent(node) == Some(model.root(node)),
       Anchor::Id(id) => {
         let Some(target) = model.element_by_id(id) else { return false };
-        let mut current = model.parent(node);
-        if !loose {
-          return current == Some(target);
-        }
-        while let Some(ancestor) = current {
-          if ancestor == target {
-            return true;
-          }
-          current = model.parent(ancestor);
-        }
-        false
+        descends_from(model, node, target, loose)
       }
-      Anchor::Key { .. } => false,
+      // `key()` may find several nodes where `id()` finds at most one, so any of them will do.
+      Anchor::Key { name, value } => self
+        .key_nodes(name, value, namespaces, keys)
+        .into_iter()
+        .any(|target| descends_from(model, node, target, loose)),
     }
   }
+
+  /// The nodes a `key('name', 'value')` anchor names, its prefix resolved.
+  ///
+  /// An unbound prefix finds nothing rather than raising: this sits inside a boolean answer, and
+  /// a pattern that cannot name anything matches nothing, which is the same outcome.
+  fn key_nodes<N>(&self, name: &str, value: &str, namespaces: &Namespaces, keys: &dyn KeyTable<N>) -> Vec<N> {
+    match name.split_once(':') {
+      None => keys.lookup(None, name, value),
+      Some((prefix, local)) => match namespaces.get(prefix) {
+        Some(namespace) => keys.lookup(Some(namespace), local, value),
+        None => Vec::new(),
+      },
+    }
+  }
+}
+
+/// Whether `node` hangs below `target`: directly, or anywhere below it when `loose`.
+fn descends_from<M: Model>(model: &M, node: M::Node, target: M::Node, loose: bool) -> bool {
+  let mut current = model.parent(node);
+  if !loose {
+    return current == Some(target);
+  }
+  while let Some(ancestor) = current {
+    if ancestor == target {
+      return true;
+    }
+    current = model.parent(ancestor);
+  }
+  false
 }
 
 /// Whether one node passes one step of a pattern.

@@ -16,7 +16,7 @@ use xylograph_xdm::Model;
 use xylograph_xpath::{Namespaces, Variables};
 
 use crate::loader::{Loader, NoLoader};
-use crate::pattern::Pattern;
+use crate::pattern::{KeyTable, NoKeys, Pattern};
 
 /// The namespace that marks an element as an XSLT instruction rather than a result element.
 pub const XSLT_NAMESPACE: &str = "http://www.w3.org/1999/XSL/Transform";
@@ -56,7 +56,68 @@ pub struct Stylesheet {
   templates: Vec<Template>,
   variables: Vec<Variable>,
   attribute_sets: Vec<AttributeSet>,
+  keys: Vec<Key>,
   output: OutputMethod,
+}
+
+/// An `xsl:key`: which nodes it covers, and what value each is found by (XSLT 1.0 §12.2).
+///
+/// A key is not a declaration one of which wins. Every `xsl:key` of a name contributes, whatever
+/// its import precedence, so a name may be declared several times over and the entries add up —
+/// which is why there is no precedence here.
+#[derive(Debug)]
+pub struct Key {
+  name: String,
+  namespace: Option<String>,
+  pattern: Pattern,
+  use_expression: String,
+  module: usize,
+  element: NodeId,
+  namespaces: Namespaces,
+}
+
+impl Key {
+  /// Its local name.
+  #[must_use]
+  pub fn name(&self) -> &str {
+    &self.name
+  }
+
+  /// The namespace its name is in, if the name was written with a prefix.
+  #[must_use]
+  pub fn namespace(&self) -> Option<&str> {
+    self.namespace.as_deref()
+  }
+
+  /// The pattern saying which nodes the key covers.
+  #[must_use]
+  pub const fn pattern(&self) -> &Pattern {
+    &self.pattern
+  }
+
+  /// The `use` expression, evaluated with a covered node as the context node.
+  #[must_use]
+  pub fn use_expression(&self) -> &str {
+    &self.use_expression
+  }
+
+  /// Which of the stylesheet's [documents](Stylesheet::document) it is in.
+  #[must_use]
+  pub const fn module(&self) -> usize {
+    self.module
+  }
+
+  /// The `xsl:key` element itself.
+  #[must_use]
+  pub const fn element(&self) -> NodeId {
+    self.element
+  }
+
+  /// The namespace bindings its pattern and `use` expression are read against.
+  #[must_use]
+  pub const fn namespaces(&self) -> &Namespaces {
+    &self.namespaces
+  }
 }
 
 /// A named set of attributes, which `use-attribute-sets` adds to an element.
@@ -135,16 +196,17 @@ impl Stylesheet {
   ///
   /// # Note on what is read
   ///
-  /// The top-level elements this phase understands are `xsl:import`, `xsl:include`,
-  /// `xsl:template`, `xsl:variable` and `xsl:param`. Other XSLT top-level elements —
-  /// `xsl:output`, `xsl:key`, `xsl:strip-space` and the rest — are read past without complaint;
-  /// they arrive in later phases. See `ROADMAP.md`.
+  /// The top-level elements read here are `xsl:import`, `xsl:include`, `xsl:template`,
+  /// `xsl:variable`, `xsl:param`, `xsl:attribute-set`, `xsl:key` and `xsl:output`. The rest —
+  /// `xsl:strip-space`, `xsl:decimal-format`, `xsl:namespace-alias` — are read past without
+  /// complaint; they arrive in later phases. See `ROADMAP.md`.
   pub fn compile_with<L: Loader>(source: &[u8], system_id: &str, loader: &mut L) -> Result<Self> {
     let mut stylesheet = Self {
       modules: Vec::new(),
       templates: Vec::new(),
       variables: Vec::new(),
       attribute_sets: Vec::new(),
+      keys: Vec::new(),
       output: OutputMethod::default(),
     };
     let principal = stylesheet.load_module(source, system_id)?;
@@ -185,6 +247,15 @@ impl Stylesheet {
   #[must_use]
   pub fn attribute_sets(&self) -> &[AttributeSet] {
     &self.attribute_sets
+  }
+
+  /// Every `xsl:key` the stylesheet declares, in declaration order.
+  ///
+  /// All of them count: §12.2 has the declarations of a name add their entries together rather
+  /// than one of them winning.
+  #[must_use]
+  pub fn keys(&self) -> &[Key] {
+    &self.keys
   }
 
   /// The method `xsl:output` asked the result to be written by, `xml` if it said nothing.
@@ -233,6 +304,24 @@ impl Stylesheet {
   ///
   /// Whatever evaluating a pattern's predicates raises.
   pub fn template_for<M: Model>(&self, model: &M, node: M::Node, mode: Option<&str>) -> Result<Option<&Template>> {
+    self.template_for_using(model, node, mode, &NoKeys)
+  }
+
+  /// The template rule that applies to `node` in `mode`, with key tables available.
+  ///
+  /// A rule whose pattern begins `key(…)` needs the tables a transformation built, so `keys` is
+  /// how the engine passes them; [`template_for`](Self::template_for) is this with none.
+  ///
+  /// # Errors
+  ///
+  /// Whatever evaluating a pattern's predicates raises.
+  pub fn template_for_using<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    mode: Option<&str>,
+    keys: &dyn KeyTable<M::Node>,
+  ) -> Result<Option<&Template>> {
     let variables = Variables::new();
     let mut best: Option<&Template> = None;
     for template in &self.templates {
@@ -240,7 +329,8 @@ impl Stylesheet {
         continue;
       }
       let Some(pattern) = &template.pattern else { continue };
-      if !pattern.alternatives()[template.alternative].matches_with(model, node, &template.namespaces, &variables)? {
+      let alternative = &pattern.alternatives()[template.alternative];
+      if !alternative.matches_using(model, node, &template.namespaces, &variables, keys)? {
         continue;
       }
       let better = match best {
@@ -364,6 +454,10 @@ impl Stylesheet {
           let precedence = self.modules[module].precedence;
           self.attribute_sets.push(AttributeSet { name, precedence, module, element });
         }
+        "key" => {
+          let key = self.read_key(module, element)?;
+          self.keys.push(key);
+        }
         "output" => {
           if let Some(method) = self.modules[module].document.attribute(element, "method") {
             self.output = match method {
@@ -445,6 +539,41 @@ impl Stylesheet {
         })
         .collect(),
     )
+  }
+
+  /// Reads a top-level `xsl:key`.
+  ///
+  /// The name is a QName, so the prefix is resolved here, against what is in scope where the
+  /// key was written — the same reasoning as for a pattern's prefixes. A stylesheet and the
+  /// expression that calls `key()` may spell the same namespace with different prefixes.
+  fn read_key(&self, module: usize, element: NodeId) -> Result<Key> {
+    let document = &self.modules[module].document;
+    let namespaces = in_scope_namespaces(document, element);
+    let Some(name) = document.attribute(element, "name") else {
+      return Err(xslt_error("xsl:key needs a name"));
+    };
+    let Some(match_attribute) = document.attribute(element, "match") else {
+      return Err(xslt_error("xsl:key needs a match"));
+    };
+    let Some(use_expression) = document.attribute(element, "use") else {
+      return Err(xslt_error("xsl:key needs a use"));
+    };
+    let (namespace, local) = match name.split_once(':') {
+      None => (None, name.to_owned()),
+      Some((prefix, local)) => match namespaces.get(prefix) {
+        Some(namespace) => (Some(namespace.to_owned()), local.to_owned()),
+        None => return Err(xslt_error(format!("the prefix {prefix:?} of the key name {name:?} is not bound"))),
+      },
+    };
+    Ok(Key {
+      name: local,
+      namespace,
+      pattern: Pattern::compile(match_attribute)?,
+      use_expression: use_expression.to_owned(),
+      module,
+      element,
+      namespaces,
+    })
   }
 
   /// Reads a top-level `xsl:variable` or `xsl:param`.
