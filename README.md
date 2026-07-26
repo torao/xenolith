@@ -34,7 +34,9 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
 
-Crates for the XPath evaluator, XSLT, EXSLT and the CLI arrive in later phases;
+| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 5a | XSLT 1.0, under construction: so far template match patterns — matching by walking a pattern's steps up from the node, and the default priorities that settle which template wins |
+
+Crates for EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
 
 ## Building
@@ -92,11 +94,12 @@ was written against — `/TR/xml/` moves, `/TR/2008/REC-xml-20081126/` does not.
 | [XPointer Framework](https://www.w3.org/TR/2003/REC-xptr-framework-20030325/), [`element()`](https://www.w3.org/TR/2003/REC-xptr-element-20030325/), [`xmlns()`](https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/) | REC 2003-03-25 | `-xinclude` |
 | [XML Base (Second Edition)](https://www.w3.org/TR/2009/REC-xmlbase-20090128/) | REC 2009-01-28 | `-parser`, `-dom`, `-xinclude` |
 | [xml:id 1.0](https://www.w3.org/TR/2005/REC-xml-id-20050909/) | REC 2005-09-09 | `-parser`, `-validate` |
+| [XSLT 1.0](https://www.w3.org/TR/1999/REC-xslt-19991116) | REC 1999-11-16 | `-xslt` |
 | [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | STD 66, 2005-01 | `-core` |
 
 Section numbers appear in the code beside the rules they implement, so a claim like "§4.4 says a
-half rounds towards positive infinity" can be checked against the paragraph it cites. XSLT 1.0
-and EXSLT arrive in later phases; see the roadmap.
+half rounds towards positive infinity" can be checked against the paragraph it cites. EXSLT
+arrives in a later phase; see the roadmap.
 
 ## Conformance
 

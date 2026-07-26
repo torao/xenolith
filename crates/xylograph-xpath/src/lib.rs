@@ -181,3 +181,24 @@ pub fn evaluate_with<M: Model>(
   let context = Context::new(model, node, namespaces, variables);
   eval::eval(expr, &context)
 }
+
+/// Selects the nodes one [`Step`] reaches from `node`: the axis walked, the node test applied,
+/// then the predicates, in document order.
+///
+/// This is what an XSLT pattern is settled with. Whether a node matches `a[1]` is not a question
+/// about the node alone — it is whether `child::a[1]`, asked of the node's parent, selects it —
+/// so a pattern needs to run a single step and look for the node in the answer.
+///
+/// # Errors
+///
+/// As [`evaluate`], for the predicates.
+pub fn evaluate_step<M: Model>(
+  step: &Step,
+  model: &M,
+  node: M::Node,
+  namespaces: &Namespaces,
+  variables: &Variables<M::Node>,
+) -> Result<Vec<M::Node>> {
+  let context = Context::new(model, node, namespaces, variables);
+  eval::eval_step(step, &[node], &context)
+}

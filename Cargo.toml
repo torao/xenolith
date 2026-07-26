@@ -23,6 +23,7 @@ xylograph-serialize = { version = "0.0.0", path = "crates/xylograph-serialize", 
 xylograph-xinclude = { version = "0.0.0", path = "crates/xylograph-xinclude", default-features = false }
 xylograph-xdm = { version = "0.0.0", path = "crates/xylograph-xdm", default-features = false }
 xylograph-xpath = { version = "0.0.0", path = "crates/xylograph-xpath", default-features = false }
+xylograph-xslt = { version = "0.0.0", path = "crates/xylograph-xslt", default-features = false }
 encoding_rs = "0.8"
 # Only `AsyncRead` is needed; the runtime is the caller's business.
 tokio = { version = "1", default-features = false, features = ["io-util"] }

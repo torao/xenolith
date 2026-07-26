@@ -211,7 +211,7 @@ fn eval_path<M: Model>(path: &Path, context: &Context<'_, M>) -> Result<Vec<M::N
 }
 
 /// Applies one step to every node a path has reached so far.
-fn eval_step<M: Model>(step: &Step, from: &[M::Node], context: &Context<'_, M>) -> Result<Vec<M::Node>> {
+pub(crate) fn eval_step<M: Model>(step: &Step, from: &[M::Node], context: &Context<'_, M>) -> Result<Vec<M::Node>> {
   let mut result = Vec::new();
   for node in from {
     // The axis is walked in its own order, since that is the order predicates count in.

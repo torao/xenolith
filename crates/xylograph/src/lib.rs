@@ -11,7 +11,8 @@
 //!   one from parsed XML.
 //! - [`serialize`] — writing a DOM subtree back to XML text.
 //! - [`xdm`] — the XPath data model: a node-model trait and its DOM implementation.
-//! - [`xpath`] — XPath 1.0: parsing an expression into a tree.
+//! - [`xpath`] — XPath 1.0: compiling an expression and evaluating it.
+//! - [`xslt`] — XSLT 1.0, under construction: so far, template match patterns.
 //! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
@@ -89,6 +90,9 @@ pub use xylograph_xdm as xdm;
 
 /// XPath 1.0: the lexer, the parser, and the expression tree.
 pub use xylograph_xpath as xpath;
+
+/// XSLT 1.0. Being built up a phase at a time; so far, template match patterns.
+pub use xylograph_xslt as xslt;
 
 /// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
 #[cfg(feature = "xinclude")]

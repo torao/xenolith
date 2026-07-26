@@ -398,6 +398,7 @@ dependencies = [
  "xylograph-xdm",
  "xylograph-xinclude",
  "xylograph-xpath",
+ "xylograph-xslt",
 ]
 
 [[package]]
@@ -465,6 +466,16 @@ dependencies = [
  "xylograph-core",
  "xylograph-dom",
  "xylograph-xdm",
+]
+
+[[package]]
+name = "xylograph-xslt"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-dom",
+ "xylograph-xdm",
+ "xylograph-xpath",
 ]
 
 [[package]]

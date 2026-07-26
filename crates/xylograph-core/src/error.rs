@@ -151,6 +151,8 @@ pub enum ErrorKind {
   XInclude,
   /// An XPath expression could not be parsed, or failed while being evaluated.
   XPath,
+  /// A stylesheet is not one XSLT allows, or a transformation could not be carried out.
+  Xslt,
   /// The requested capability was not compiled in; see the crate's feature flags.
   UnsupportedFeature,
   /// A bug in xylograph. Build these with [`Error::internal`].
@@ -170,6 +172,7 @@ impl fmt::Display for ErrorKind {
       Self::Limit => "limit exceeded",
       Self::XInclude => "XInclude error",
       Self::XPath => "XPath error",
+      Self::Xslt => "XSLT error",
       Self::UnsupportedFeature => "unsupported feature",
       Self::Internal => "internal error",
     })
