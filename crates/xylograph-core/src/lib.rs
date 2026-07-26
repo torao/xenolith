@@ -46,6 +46,22 @@
 //!   `encoding_rs`. With it off, [`encoding::decoder_for`] reports
 //!   [`ErrorKind::UnsupportedFeature`] rather than silently falling back.
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation 26 November 2008. [`chars`] is its character
+//!   classes and productions; [`encoding`] its §4.3.3 rules for reading a document's encoding.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation 8 December 2009. [`name`] is
+//!   its `QName`, prefix and expanded-name model.
+//! - [RFC 3986] — Uniform Resource Identifier (URI): Generic Syntax, January 2005. [`uri`] is
+//!   its §5.3 reference resolution.
+//!
+//! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
+//! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
+//! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
+
 pub mod chars;
 pub mod encoding;
 pub mod error;

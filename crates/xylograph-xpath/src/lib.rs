@@ -71,6 +71,30 @@
 //! boolean and number functions. Extension functions, which is what a function name with a
 //! prefix is, are not: registering those comes with XSLT.
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [XPath 1.0] — W3C Recommendation 16 November 1999. The grammar and its [lexical rules
+//!   (§3.7)], the [expressions (§3)], and the [core function library (§4)]. Section numbers
+//!   appear in the code beside the rules they implement.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation 8 December 2009, for what a
+//!   prefix in a name test or a variable name means.
+//! - `javax.xml.xpath` — the API's shape, so that what a Java caller knows carries over; see the
+//!   table above. The [package documentation] is the reference.
+//!
+//! Where the specification allows a choice — how many digits a number is written with, the order
+//! of the attribute axis — what this crate picks is recorded in the behaviour report; see the
+//! README.
+//!
+//! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
+//! [lexical rules (§3.7)]: https://www.w3.org/TR/1999/REC-xpath-19991116/#exprlex
+//! [expressions (§3)]: https://www.w3.org/TR/1999/REC-xpath-19991116/#section-Expressions
+//! [core function library (§4)]: https://www.w3.org/TR/1999/REC-xpath-19991116/#corelib
+//! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
+//! [package documentation]: https://docs.oracle.com/en/java/javase/21/docs/api/java.xml/javax/xml/xpath/package-summary.html
+
 pub mod ast;
 mod axis;
 mod compiled;

@@ -41,6 +41,37 @@
 //! - `xml-base`: per-node base URI computation from `xml:base` (XML Base).
 //! - `xml-id`: `xml:id` as an ID-typed attribute, checked for NCName validity and uniqueness.
 
+//! # Specifications
+//!
+//! Every layer names the documents it was written from, at dated URLs so that the text read
+//! while writing it can still be found. Together they are:
+//!
+//! | Document | Version | Where |
+//! |---|---|---|
+//! | [XML 1.0 (Fifth Edition)] | REC 2008-11-26 | [`parser`], [`validate`], [`serialize`], [`core`](xylograph_core) |
+//! | [Namespaces in XML 1.0 (Third Edition)] | REC 2009-12-08 | [`parser`], [`serialize`], [`xdm`], [`xpath`] |
+//! | [XPath 1.0] | REC 1999-11-16 | [`xdm`], [`xpath`] |
+//! | [DOM Level 3 Core] | REC 2004-04-07 | [`dom`] |
+//! | [XInclude 1.0 (Second Edition)] | REC 2006-11-15 | `xinclude` |
+//! | [XPointer Framework] / [`element()`][xptr-element] / [`xmlns()`][xptr-xmlns] | REC 2003-03-25 | `xinclude` |
+//! | [XML Base (Second Edition)] | REC 2009-01-28 | [`parser`], [`dom`], `xinclude` |
+//! | [xml:id 1.0] | REC 2005-09-09 | [`parser`], [`validate`] |
+//! | [RFC 3986] | STD 66, 2005-01 | [`core`](xylograph_core) |
+//!
+//! XSLT 1.0 and EXSLT arrive in later phases; see `ROADMAP.md`.
+//!
+//! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
+//! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
+//! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
+//! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
+//! [XInclude 1.0 (Second Edition)]: https://www.w3.org/TR/2006/REC-xinclude-20061115/
+//! [XPointer Framework]: https://www.w3.org/TR/2003/REC-xptr-framework-20030325/
+//! [xptr-element]: https://www.w3.org/TR/2003/REC-xptr-element-20030325/
+//! [xptr-xmlns]: https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/
+//! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
+//! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
+//! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
+
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
 pub use xylograph_parser as parser;
 

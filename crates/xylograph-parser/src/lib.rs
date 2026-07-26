@@ -86,6 +86,29 @@
 //! - `xml-id`: `xml:id` as an ID-typed attribute, with tokenized normalization; read it with
 //!   [`Parser::xml_id`]. Both are switched per parser through [`ParserConfig`].
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation 26 November 2008. The whole of the parser:
+//!   documents, the DTD, entities, and the well-formedness constraints.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation 8 December 2009. Prefix
+//!   resolution and the namespace constraints.
+//! - [XML Base (Second Edition)] — W3C Recommendation 28 January 2009. Behind the `xml-base`
+//!   feature; see [`Parser::base_uri`].
+//! - [xml:id 1.0] — W3C Recommendation 9 September 2005. Behind the `xml-id` feature; see
+//!   [`Parser::xml_id`].
+//!
+//! The suite the parser is measured against is the [W3C XML Conformance Test Suite]; see the
+//! README for how to run it.
+//!
+//! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
+//! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
+//! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
+//! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
+//! [W3C XML Conformance Test Suite]: https://www.w3.org/XML/Test/
+
 #[cfg(feature = "tokio")]
 pub mod async_reader;
 pub mod config;

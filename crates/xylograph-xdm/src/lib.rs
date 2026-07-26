@@ -27,6 +27,20 @@
 //! # Ok::<(), xylograph_core::Error>(())
 //! ```
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [XPath 1.0] — W3C Recommendation 16 November 1999. [§5] is this whole crate: the seven node
+//!   kinds, their string-values and expanded names, and document order.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation 8 December 2009, for what the
+//!   namespace nodes of an element are.
+//!
+//! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
+//! [§5]: https://www.w3.org/TR/1999/REC-xpath-19991116/#data-model
+//! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
+
 mod dom;
 
 pub use dom::{DomModel, DomNode};

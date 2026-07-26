@@ -58,6 +58,27 @@
 //! # Ok::<(), xylograph_core::Error>(())
 //! ```
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [XInclude 1.0 (Second Edition)] — W3C Recommendation 15 November 2006. (There is no third
+//!   edition; the second is the latest.) `xi:include`, `xi:fallback`, and the base URI and
+//!   language fixups.
+//! - [XPointer Framework] — W3C Recommendation 25 March 2003, for the shorthand pointer and the
+//!   shape of a scheme-based one.
+//! - [XPointer `element()` Scheme] — W3C Recommendation 25 March 2003.
+//! - [XPointer `xmlns()` Scheme] — W3C Recommendation 25 March 2003.
+//! - [XML Base (Second Edition)] — W3C Recommendation 28 January 2009, which `href` resolution
+//!   and the base URI fixup rest on.
+//!
+//! [XInclude 1.0 (Second Edition)]: https://www.w3.org/TR/2006/REC-xinclude-20061115/
+//! [XPointer Framework]: https://www.w3.org/TR/2003/REC-xptr-framework-20030325/
+//! [XPointer `element()` Scheme]: https://www.w3.org/TR/2003/REC-xptr-element-20030325/
+//! [XPointer `xmlns()` Scheme]: https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/
+//! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
+
 mod include;
 mod loader;
 mod xpointer;

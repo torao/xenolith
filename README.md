@@ -76,6 +76,28 @@ cargo test --workspace --no-default-features
 | `xml-base` | off | Per-node base URI computation from `xml:base` and the entity's system id (XML Base); read it with `Parser::base_uri` |
 | `xml-id` | off | `xml:id` as an ID-typed attribute, with tokenized normalization; checked for NCName validity and uniqueness in the same ID space as declared IDs |
 
+## Specifications
+
+Each crate names the documents it was written from, in its own documentation. The links are to
+**dated** versions rather than to "latest", so that a reviewer can read the same text the code
+was written against — `/TR/xml/` moves, `/TR/2008/REC-xml-20081126/` does not.
+
+| Document | Version | Implemented in |
+|---|---|---|
+| [XML 1.0 (Fifth Edition)](https://www.w3.org/TR/2008/REC-xml-20081126/) | REC 2008-11-26 | `-core`, `-parser`, `-validate`, `-serialize` |
+| [Namespaces in XML 1.0 (Third Edition)](https://www.w3.org/TR/2009/REC-xml-names-20091208/) | REC 2009-12-08 | `-parser`, `-serialize`, `-xdm`, `-xpath` |
+| [XPath 1.0](https://www.w3.org/TR/1999/REC-xpath-19991116/) | REC 1999-11-16 | `-xdm`, `-xpath` |
+| [DOM Level 3 Core](https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/) | REC 2004-04-07 | `-dom` |
+| [XInclude 1.0 (Second Edition)](https://www.w3.org/TR/2006/REC-xinclude-20061115/) | REC 2006-11-15 | `-xinclude` |
+| [XPointer Framework](https://www.w3.org/TR/2003/REC-xptr-framework-20030325/), [`element()`](https://www.w3.org/TR/2003/REC-xptr-element-20030325/), [`xmlns()`](https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/) | REC 2003-03-25 | `-xinclude` |
+| [XML Base (Second Edition)](https://www.w3.org/TR/2009/REC-xmlbase-20090128/) | REC 2009-01-28 | `-parser`, `-dom`, `-xinclude` |
+| [xml:id 1.0](https://www.w3.org/TR/2005/REC-xml-id-20050909/) | REC 2005-09-09 | `-parser`, `-validate` |
+| [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | STD 66, 2005-01 | `-core` |
+
+Section numbers appear in the code beside the rules they implement, so a claim like "§4.4 says a
+half rounds towards positive infinity" can be checked against the paragraph it cites. XSLT 1.0
+and EXSLT arrive in later phases; see the roadmap.
+
 ## Conformance
 
 The W3C XML Conformance Test Suite is not vendored. To run against it:

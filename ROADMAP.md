@@ -8,26 +8,31 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 
 ### 準拠仕様
 
-| 仕様 | 版 | 位置づけ |
+実装の根拠となる文書は**版を固定した URL**で示す（決定 10）。「最新版」URL ではなく日付入り URL を使うのは、レビューアが「実装時にどの本文を読んだか」を後から確認できるようにするため。
+
+| 仕様 | 版・勧告日 | 位置づけ |
 |---|---|---|
-| XML 1.0 (5th Edition) | W3C REC | 必須（ゴール） |
-| Namespaces in XML 1.0 (3rd Edition) | W3C REC | 必須（XPath/XSLT の前提） |
-| XPath 1.0 | W3C REC | 必須（XSLT の前提） |
-| XSLT 1.0 | W3C REC | 必須（ゴール） |
-| XML Serialization (xsl:output の xml/html/text) | XSLT 1.0 §16 | 必須 |
-| DTD 妥当性検証（Validity Constraints 全件） | XML 1.0 §2–§5 | **必須**（決定 1、`xylograph-validate`） |
+| [XML 1.0 (Fifth Edition)](https://www.w3.org/TR/2008/REC-xml-20081126/) | W3C REC 2008-11-26 | 必須（ゴール） |
+| [Namespaces in XML 1.0 (Third Edition)](https://www.w3.org/TR/2009/REC-xml-names-20091208/) | W3C REC 2009-12-08 | 必須（XPath/XSLT の前提） |
+| [XPath 1.0](https://www.w3.org/TR/1999/REC-xpath-19991116/) | W3C REC 1999-11-16 | 必須（XSLT の前提） |
+| [XSLT 1.0](https://www.w3.org/TR/1999/REC-xslt-19991116) | W3C REC 1999-11-16 | 必須（ゴール） |
+| XML Serialization (xsl:output の xml/html/text) | [XSLT 1.0 §16](https://www.w3.org/TR/1999/REC-xslt-19991116#output) | 必須 |
+| DTD 妥当性検証（Validity Constraints 全件） | [XML 1.0 §2–§5](https://www.w3.org/TR/2008/REC-xml-20081126/#sec-documents) | **必須**（決定 1、`xylograph-validate`） |
+| [DOM Level 3 Core](https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/) | W3C REC 2004-04-07 | インタフェースを踏襲（決定 3） |
+| [XInclude 1.0 (Second Edition)](https://www.w3.org/TR/2006/REC-xinclude-20061115/) | W3C REC 2006-11-15 | **必須**（決定 6、feature + 実行時切替） |
+| [XPointer Framework](https://www.w3.org/TR/2003/REC-xptr-framework-20030325/) / [`element()`](https://www.w3.org/TR/2003/REC-xptr-element-20030325/) / [`xmlns()`](https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/) | W3C REC 2003-03-25 | 必須（XInclude の `@xpointer` に要る） |
+| [XML Base (Second Edition)](https://www.w3.org/TR/2009/REC-xmlbase-20090128/) | W3C REC 2009-01-28 | **必須**（決定 6） |
+| [xml:id 1.0](https://www.w3.org/TR/2005/REC-xml-id-20050909/) | W3C REC 2005-09-09 | **必須**（決定 6） |
+| [RFC 3986 (URI)](https://www.rfc-editor.org/rfc/rfc3986) | IETF STD 66, 2005-01 | 必須（基底 URI 解決） |
 | W3C XML Schema (XSD) 1.0 | W3C REC | **将来トラック**（決定 8、設計の余地のみ確保） |
 | RELAX NG | ISO/IEC 19757-2 | **将来トラック**（決定 8、微分アルゴリズムで `Validator` に嵌まる） |
-| DOM Level 3 Core | W3C REC | インタフェースを踏襲（決定 3） |
-| EXSLT (common / strings / math / sets / dates-and-times) | 業界標準 | **必須**（決定 5） |
-| XInclude 1.0 (3rd Edition) | W3C REC | **必須**（決定 6、feature + 実行時切替） |
-| XPointer Framework / `element()` / `xmlns()` scheme | W3C REC | 必須（XInclude の `@xpointer` に要る） |
-| XML Base (2nd Edition) | W3C REC | **必須**（決定 6） |
-| xml:id 1.0 | W3C REC | **必須**（決定 6） |
+| EXSLT (common / strings / math / sets / dates-and-times) | 業界標準（W3C 勧告ではない） | **必須**（決定 5） |
 | HTML / loose parsing | WHATWG | **対象外**（下記） |
 | XML 1.1 / Namespaces 1.1 | — | 対象外 |
 | XPath 2.0+ / XSLT 2.0+ | — | 対象外 |
 | XSD 1.1 | — | 対象外（XSD 1.0 の設計余地には乗る） |
+
+表中の URL は実際に取得して題名・版・勧告日が一致することを確認済み。XInclude は当初「3rd Edition」と記していたが、**存在するのは Second Edition (2006) までである**ことを確認して訂正した。
 
 ### 非対象: HTML / loose parsing
 
@@ -669,6 +674,21 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 | 7 | パーサの I/O とイベント API | **Sans-I/O コア + 同期／非同期ドライバ。カーソル API が一次、所有イベント `Iterator` はその上のラッパ** | 下記「決定 7 の詳細」。`tokio` は feature（既定 OFF）に隔離 |
 | 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xylograph-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xylograph-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
 | 9 | 未規定動作の扱い | **「仕様が未定義」「本実装が選択」「ビルド/環境依存」を文書上はっきり区別し、実測レポートをテストとして出力する** | 下記「決定 9 の詳細」 |
+| 10 | 準拠仕様の出典 | **各クレートの doc に、実装の根拠となる仕様書を版固定 URL で明示する** | 下記「決定 10 の詳細」 |
+
+### 決定 10 の詳細 — 何に基づいて実装したかを示す
+
+準拠すべき公式文書がある実装には、**どの文書のどの版に基づくか**をクレートの doc コメント先頭に記す。レビューアが「§4.4 の本文と、この関数の挙動は一致しているか」を自分で確かめられるようにするため。
+
+規約:
+
+- **日付入り URL を使う**（`https://www.w3.org/TR/2008/REC-xml-20081126/`）。「最新版」URL（`/TR/xml/`）は指す先が将来変わるので、実装時に読んだ本文を特定できない
+- 版・勧告日を併記する
+- 各クレートの `lib.rs` 冒頭に `# Specifications` 節を置き、そのクレートが実装している文書だけを挙げる
+- 条項に依存する実装には、コード近傍のコメントで節番号を示す（既に `§3.7`、`§4.2` のように記述している）
+- **URL は追加時に実際に取得して**題名・版・勧告日が一致することを確認する。誤った出典はレビューアの信頼を損なうので、書きっぱなしにしない
+
+W3C 勧告でないもの（EXSLT など）は、その旨を明記して業界標準として扱う。
 
 ### 決定 9 の詳細 — 未規定動作を区別して記録する
 

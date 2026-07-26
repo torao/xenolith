@@ -44,6 +44,21 @@
 //! # Ok::<(), xylograph_dom::DomException>(())
 //! ```
 
+//! # Specifications
+//!
+//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
+//! read while writing this can still be found:
+//!
+//! - [DOM Level 3 Core] — W3C Recommendation 7 April 2004. The interfaces this follows: the node
+//!   kinds and their `nodeType` codes, the tree operations, and the [`ExceptionCode`] system.
+//!   Where the shape of an interface suits a graph of reference-counted objects rather than an
+//!   arena, it is redesigned rather than imitated; see the note above.
+//! - [XML Base (Second Edition)] — W3C Recommendation 28 January 2009, for
+//!   [`base_uri`](Document::base_uri).
+//!
+//! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
+//! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
+
 #[cfg(feature = "parse")]
 pub mod build;
 mod collection;

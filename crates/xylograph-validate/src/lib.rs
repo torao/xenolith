@@ -34,6 +34,19 @@
 //! # Ok::<(), xylograph_core::Error>(())
 //! ```
 
+//! # Specifications
+//!
+//! Implemented from this document, at the version linked — the dated URL, so that what was read
+//! while writing this can still be found:
+//!
+//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation 26 November 2008. The DTD validator checks
+//!   its [validity constraints]; the determinism requirement on content models is its
+//!   [Appendix E].
+//!
+//! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
+//! [validity constraints]: https://www.w3.org/TR/2008/REC-xml-20081126/#dt-validity-constraint
+//! [Appendix E]: https://www.w3.org/TR/2008/REC-xml-20081126/#determinism
+
 mod content;
 mod driver;
 pub mod dtd;
