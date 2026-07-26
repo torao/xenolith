@@ -120,10 +120,11 @@ fn function_available_asks_the_registry_rather_than_a_list() {
   assert_eq!(value_of("function-available('current')", "<a/>"), "true");
   assert_eq!(value_of("function-available('generate-id')", "<a/>"), "true");
   assert_eq!(value_of("function-available('key')", "<a/>"), "true");
-  // XSLT's, but not built yet — and this answer turns true of its own accord when it is,
-  // because the registry is what is asked.
-  assert_eq!(value_of("function-available('format-number')", "<a/>"), "false");
+  assert_eq!(value_of("function-available('format-number')", "<a/>"), "true");
+  // A name nobody has registered, which is the only way this comes back false: the registry is
+  // what is asked, so the answer follows what a call would actually do.
   assert_eq!(value_of("function-available('nosuch')", "<a/>"), "false");
+  assert_eq!(value_of("function-available('unparsed-entity-uri')", "<a/>"), "false");
 }
 
 #[test]

@@ -15,6 +15,7 @@ use xylograph_dom::{Document, NodeId, NodeType, build};
 use xylograph_xdm::Model;
 use xylograph_xpath::{Namespaces, Variables};
 
+use crate::decimal::{Formats, Symbols};
 use crate::loader::{Loader, NoLoader};
 use crate::pattern::{KeyTable, NoKeys, Pattern};
 
@@ -57,6 +58,7 @@ pub struct Stylesheet {
   variables: Vec<Variable>,
   attribute_sets: Vec<AttributeSet>,
   keys: Vec<Key>,
+  decimal_formats: Formats,
   output: OutputMethod,
 }
 
@@ -197,8 +199,8 @@ impl Stylesheet {
   /// # Note on what is read
   ///
   /// The top-level elements read here are `xsl:import`, `xsl:include`, `xsl:template`,
-  /// `xsl:variable`, `xsl:param`, `xsl:attribute-set`, `xsl:key` and `xsl:output`. The rest —
-  /// `xsl:strip-space`, `xsl:decimal-format`, `xsl:namespace-alias` — are read past without
+  /// `xsl:variable`, `xsl:param`, `xsl:attribute-set`, `xsl:key`, `xsl:decimal-format` and
+  /// `xsl:output`. The rest — `xsl:strip-space`, `xsl:namespace-alias` — are read past without
   /// complaint; they arrive in later phases. See `ROADMAP.md`.
   pub fn compile_with<L: Loader>(source: &[u8], system_id: &str, loader: &mut L) -> Result<Self> {
     let mut stylesheet = Self {
@@ -207,6 +209,7 @@ impl Stylesheet {
       variables: Vec::new(),
       attribute_sets: Vec::new(),
       keys: Vec::new(),
+      decimal_formats: Formats::new(),
       output: OutputMethod::default(),
     };
     let principal = stylesheet.load_module(source, system_id)?;
@@ -247,6 +250,11 @@ impl Stylesheet {
   #[must_use]
   pub fn attribute_sets(&self) -> &[AttributeSet] {
     &self.attribute_sets
+  }
+
+  /// The `xsl:decimal-format` declarations, by expanded name; the unnamed one is the default.
+  pub(crate) fn decimal_formats(&self) -> &Formats {
+    &self.decimal_formats
   }
 
   /// Every `xsl:key` the stylesheet declares, in declaration order.
@@ -458,6 +466,7 @@ impl Stylesheet {
           let key = self.read_key(module, element)?;
           self.keys.push(key);
         }
+        "decimal-format" => self.read_decimal_format(module, element)?,
         "output" => {
           if let Some(method) = self.modules[module].document.attribute(element, "method") {
             self.output = match method {
@@ -539,6 +548,62 @@ impl Stylesheet {
         })
         .collect(),
     )
+  }
+
+  /// Reads a top-level `xsl:decimal-format` (§12.3).
+  ///
+  /// Each attribute renames one of the characters a pattern is written with, or one of those the
+  /// result is written with; anything not named keeps the default §12.3 lists.
+  fn read_decimal_format(&mut self, module: usize, element: NodeId) -> Result<()> {
+    let document = &self.modules[module].document;
+    let namespaces = in_scope_namespaces(document, element);
+    let name = match document.attribute(element, "name") {
+      None => None,
+      Some(name) => Some(match name.split_once(':') {
+        None => (None, name.to_owned()),
+        Some((prefix, local)) => match namespaces.get(prefix) {
+          Some(namespace) => (Some(namespace.to_owned()), local.to_owned()),
+          None => {
+            return Err(xslt_error(format!("the prefix {prefix:?} of the decimal format {name:?} is not bound")));
+          }
+        },
+      }),
+    };
+
+    /// One attribute of an `xsl:decimal-format` that names a single character.
+    fn character(document: &Document, element: NodeId, attribute: &str, current: char) -> Result<char> {
+      let Some(value) = document.attribute(element, attribute) else { return Ok(current) };
+      let mut characters = value.chars();
+      match (characters.next(), characters.next()) {
+        (Some(character), None) => Ok(character),
+        _ => Err(xslt_error(format!("xsl:decimal-format {attribute} is one character, not {value:?}"))),
+      }
+    }
+
+    let default = Symbols::default();
+    let symbols = Symbols {
+      decimal_separator: character(document, element, "decimal-separator", default.decimal_separator)?,
+      grouping_separator: character(document, element, "grouping-separator", default.grouping_separator)?,
+      minus_sign: character(document, element, "minus-sign", default.minus_sign)?,
+      percent: character(document, element, "percent", default.percent)?,
+      per_mille: character(document, element, "per-mille", default.per_mille)?,
+      zero_digit: character(document, element, "zero-digit", default.zero_digit)?,
+      digit: character(document, element, "digit", default.digit)?,
+      pattern_separator: character(document, element, "pattern-separator", default.pattern_separator)?,
+      infinity: document.attribute(element, "infinity").unwrap_or(&default.infinity).to_owned(),
+      nan: document.attribute(element, "NaN").unwrap_or(&default.nan).to_owned(),
+    };
+
+    // §12.3: two declarations of one name must agree, and one that contradicts another is an
+    // error rather than a last-one-wins.
+    if let Some(existing) = self.decimal_formats.get(&name) {
+      if *existing != symbols {
+        let which = name.as_ref().map_or_else(|| "the default".to_owned(), |(_, local)| format!("{local:?}"));
+        return Err(xslt_error(format!("two xsl:decimal-format declarations of {which} do not agree")));
+      }
+    }
+    self.decimal_formats.insert(name, symbols);
+    Ok(())
   }
 
   /// Reads a top-level `xsl:key`.

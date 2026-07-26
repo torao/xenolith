@@ -16,15 +16,15 @@
 //! attribute value templates run throughout.
 //!
 //! On top of XPath's own functions, the expressions in a stylesheet can call the ones XSLT adds
-//! in [`functions`](crate::functions) — `current()`, `key()`, `generate-id()`,
-//! `system-property()`, `element-available()` and `function-available()`.
+//! in [`functions`](crate::functions) — `current()`, `key()`, `format-number()`,
+//! `generate-id()`, `system-property()`, `element-available()` and `function-available()`.
 //!
 //! `xsl:sort` orders the node list of an `xsl:apply-templates` or an `xsl:for-each`; how two
 //! text keys compare is [`collate`](crate::collate)'s business, and depends on the build.
 //! `xsl:number` works out where a node sits and writes it as [`number`](crate::number) asks.
 //!
-//! What is still missing is `xsl:decimal-format` with `format-number()`,
-//! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
+//! What is still missing is `document()` and the multi-document work behind it, and the output
+//! controls — `xsl:strip-space`, `xsl:namespace-alias`, `xsl:fallback`; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
 //! half-runs in silence — and `element-available()` says so beforehand, from the same list.
 
@@ -260,6 +260,7 @@ impl Transform {
     let mut output = Document::new();
     let root = output.create_document_fragment();
     let running = Rc::new(Running::new());
+    running.set_decimal_formats(stylesheet.decimal_formats());
     let functions = crate::functions::register(functions, &running, INSTRUCTIONS);
     let mut engine = Engine {
       stylesheet,
@@ -498,7 +499,7 @@ impl<M: Model> Engine<'_, M> {
       "number" => self.number(module, element, focus),
       "message" => self.message(module, element, focus),
       // A top-level declaration reached here is not an instruction; it was read at compile time.
-      "attribute-set" | "output" | "import" | "include" | "template" | "key" => Ok(()),
+      "attribute-set" | "output" | "import" | "include" | "template" | "key" | "decimal-format" => Ok(()),
       other => self.not_implemented(other),
     }
   }

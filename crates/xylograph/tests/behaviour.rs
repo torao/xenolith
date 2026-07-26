@@ -60,6 +60,19 @@ fn round_trip(xml: &str) -> String {
   Serializer::new().to_string(&doc, doc.document_element().expect("a root element"))
 }
 
+/// Evaluates an expression inside a stylesheet, where XSLT's own functions are reachable.
+fn formatted(expression: &str) -> String {
+  let source = format!(
+    "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">\
+       <xsl:template match=\"/\"><xsl:value-of select=\"{expression}\"/></xsl:template>\
+     </xsl:stylesheet>"
+  );
+  let stylesheet = xylograph::xslt::Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse("<r/>".as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  xylograph::xslt::transform(&stylesheet, &model, model.root_node()).expect("transforms").text()
+}
+
 /// Runs one `xsl:number` at the root of a trivial document and gives what it wrote.
 fn numbered(attributes: &str) -> String {
   let source = format!(
@@ -294,6 +307,17 @@ fn chosen_by_this_implementation() -> Vec<Item> {
     )
     .observe("xml:lang='en-GB', lang('EN')", value("<r xml:lang='en-GB'><a/></r>", "string(count(/r/a[lang('EN')]))"))
     .observe("this build uses", "ASCII case folding, which is enough for the tags RFC 5646 allows"),
+    item(
+      "XSLT 1.0 §12.3",
+      "how format-number() rounds a value that falls exactly between two",
+      "defines no pattern language of its own — it points at the JDK 1.1 DecimalFormat class — \
+       and says nothing further about rounding",
+    )
+    .observe("format-number(0.5, '0')", formatted("format-number(0.5, '0')"))
+    .observe("format-number(1.5, '0')", formatted("format-number(1.5, '0')"))
+    .observe("format-number(2.5, '0')", formatted("format-number(2.5, '0')"))
+    .observe("this build rounds", "half to even, which is DecimalFormat's own default")
+    .observe("so that", "a comparison against Java agrees rather than merely coming close"),
     item(
       "XML 1.0 §4.4.3",
       "how much entity expansion is allowed before a document is refused",

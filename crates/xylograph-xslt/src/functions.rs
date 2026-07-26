@@ -32,6 +32,7 @@ use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_xdm::Model;
 use xylograph_xpath::{Context, Functions, Value, is_core_function};
 
+use crate::decimal::{Formats, Pattern as DecimalPattern};
 use crate::pattern::KeyTable;
 use crate::stylesheet::XSLT_NAMESPACE;
 
@@ -51,6 +52,11 @@ pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   current: Cell<Option<N>>,
   /// The identifiers `generate-id()` has handed out, so that a node keeps the one it was given.
   identifiers: RefCell<HashMap<N, String>>,
+  /// The `xsl:decimal-format` declarations `format-number()` reads its symbols from.
+  ///
+  /// The unnamed default is always here, whether the stylesheet declared one or not, so a
+  /// two-argument `format-number()` always finds something.
+  decimal_formats: RefCell<Formats>,
   /// What `key()` looks in: the nodes found by a key name and a value.
   ///
   /// Built before the transformation starts rather than when a key is first asked for. Building
@@ -66,7 +72,19 @@ type KeyEntry = (Option<String>, String, String);
 impl<N: Copy + Eq + std::hash::Hash> Running<N> {
   /// A transformation that has not started.
   pub(crate) fn new() -> Self {
-    Self { current: Cell::new(None), identifiers: RefCell::new(HashMap::new()), keys: RefCell::new(HashMap::new()) }
+    Self {
+      current: Cell::new(None),
+      identifiers: RefCell::new(HashMap::new()),
+      decimal_formats: RefCell::new(Formats::new()),
+      keys: RefCell::new(HashMap::new()),
+    }
+  }
+
+  /// Takes the `xsl:decimal-format` declarations, supplying the default if none was declared.
+  pub(crate) fn set_decimal_formats(&self, formats: &Formats) {
+    let mut stored = self.decimal_formats.borrow_mut();
+    *stored = formats.clone();
+    stored.entry(None).or_default();
   }
 
   /// Records that `node` is found by `value` under a key name.
@@ -116,8 +134,33 @@ pub(crate) fn register<M: Model>(
   let for_current = Rc::clone(running);
   let for_identifier = Rc::clone(running);
   let for_key = Rc::clone(running);
+  let for_number = Rc::clone(running);
 
   functions
+    .with("", "format-number", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
+      arity("format-number", &arguments, 2, Some(3))?;
+      let number = arguments[0].number(context.model);
+      let pattern = arguments[1].string(context.model);
+      // A third argument names an xsl:decimal-format; without one, the unnamed default.
+      let name = match arguments.get(2) {
+        None => None,
+        Some(value) => {
+          let written = value.string(context.model);
+          let (namespace, local) = expand(&written, context)?;
+          Some((namespace, local))
+        }
+      };
+      // The engine always puts the unnamed format in, declared or not, so only a name that was
+      // never declared can be missing.
+      let formats = for_number.decimal_formats.borrow();
+      let Some(symbols) = formats.get(&name) else {
+        let named = name.map_or_else(String::new, |(_, local)| local);
+        let message = format!("no xsl:decimal-format is named {named:?}");
+        return Err(Error::new(ErrorKind::Xslt, message));
+      };
+      let parsed = DecimalPattern::parse(&pattern, symbols).map_err(|message| Error::new(ErrorKind::Xslt, message))?;
+      Ok(Value::String(parsed.format(number, symbols)))
+    })
     .with("", "key", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
       arity("key", &arguments, 2, Some(2))?;
       let (namespace, local) = expand(&arguments[0].string(context.model), context)?;

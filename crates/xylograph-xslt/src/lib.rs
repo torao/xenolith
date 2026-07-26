@@ -8,9 +8,9 @@
 //! outside that list is reported rather than skipped. The walk and the instructions that build
 //! result nodes are in place — including `xsl:element`, `xsl:attribute`, `xsl:copy`,
 //! `xsl:copy-of` and [`AttributeSet`]s — as are [`Key`]s and the `key()` they serve, and
-//! `xsl:sort` and `xsl:number`. `format-number()` and the output controls are still to come. A
-//! stylesheet can ask what is here before relying on it, with `element-available()` and
-//! `function-available()`. See `ROADMAP.md`.
+//! `xsl:sort`, `xsl:number` and `xsl:decimal-format`. `document()` and the output controls are
+//! still to come. A stylesheet can ask what is here before relying on it, with
+//! `element-available()` and `function-available()`. See `ROADMAP.md`.
 //!
 //! # Features
 //!
@@ -33,8 +33,8 @@
 //!   resolution and default priorities (§5.5)], the [stylesheet structure (§2)] with the
 //!   [import precedence of §2.6.2], [creating the result tree (§7)] — which is where
 //!   `xsl:element`, `xsl:attribute`, `xsl:copy` and the [attribute sets of §7.1.4] are defined —
-//!   [numbering (§7.7)], [sorting (§10)], [keys (§12.2)], the [additional functions of §12.4],
-//!   and [what a stylesheet may ask about the processor (§15)].
+//!   [numbering (§7.7)], [sorting (§10)], [keys (§12.2)], [`format-number()` (§12.3)], the
+//!   [additional functions of §12.4], and [what a stylesheet may ask about the processor (§15)].
 //! - [XPath 1.0] — W3C Recommendation 16 November 1999, whose paths a pattern is a subset of and
 //!   whose expressions a predicate is.
 //!
@@ -48,12 +48,14 @@
 //! [numbering (§7.7)]: https://www.w3.org/TR/1999/REC-xslt-19991116#number
 //! [sorting (§10)]: https://www.w3.org/TR/1999/REC-xslt-19991116#sorting
 //! [keys (§12.2)]: https://www.w3.org/TR/1999/REC-xslt-19991116#key
+//! [`format-number()` (§12.3)]: https://www.w3.org/TR/1999/REC-xslt-19991116#format-number
 //! [additional functions of §12.4]: https://www.w3.org/TR/1999/REC-xslt-19991116#add-func
 //! [what a stylesheet may ask about the processor (§15)]: https://www.w3.org/TR/1999/REC-xslt-19991116#fallback
 //! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
 
 mod avt;
 mod collate;
+mod decimal;
 mod engine;
 mod functions;
 mod loader;
