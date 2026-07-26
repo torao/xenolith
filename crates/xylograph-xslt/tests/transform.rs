@@ -237,9 +237,9 @@ fn the_depth_a_transformation_may_reach_can_be_set() {
 
 #[test]
 fn an_instruction_that_is_not_implemented_says_so_rather_than_being_skipped() {
-  let body = "<xsl:template match=\"/\"><xsl:number/></xsl:template>";
+  let body = "<xsl:template match=\"/\"><xsl:fallback/></xsl:template>";
   let message = error(body, "<a/>");
-  assert!(message.contains("xsl:number"), "{message}");
+  assert!(message.contains("xsl:fallback"), "{message}");
   assert!(message.contains("ROADMAP"), "{message}");
 }
 

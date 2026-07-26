@@ -60,6 +60,19 @@ fn round_trip(xml: &str) -> String {
   Serializer::new().to_string(&doc, doc.document_element().expect("a root element"))
 }
 
+/// Runs one `xsl:number` at the root of a trivial document and gives what it wrote.
+fn numbered(attributes: &str) -> String {
+  let source = format!(
+    "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">\
+       <xsl:template match=\"/\"><xsl:number {attributes}/></xsl:template>\
+     </xsl:stylesheet>"
+  );
+  let stylesheet = xylograph::xslt::Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse("<r/>".as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  xylograph::xslt::transform(&stylesheet, &model, model.root_node()).expect("transforms").text()
+}
+
 /// Sorts the `i` elements of `xml` with one `xsl:sort`, and lists them in the order they come out.
 fn sorted(xml: &str, sort: &str) -> String {
   let source = format!(
@@ -226,6 +239,26 @@ fn undefined_by_the_specification() -> Vec<Item> {
       "descending reverses it",
       sorted("<r><i>2</i><i>oops</i><i>1</i></r>", "<xsl:sort data-type='number' order='descending'/>"),
     ),
+    item(
+      "XSLT 1.0 §7.7.1",
+      "what an xsl:number format token of `i` means when letter-value is absent",
+      "says letter-value disambiguates a token that could be either the alphabet or a \
+       traditional numbering, but not which to take when it is not there",
+    )
+    .observe("format='i', value=4, no letter-value", numbered("value='4' format='i'"))
+    .observe("with letter-value='traditional'", numbered("value='4' format='i' letter-value='traditional'"))
+    .observe("with letter-value='alphabetic'", numbered("value='4' format='i' letter-value='alphabetic'"))
+    .observe("this build takes", "Roman, since a stylesheet meaning the ninth letter can write `a`"),
+    item(
+      "XSLT 1.0 §7.7.1",
+      "how a number too large or too small for its numbering sequence is written",
+      "defines the alphabetic and traditional sequences without saying what becomes of a value \
+       they cannot express",
+    )
+    .observe("format='i', value=4000", numbered("value='4000' format='i'"))
+    .observe("format='a', value=0", numbered("value='0' format='a'"))
+    .observe("format='a', value=-3", numbered("value='-3' format='a'"))
+    .observe("this build falls back to", "a plain decimal, rather than to nothing or to an error"),
   ]
 }
 

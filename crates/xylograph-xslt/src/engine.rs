@@ -21,8 +21,9 @@
 //!
 //! `xsl:sort` orders the node list of an `xsl:apply-templates` or an `xsl:for-each`; how two
 //! text keys compare is [`collate`](crate::collate)'s business, and depends on the build.
+//! `xsl:number` works out where a node sits and writes it as [`number`](crate::number) asks.
 //!
-//! What is still missing is `xsl:number`, `xsl:decimal-format`,
+//! What is still missing is `xsl:decimal-format` with `format-number()`,
 //! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
 //! half-runs in silence — and `element-available()` says so beforehand, from the same list.
@@ -39,6 +40,8 @@ use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
 use crate::avt::{self, Piece};
 use crate::collate::{CaseOrder, Collator};
 use crate::functions::Running;
+use crate::number::{Format, Grouping, LetterValue};
+use crate::pattern::Pattern;
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
 
 /// How deep `xsl:apply-templates` and `xsl:call-template` may go before the transformation is
@@ -74,6 +77,7 @@ const INSTRUCTIONS: &[&str] = &[
   "for-each",
   "if",
   "message",
+  "number",
   "param",
   "processing-instruction",
   "sort",
@@ -491,6 +495,7 @@ impl<M: Model> Engine<'_, M> {
       "processing-instruction" => self.processing_instruction(module, element, focus),
       "copy" => self.copy(module, element, focus),
       "copy-of" => self.copy_of(module, element, focus),
+      "number" => self.number(module, element, focus),
       "message" => self.message(module, element, focus),
       // A top-level declaration reached here is not an instruction; it was read at compile time.
       "attribute-set" | "output" | "import" | "include" | "template" | "key" => Ok(()),
@@ -1023,6 +1028,239 @@ impl<M: Model> Engine<'_, M> {
     Ok(())
   }
 
+  // --- Numbering ----------------------------------------------------------------------------
+
+  /// `xsl:number`: a number worked out from where the node sits, written as `format` asks (§7.7).
+  fn number(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let document = self.stylesheet.document(module);
+    let value = document.attribute(element, "value").map(ToOwned::to_owned);
+    let level = document.attribute(element, "level").unwrap_or("single").to_owned();
+    let count = document.attribute(element, "count").map(ToOwned::to_owned);
+    let from = document.attribute(element, "from").map(ToOwned::to_owned);
+
+    // `value` says the number outright, and then where the node sits does not come into it.
+    let numbers = match value {
+      Some(expression) => vec![self.evaluate(&expression, module, element, focus)?.number(self.model)],
+      None => {
+        let count = match count {
+          Some(pattern) => Some(Pattern::compile(&pattern)?),
+          None => None,
+        };
+        let from = match from {
+          Some(pattern) => Some(Pattern::compile(&pattern)?),
+          None => None,
+        };
+        let namespaces = self.namespaces_at(module, element);
+        self.numbers_for(focus.node, &level, count.as_ref(), from.as_ref(), &namespaces)?
+      }
+    };
+
+    let format = self.number_format(module, element, focus)?;
+    let separator = self.optional_attribute(module, element, "grouping-separator", focus)?;
+    let size = match self.optional_attribute(module, element, "grouping-size", focus)? {
+      Some(text) => text.trim().parse::<usize>().ok(),
+      None => None,
+    };
+    let grouping = Grouping { separator: separator.as_deref(), size };
+
+    let written = format.format(&numbers, grouping);
+    self.append_text(&written);
+    Ok(())
+  }
+
+  /// Reads the `format` and `letter-value` of an `xsl:number`, both attribute value templates.
+  fn number_format(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<Format> {
+    let format = self.optional_attribute(module, element, "format", focus)?.unwrap_or_else(|| "1".to_owned());
+    let letter_value = match self.optional_attribute(module, element, "letter-value", focus)?.as_deref() {
+      None => LetterValue::Unstated,
+      Some("alphabetic") => LetterValue::Alphabetic,
+      Some("traditional") => LetterValue::Traditional,
+      Some(other) => {
+        let message = format!("xsl:number letter-value {other:?} is neither alphabetic nor traditional");
+        return Err(Error::new(ErrorKind::Xslt, message));
+      }
+    };
+    Ok(Format::parse(&format, letter_value))
+  }
+
+  /// The numbers a `level` asks for, outermost first.
+  fn numbers_for(
+    &mut self,
+    node: M::Node,
+    level: &str,
+    count: Option<&Pattern>,
+    from: Option<&Pattern>,
+    namespaces: &Namespaces,
+  ) -> Result<Vec<f64>> {
+    match level {
+      "single" => {
+        let Some(target) = self.nearest_counted(node, count, from, namespaces)? else {
+          return Ok(Vec::new());
+        };
+        Ok(vec![self.place_among_siblings(target, count, namespaces)?])
+      }
+      "multiple" => {
+        // The node and its ancestors, innermost first, stopping where `from` says to.
+        let mut numbers = Vec::new();
+        let mut current = Some(node);
+        let boundary = self.nearest_matching(node, from, namespaces)?;
+        while let Some(candidate) = current {
+          if Some(candidate) == boundary {
+            break;
+          }
+          if self.counts(candidate, node, count, namespaces)? {
+            numbers.push(self.place_among_siblings(candidate, count, namespaces)?);
+          }
+          current = self.model.parent(candidate);
+        }
+        // Gathered from the inside out, but §7.7 writes them from the outside in.
+        numbers.reverse();
+        Ok(numbers)
+      }
+      "any" => Ok(vec![self.count_everything_before(node, count, from, namespaces)?]),
+      other => {
+        let message = format!("xsl:number level {other:?} is not single, multiple or any");
+        Err(Error::new(ErrorKind::Xslt, message))
+      }
+    }
+  }
+
+  /// The nearest ancestor-or-self that the count pattern picks out, without passing `from`.
+  fn nearest_counted(
+    &mut self,
+    node: M::Node,
+    count: Option<&Pattern>,
+    from: Option<&Pattern>,
+    namespaces: &Namespaces,
+  ) -> Result<Option<M::Node>> {
+    let boundary = self.nearest_matching(node, from, namespaces)?;
+    let mut current = Some(node);
+    while let Some(candidate) = current {
+      // §7.7: with `from`, only the ancestors below the nearest one it matches are searched.
+      if Some(candidate) == boundary {
+        return Ok(None);
+      }
+      if self.counts(candidate, node, count, namespaces)? {
+        return Ok(Some(candidate));
+      }
+      current = self.model.parent(candidate);
+    }
+    Ok(None)
+  }
+
+  /// The nearest ancestor-or-self a pattern matches, or `None` when there is no pattern.
+  fn nearest_matching(
+    &mut self,
+    node: M::Node,
+    pattern: Option<&Pattern>,
+    namespaces: &Namespaces,
+  ) -> Result<Option<M::Node>> {
+    let Some(pattern) = pattern else { return Ok(None) };
+    let mut current = self.model.parent(node);
+    while let Some(candidate) = current {
+      let variables = self.variables();
+      if pattern.matches_using(self.model, candidate, namespaces, &variables, self.running.as_ref())? {
+        return Ok(Some(candidate));
+      }
+      current = self.model.parent(candidate);
+    }
+    Ok(None)
+  }
+
+  /// One more than the number of preceding siblings that also count.
+  fn place_among_siblings(&mut self, node: M::Node, count: Option<&Pattern>, namespaces: &Namespaces) -> Result<f64> {
+    let Some(parent) = self.model.parent(node) else { return Ok(1.0) };
+    let siblings = self.model.children(parent);
+    let mut place = 1.0;
+    for sibling in siblings {
+      if sibling == node {
+        break;
+      }
+      if self.counts(sibling, node, count, namespaces)? {
+        place += 1.0;
+      }
+    }
+    Ok(place)
+  }
+
+  /// Every node at or before `node` in document order that counts, plus one for itself.
+  fn count_everything_before(
+    &mut self,
+    node: M::Node,
+    count: Option<&Pattern>,
+    from: Option<&Pattern>,
+    namespaces: &Namespaces,
+  ) -> Result<f64> {
+    let mut nodes = Vec::new();
+    gather_countable(self.model, self.model.root(node), &mut nodes);
+    // §7.7: with `from`, counting restarts after the last node before this one that matches it.
+    let mut start = 0;
+    if from.is_some() {
+      for (index, candidate) in nodes.iter().enumerate() {
+        if self.model.document_order(*candidate, node) == Ordering::Greater {
+          break;
+        }
+        let variables = self.variables();
+        let matched = from.expect("just checked").matches_using(
+          self.model,
+          *candidate,
+          namespaces,
+          &variables,
+          self.running.as_ref(),
+        )?;
+        if matched {
+          start = index;
+        }
+      }
+    }
+
+    let mut total = 0.0;
+    for candidate in &nodes[start..] {
+      if self.model.document_order(*candidate, node) == Ordering::Greater {
+        break;
+      }
+      if self.counts(*candidate, node, count, namespaces)? {
+        total += 1.0;
+      }
+    }
+    Ok(total)
+  }
+
+  /// Whether a node is one the numbering counts.
+  ///
+  /// With no `count` pattern, §7.7 counts nodes of the same kind as the current one, and of the
+  /// same expanded name where it has one — which is not a pattern that can be written down for
+  /// every kind, so it is tested directly.
+  fn counts(
+    &mut self,
+    candidate: M::Node,
+    current: M::Node,
+    count: Option<&Pattern>,
+    namespaces: &Namespaces,
+  ) -> Result<bool> {
+    let Some(pattern) = count else {
+      let same_kind = self.model.kind(candidate) == self.model.kind(current);
+      return Ok(same_kind && self.model.expanded_name(candidate) == self.model.expanded_name(current));
+    };
+    let variables = self.variables();
+    pattern.matches_using(self.model, candidate, namespaces, &variables, self.running.as_ref())
+  }
+
+  /// An attribute value template that need not be there.
+  fn optional_attribute(
+    &mut self,
+    module: usize,
+    element: NodeId,
+    attribute: &str,
+    focus: Focus<M::Node>,
+  ) -> Result<Option<String>> {
+    let raw = self.stylesheet.document(module).attribute(element, attribute).map(ToOwned::to_owned);
+    match raw {
+      Some(value) => Ok(Some(self.attribute_value(&value, module, element, focus)?)),
+      None => Ok(None),
+    }
+  }
+
   // --- Sorting ------------------------------------------------------------------------------
 
   /// Puts a node list into the order the `xsl:sort` children of an instruction ask for (§10).
@@ -1304,6 +1542,17 @@ impl<M: Model> Engine<'_, M> {
       .attribute(element, attribute)
       .map(ToOwned::to_owned)
       .ok_or_else(|| Error::new(ErrorKind::Xslt, format!("{what} needs a {attribute}")))
+  }
+}
+
+/// Collects a node and everything below it, in document order, for `level="any"`.
+///
+/// Attributes and namespace nodes are left out: §7.7 excludes them from the nodes `level="any"`
+/// counts over.
+fn gather_countable<M: Model>(model: &M, node: M::Node, into: &mut Vec<M::Node>) {
+  into.push(node);
+  for child in model.children(node) {
+    gather_countable(model, child, into);
   }
 }
 
