@@ -295,6 +295,25 @@ impl Model for DomModel<'_> {
     }
   }
 
+  fn qualified_name(&self, node: DomNode) -> Option<String> {
+    match node {
+      // The DOM's node name is already the lexical form, prefix included.
+      DomNode::Tree(id) => match self.doc.node_type(id) {
+        NodeType::Element | NodeType::Attribute | NodeType::ProcessingInstruction => Some(self.doc.node_name(id)),
+        _ => None,
+      },
+      // A namespace node's name is the prefix it binds, and nothing for the default namespace.
+      DomNode::Namespace { prefix, .. } => {
+        Some(prefix.map_or_else(String::new, |name| self.doc.pool().resolve(name).to_owned()))
+      }
+      DomNode::Text(_) => None,
+    }
+  }
+
+  fn element_by_id(&self, id: &str) -> Option<DomNode> {
+    self.doc.get_element_by_id(id).map(DomNode::Tree)
+  }
+
   fn string_value(&self, node: DomNode) -> String {
     match node {
       DomNode::Tree(id) => match self.doc.node_type(id) {

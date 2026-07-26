@@ -571,9 +571,16 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **完了条件**: ロケーションパス・全軸・ノードテスト・述語・演算子式・変数が評価できる
 - **決定 4 について**: 現状は AST の再帰評価。閉包／バイトコードへのコンパイルは意味論が固まりテストで守られた後の最適化として Phase 8 に回す（正しさを先に確定させるため）
 
-**4d. コア関数ライブラリ（27 関数）**
-- node-set / string / boolean / number の各関数と型セマンティクス
-- 完了条件: 全 27 関数がテストで通る
+**4d. コア関数ライブラリ（27 関数）**✅ 完了
+- **node-set（7）**: `last` / `position` / `count` / `id` / `local-name` / `namespace-uri` / `name`
+- **string（10）**: `string` / `concat` / `starts-with` / `contains` / `substring-before` / `substring-after` / `substring` / `string-length` / `normalize-space` / `translate`
+- **boolean（5）**: `boolean` / `not` / `true` / `false` / `lang`
+- **number（5）**: `number` / `sum` / `floor` / `ceiling` / `round`
+- **仕様の細部を実装**: `round()` は半数を正の無限大方向へ（`round(-1.5)` = -1、`f64::round` とは異なる）／`substring()` は両引数を丸めてから浮動小数点で範囲判定するので `NaN`・無限大の境界例（仕様の 6 例）がそのまま出る／文字数はバイトではなく文字で数える／`lang()` は最も近い `xml:lang` を見て大小文字を無視しサブ言語 (`en-GB` は `en` に応答) を認める／`translate()` は `from` の最初の出現が優先、対応がなければ削除
+- モデルに `qualified_name`（`name()` 用の接頭辞込みの名前）と `element_by_id`（`id()` 用、ID 型付けのない木は既定で `None`）を追加。DOM 実装は DTD / `xml:id` で印を付けた属性を使う
+- 引数個数・型の誤りは関数名と期待を示すエラー
+- **成果物**: 統合テスト 8（`tests/functions.rs`）、ユニット +5
+- **完了条件**: 全 27 関数がテストで通る
 
 **4e. 公開 API と適合**
 - `javax.xml.xpath` 相当の入口、ファサードから `xylograph::xpath`

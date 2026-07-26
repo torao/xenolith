@@ -208,7 +208,8 @@ fn a_path_may_continue_from_an_expression() {
 fn errors_say_what_the_context_could_not_supply() {
   assert!(error(TREE, "$nosuch").contains("not bound"), "{}", error(TREE, "$nosuch"));
   assert!(error(TREE, "//q:a").contains("prefix \"q\" is not bound"), "{}", error(TREE, "//q:a"));
-  assert!(error(TREE, "string(.)").contains("no function named"), "{}", error(TREE, "string(.)"));
+  assert!(error(TREE, "nosuch()").contains("no function named"), "{}", error(TREE, "nosuch()"));
+  assert!(error(TREE, "ext:f()").contains("no function named"), "{}", error(TREE, "ext:f()"));
   assert!(error(TREE, "1 | 2").contains("union joins node-sets"), "{}", error(TREE, "1 | 2"));
   assert!(error(TREE, "(1)/a").contains("continue from a node-set"), "{}", error(TREE, "(1)/a"));
   assert!(error(TREE, "count(1)").contains("needs a node-set"), "{}", error(TREE, "count(1)"));

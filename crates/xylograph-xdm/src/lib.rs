@@ -104,6 +104,23 @@ pub trait Model {
   /// The expanded name of a node, or `None` for the kinds that have none.
   fn expanded_name(&self, node: Self::Node) -> Option<ExpandedName>;
 
+  /// The qualified name of a node as it is written, prefix and all — what XPath's `name()`
+  /// reports.
+  ///
+  /// The default is the local part, which is what a tree that does not keep prefixes can say.
+  fn qualified_name(&self, node: Self::Node) -> Option<String> {
+    self.expanded_name(node).map(|name| name.local)
+  }
+
+  /// The element carrying a given unique ID, which is what XPath's `id()` selects.
+  ///
+  /// An ID is only an ID because a DTD, a schema or the caller said so, so a tree that carries
+  /// no such typing has none — hence the default.
+  fn element_by_id(&self, id: &str) -> Option<Self::Node> {
+    let _ = id;
+    None
+  }
+
   /// The string-value of a node (XPath 1.0 §5).
   fn string_value(&self, node: Self::Node) -> String;
 

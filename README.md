@@ -30,9 +30,9 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xinclude`](crates/xylograph-xinclude) | Phase 3.5c | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, XPointer subresource selection (shorthand and `element()`), `xi:fallback`, recursion with loop detection and limits, and base URI / language fixup; resources are fetched through a caller-supplied `Loader` |
 
-| [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4a | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
+| [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4d | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
 
-| [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4c | XPath 1.0: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions (the core function library is still being filled in) |
+| [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4d | XPath 1.0: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library |
 
 Crates for the XPath evaluator, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.

@@ -44,9 +44,9 @@
 //! # Ok::<(), xylograph_core::Error>(())
 //! ```
 //!
-//! The core function library is not complete yet: only the functions a predicate needs —
-//! `position`, `last`, `count`, `not`, `true` and `false` — are available, and the rest arrive
-//! in the next phase.
+//! The whole core function library (§4) is available — the twenty-seven node-set, string,
+//! boolean and number functions. Extension functions, which is what a function name with a
+//! prefix is, are not: registering those comes with XSLT.
 
 pub mod ast;
 mod axis;
