@@ -77,6 +77,27 @@ impl<N: Copy + Eq + Hash + Debug> Value<N> {
 }
 
 impl<N> Value<N> {
+  /// The nodes, if this is a node-set — otherwise `None`.
+  ///
+  /// XPath converts freely between the other three types but never *to* a node-set, so this is
+  /// the one result that has to be asked for rather than converted.
+  #[must_use]
+  pub fn nodes(&self) -> Option<&[N]> {
+    match self {
+      Value::NodeSet(nodes) => Some(nodes),
+      _ => None,
+    }
+  }
+
+  /// The nodes, taken out of the value, if this is a node-set.
+  #[must_use]
+  pub fn into_nodes(self) -> Option<Vec<N>> {
+    match self {
+      Value::NodeSet(nodes) => Some(nodes),
+      _ => None,
+    }
+  }
+
   /// The name of the type, for an error message.
   pub(crate) const fn type_name(&self) -> &'static str {
     match self {

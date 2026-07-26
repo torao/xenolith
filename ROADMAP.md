@@ -582,10 +582,30 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: 統合テスト 8（`tests/functions.rs`）、ユニット +5
 - **完了条件**: 全 27 関数がテストで通る
 
-**4e. 公開 API と適合**
-- `javax.xml.xpath` 相当の入口、ファサードから `xylograph::xpath`
-- XPath テストスイートのハーネス
-- **完了条件（Phase 4 全体）**: XPath テストスイートを通す。CLI で `xylo xpath` が動く（CLI は後段）
+**4e. 公開 API（JAXP 準拠）**✅ 完了
+- **`javax.xml.xpath` の型構成に合わせる**（決定 3。当初 `XPath` をコンパイル済み式の名前にしていたが、Java では `XPath` は環境・`XPathExpression` がコンパイル済み式であり**逆の意味**になっていたので是正）:
+
+  | `javax.xml.xpath` | 本クレート |
+  |---|---|
+  | `XPathFactory.newInstance().newXPath()` | `XPath::new` |
+  | `XPath.setNamespaceContext(…)` | `XPath::with_namespace` |
+  | `NamespaceContext` | `Namespaces` |
+  | `XPath.compile(String)` | `XPath::compile` |
+  | `XPathExpression` | `XPathExpression` |
+  | `XPathExpression.evaluate(item)` | `XPathExpression::evaluate` |
+  | `XPathVariableResolver` | `Variables` |
+  | `XPathConstants.NODESET` / `.STRING` / … | `Value` と変換メソッド |
+  | `XPathExpressionException` | `ErrorKind::XPath` |
+
+- **`Environment` を `Namespaces` / `Variables` に分割** — Java が `NamespaceContext` と `XPathVariableResolver` を別インタフェースにしているのに合わせた。設計上も筋が良い: 名前空間束縛は文字列 2 つで木に依存しないのでコンパイル時に確定でき、変数はノード集合を持ちうるので確定できない
+- **意図的な差異 2 点**（クレート doc に明記）: Java は戻り値型を先に指定してキャストするが、本実装は `Value` が型を持ち要求時に変換する（XPath の変換規則は演算子が使うものと同一なので自然）。`XPathFunctionResolver` 相当は未提供 — 拡張関数は XSLT と同時に入れる
+- `Value::nodes()` / `into_nodes()` を追加。`parse` / `evaluate` は AST を自分で保持する呼び出し側（XSLT）向けの下位 API として残す。ファサードから `xylograph::xpath`
+- **プロパティテスト**（proptest）: 任意テキストで字句解析が panic しない（バイト境界の保証）／数値の書式↔解析が有限値で可逆／AST を印字して再解析すると同じ木になる。加えて「`Infinity` は書けるが読み戻せない」という**仕様自身の非対称性**を明示的に記録
+- **差分テストの土台**（`tests/differential.rs`、90 式の corpus）: corpus が本実装で評価できることは常時検証。**比較の照合先は Java**（`javax.xml.xpath`）とし、ライブラリ完成時に組む（面が動いている最中に組んでも追従コストが高いため）。libxml2 版は手動実行用の暫定で **CI では走らせない**
+  - 比較設計で決めたこと: 式は `concat('[', string(E), ']')` で包んで両者とも 1 個の文字列にする（ノード直列化形式は仕様が定めないので比較しない）。`1 div 3` のように**十進表現が有限でない数**は除外 — §4.2 が桁数を規定しておらず、実装差は**どちらも適合したまま**生じる。仕様が許す差分を報告するテストは無視されるようになる
+- **成果物**: `XPath` / `XPathExpression` / `Namespaces` / `Variables`、`tests/properties.rs`、`tests/differential.rs`（テスト計 67）
+- **完了条件**: JAXP と対応の取れた公開 API が使える
+- **Phase 4 全体について**: XPath 1.0 には W3C 公式の単独テストスイートが存在しない（XQTS は 2.0 向け）。網羅的な外部資産は **OASIS/Xalan の XSLT 1.0 スイート**で、XSLT が動いてから実行できる → **Phase 6 で取り込む**。CLI の `xylo xpath` は Phase 7
 
 ### Phase 5 — XSLT 骨格
 
@@ -648,6 +668,27 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 | 6 | XInclude / XML Base / xml:id | **必須。feature + 実行時フラグで切替** | XML Base と xml:id は Phase 2c、XInclude は Phase 3.5（XPointer framework / `element()` / `xmlns()` を含む）。基底 URI の起点は実体の system ID なので **Phase 1 の実体スタックに system ID を持たせる**。XInclude の実行時既定は無効（JAXP 準拠）、XML Base / xml:id は既定有効 |
 | 7 | パーサの I/O とイベント API | **Sans-I/O コア + 同期／非同期ドライバ。カーソル API が一次、所有イベント `Iterator` はその上のラッパ** | 下記「決定 7 の詳細」。`tokio` は feature（既定 OFF）に隔離 |
 | 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xylograph-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xylograph-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
+| 9 | 未規定動作の扱い | **「仕様が未定義」「本実装が選択」「ビルド/環境依存」を文書上はっきり区別し、実測レポートをテストとして出力する** | 下記「決定 9 の詳細」 |
+
+### 決定 9 の詳細 — 未規定動作を区別して記録する
+
+XML・XPath は少なからぬ点を開いたままにしている。**その 3 種類を混ぜて書かない**ことを規約とする。
+
+| 区分 | 意味 | 読者が取るべき行動 |
+|---|---|---|
+| **仕様が未定義** | 仕様が定めていない、または「implementation-dependent」と明言している | 依存した文書は移植性がない。他実装で異なりうる |
+| **本実装が選択** | 仕様が幅を許しており、本実装がその中の 1 点を選んだ | プラットフォーム間で安定。変更時は changelog に記載 |
+| **ビルド/環境依存** | 同じライブラリでもビルドによって変わりうる（feature、外部クレートの有無など） | ビルドを固定しないと依存できない |
+
+仕様が**固定している**動作はここに入れない。それはアサーションを持つ通常のテストに属する。
+
+**実測レポート**: `crates/xylograph/tests/behaviour.rs` が上記 3 区分でレポートをコンソールへ出力する。文書の再掲ではなく**実際に動かして観測**するので、コードが変わればレポートも変わる（記述と実装が乖離しない）。CI で毎回出力し、適合率の数字と並べて記録に残す。
+
+```bash
+cargo test -p xylograph --all-features --test behaviour -- --nocapture
+```
+
+レポート自身の健全性テスト（観測が空でない・仕様の記述が空でない）も同居させ、腐りを防ぐ。実際、初回作成時にこの自己チェックが「既定名前空間があると `/r` が一致しない」という**私自身の式の誤り**を捕まえている。
 
 ### 決定 7 の詳細 — Sans-I/O パーサ
 

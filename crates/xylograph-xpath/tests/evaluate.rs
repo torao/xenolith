@@ -3,15 +3,16 @@
 use xylograph_core::ErrorKind;
 use xylograph_dom::build;
 use xylograph_xdm::{DomModel, DomNode, Model, NodeKind};
-use xylograph_xpath::{Environment, Value, evaluate_with, parse};
+use xylograph_xpath::{Value, Variables, XPath};
 
-/// Evaluates `expression` over `xml` and hands the result to `render`.
+/// Evaluates `expression` over `xml` and hands the result to `render`. The prefix `p` and the
+/// variable `$want` are bound, since the cases below use them.
 fn with<T>(xml: &str, expression: &str, render: impl FnOnce(&DomModel<'_>, Value<DomNode>) -> T) -> T {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
-  let expr = parse(expression).expect("parses");
-  let environment = Environment::new().with_namespace("p", "urn:p").with_variable("want", Value::String("2".into()));
-  let value = evaluate_with(&expr, &model, model.root_node(), &environment).expect("evaluates");
+  let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
+  let variables = Variables::new().with("want", Value::String("2".into()));
+  let value = query.evaluate_with(&model, model.root_node(), &variables).expect("evaluates");
   render(&model, value)
 }
 
@@ -36,13 +37,12 @@ fn value(xml: &str, expression: &str) -> String {
   with(xml, expression, |model, value| value.string(model))
 }
 
-/// The message of the error an expression fails with.
+/// The message of the error an expression fails with, with nothing bound.
 fn error(xml: &str, expression: &str) -> String {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
-  let expr = parse(expression).expect("parses");
-  let environment = Environment::new();
-  let error = evaluate_with(&expr, &model, model.root_node(), &environment).expect_err("fails");
+  let query = XPath::new().compile(expression).expect("parses");
+  let error = query.evaluate(&model, model.root_node()).expect_err("fails");
   assert_eq!(error.kind(), ErrorKind::XPath);
   error.message().to_owned()
 }

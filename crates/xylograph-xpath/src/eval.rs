@@ -37,7 +37,7 @@ fn variable<M: Model>(prefix: Option<&str>, local: &str, context: &Context<'_, M
     Some(prefix) => Some(resolve_prefix(context, prefix)?),
     None => None,
   };
-  match context.environment.variable(namespace.as_deref(), local) {
+  match context.variables.get(namespace.as_deref(), local) {
     Some(value) => Ok(value.clone()),
     None => {
       let name = prefix.map_or_else(|| local.to_owned(), |prefix| format!("{prefix}:{local}"));
@@ -307,11 +307,11 @@ const fn principal_kind(axis: Axis) -> NodeKind {
 
 /// The namespace a prefix in the expression stands for.
 fn resolve_prefix<M: Model>(context: &Context<'_, M>, prefix: &str) -> Result<String> {
-  match context.environment.namespace(prefix) {
+  match context.namespaces.get(prefix) {
     Some(namespace) => Ok(namespace.to_owned()),
-    None => Err(error(format!(
-      "the prefix \"{prefix}\" is not bound; bind it with Environment::with_namespace before evaluating"
-    ))),
+    None => {
+      Err(error(format!("the prefix \"{prefix}\" is not bound; bind it with XPath::with_namespace before compiling")))
+    }
   }
 }
 

@@ -19,6 +19,7 @@ xylograph-xdm = { workspace = true }
 
 [dev-dependencies]
 xylograph-dom = { workspace = true, features = ["parse"] }
+proptest = "1"
 
 [lints]
 workspace = true

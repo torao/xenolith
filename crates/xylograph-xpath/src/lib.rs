@@ -24,25 +24,48 @@
 //!
 //! # Evaluating
 //!
-//! [`evaluate`] runs a tree against a document, seen through the [data model](xylograph_xdm).
-//! The result is a [`Value`]: a node-set, a boolean, a number or a string, converted between
-//! those as the operators demand.
+//! Compile an expression once, then run it against a document seen through the
+//! [data model](xylograph_xdm). The result is a [`Value`] — a node-set, a boolean, a number or a
+//! string — converted between those as the operators demand.
 //!
 //! ```
 //! use xylograph_dom::build;
 //! use xylograph_xdm::DomModel;
-//! use xylograph_xpath::{Value, evaluate, parse};
+//! use xylograph_xpath::XPathExpression;
 //!
 //! let doc = build::parse("<list><item>a</item><item>b</item></list>".as_bytes())?;
 //! let model = DomModel::new(&doc);
-//! let expr = parse("//item[2]")?;
 //!
-//! let Value::NodeSet(nodes) = evaluate(&expr, &model, model.root_node())? else {
-//!   panic!("a path yields a node-set")
-//! };
-//! assert_eq!(nodes.len(), 1);
+//! let query = XPathExpression::compile("//item[2]")?;
+//! let value = query.evaluate(&model, model.root_node())?;
+//! assert_eq!(value.nodes().map(<[_]>::len), Some(1));
+//! assert_eq!(value.string(&model), "b");
 //! # Ok::<(), xylograph_core::Error>(())
 //! ```
+//!
+//! # Coming from Java
+//!
+//! The API follows `javax.xml.xpath`, so what you know there carries over:
+//!
+//! | `javax.xml.xpath` | here |
+//! |---|---|
+//! | `XPathFactory.newInstance().newXPath()` | [`XPath::new`] |
+//! | `XPath.setNamespaceContext(…)` | [`XPath::with_namespace`] |
+//! | `NamespaceContext` | [`Namespaces`] |
+//! | `XPath.compile(String)` | [`XPath::compile`] |
+//! | `XPathExpression` | [`XPathExpression`] |
+//! | `XPathExpression.evaluate(item)` | [`XPathExpression::evaluate`] |
+//! | `XPathVariableResolver` | [`Variables`] |
+//! | `XPathConstants.NODESET` / `.STRING` / … | [`Value`] and its conversions |
+//! | `XPathExpressionException` | [`ErrorKind::XPath`](xylograph_core::ErrorKind::XPath) |
+//!
+//! Two differences are deliberate. Java asks for the result type up front and casts; here the
+//! [`Value`] says which type it is and converts on request, since XPath's conversions are what
+//! the operators use anyway. And `XPathFunctionResolver` has no counterpart yet — extension
+//! functions arrive with XSLT.
+//!
+//! [`parse`] and [`evaluate`] are the two halves underneath, for a caller that holds the
+//! [expression tree](Expr) itself — as XSLT will, to match patterns against it.
 //!
 //! The whole core function library (§4) is available — the twenty-seven node-set, string,
 //! boolean and number functions. Extension functions, which is what a function name with a
@@ -50,6 +73,7 @@
 
 pub mod ast;
 mod axis;
+mod compiled;
 mod context;
 mod eval;
 mod functions;
@@ -58,7 +82,8 @@ mod parser;
 mod value;
 
 pub use ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
-pub use context::{Context, Environment};
+pub use compiled::{XPath, XPathExpression};
+pub use context::{Context, Namespaces, Variables};
 pub use value::{Value, number_to_string, string_to_number};
 
 use xylograph_core::error::Result;
@@ -85,9 +110,11 @@ pub fn parse(expression: &str) -> Result<Expr> {
   parser::parse(&tokens, expression.len())
 }
 
-/// Evaluates an expression with `node` as the context node, and nothing bound.
+/// Evaluates an expression tree with `node` as the context node, and nothing bound.
 ///
-/// Use [`evaluate_with`] when the expression names a variable or uses a namespace prefix.
+/// This is the low-level entry, for a caller holding an [`Expr`] of its own; most callers want
+/// [`XPathExpression`]. Use [`evaluate_with`] when the expression names a variable or uses a
+/// namespace prefix.
 ///
 /// # Errors
 ///
@@ -95,11 +122,10 @@ pub fn parse(expression: &str) -> Result<Expr> {
 /// something the context cannot give — an unbound variable or prefix, a function that is not
 /// available — or applies an operator to a value of the wrong type.
 pub fn evaluate<M: Model>(expr: &Expr, model: &M, node: M::Node) -> Result<Value<M::Node>> {
-  let environment = Environment::new();
-  evaluate_with(expr, model, node, &environment)
+  evaluate_with(expr, model, node, &Namespaces::new(), &Variables::new())
 }
 
-/// Evaluates an expression with `node` as the context node and `environment` in scope.
+/// Evaluates an expression tree with `node` as the context node and the given bindings in scope.
 ///
 /// # Errors
 ///
@@ -110,14 +136,14 @@ pub fn evaluate<M: Model>(expr: &Expr, model: &M, node: M::Node) -> Result<Value
 /// ```
 /// use xylograph_dom::build;
 /// use xylograph_xdm::DomModel;
-/// use xylograph_xpath::{Environment, Value, evaluate_with, parse};
+/// use xylograph_xpath::{Namespaces, Value, Variables, evaluate_with, parse};
 ///
 /// let doc = build::parse("<a><b>x</b></a>".as_bytes())?;
 /// let model = DomModel::new(&doc);
-/// let environment = Environment::new().with_variable("want", Value::String("x".to_owned()));
+/// let variables = Variables::new().with("want", Value::String("x".to_owned()));
 ///
 /// let expr = parse("//b[. = $want]")?;
-/// let value = evaluate_with(&expr, &model, model.root_node(), &environment)?;
+/// let value = evaluate_with(&expr, &model, model.root_node(), &Namespaces::new(), &variables)?;
 /// assert!(value.boolean(), "the b element was found");
 /// # Ok::<(), xylograph_core::Error>(())
 /// ```
@@ -125,8 +151,9 @@ pub fn evaluate_with<M: Model>(
   expr: &Expr,
   model: &M,
   node: M::Node,
-  environment: &Environment<M::Node>,
+  namespaces: &Namespaces,
+  variables: &Variables<M::Node>,
 ) -> Result<Value<M::Node>> {
-  let context = Context::new(model, node, environment);
+  let context = Context::new(model, node, namespaces, variables);
   eval::eval(expr, &context)
 }

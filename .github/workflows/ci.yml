@@ -61,8 +61,8 @@ jobs:
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the
-    # parser and validator are measured against it on every push rather than only when
-    # someone remembers.
+    # parser and validator are measured against something they did not write, on every push
+    # rather than only when someone remembers.
     name: W3C conformance
     runs-on: ubuntu-latest
     steps:
@@ -81,6 +81,10 @@ jobs:
         run: cargo test -p xylograph-validate --all-features --test conformance -- --nocapture
         env:
           XMLCONF: ${{ github.workspace }}/xmlconf
+      # Printed on every run so that what the specifications leave open, and what this build
+      # answers, is on the record beside the conformance figures rather than only in prose.
+      - name: Report the behaviour the specifications leave open
+        run: cargo test -p xylograph --all-features --test behaviour -- --nocapture
 
   msrv:
     name: MSRV

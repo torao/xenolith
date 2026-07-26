@@ -32,7 +32,7 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4d | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
 
-| [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4d | XPath 1.0: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library |
+| [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
 
 Crates for the XPath evaluator, XSLT, EXSLT and the CLI arrive in later phases;
 each is re-exported through the facade as it lands. See the roadmap.
@@ -88,6 +88,41 @@ This exercises both halves: the parser against the well-formed and not-well-form
 `xylograph-validate` against the invalid cases (89 of 97 detected; the remaining 8 are recorded
 as documented deviations). CI fetches the suite on every push. Cases needing machinery a phase
 does not yet have are counted as skipped and reported, never silently passed.
+
+XPath has no official W3C suite of its own — the XML Query Test Suite covers 2.0, and the corpus
+that exercises XPath 1.0 thoroughly is the OASIS XSLT suite, which needs XSLT to run and will be
+wired up when it exists. A differential comparison against **Java**, whose behaviour this library
+sets out to match, is built on the same expression corpus once the library is complete.
+
+Property-based tests (`cargo test -p xylograph-xpath --test properties`) cover what a
+hand-written case cannot: that the lexer never panics on arbitrary text, that number formatting
+and parsing are inverses, and that printing an expression tree yields something that parses back
+to the same tree.
+
+## Where the specifications do not say
+
+XML and XPath leave a good deal open, and the three kinds of "open" are not the same: what the
+specification leaves **undefined** (another implementation may differ, and a document relying on
+it is not portable), what it allows a range of and **this library picks** (stable across
+platforms), and what depends on the **build or platform** (which features were compiled in).
+They are kept apart in the documentation, and a test prints the whole list — observed by running
+the code, not copied from prose, so it cannot drift:
+
+```bash
+cargo test -p xylograph --all-features --test behaviour -- --nocapture
+```
+
+CI prints it on every run, beside the conformance figures. A behaviour the specification *does*
+pin down never appears there; it belongs in a test that asserts it.
+
+## Coming from Java
+
+The APIs follow their Java counterparts where the names carry meaning, so what you know there
+transfers: `org.w3c.dom` in [`xylograph-dom`](crates/xylograph-dom), and `javax.xml.xpath` in
+[`xylograph-xpath`](crates/xylograph-xpath) — `XPath` is the environment, `XPathExpression` the
+compiled expression, `Namespaces` the `NamespaceContext`, `Variables` the
+`XPathVariableResolver`. Each crate's documentation carries the mapping in full, including where
+it deliberately differs.
 
 ## License
 

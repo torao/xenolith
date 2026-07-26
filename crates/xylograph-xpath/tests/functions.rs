@@ -3,16 +3,15 @@
 use xylograph_core::ErrorKind;
 use xylograph_dom::build;
 use xylograph_xdm::{DomModel, Model};
-use xylograph_xpath::{Environment, Value, evaluate_with, parse};
+use xylograph_xpath::{Value, XPath};
 
 /// An expression's result over `xml`, converted to a string the way XPath would. The prefix `p`
 /// is bound, since the sample document uses it.
 fn value(xml: &str, expression: &str) -> String {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
-  let expr = parse(expression).expect("parses");
-  let environment = Environment::new().with_namespace("p", "urn:p");
-  let value = evaluate_with(&expr, &model, model.root_node(), &environment).expect("evaluates");
+  let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
+  let value = query.evaluate(&model, model.root_node()).expect("evaluates");
   value.string(&model)
 }
 
@@ -20,9 +19,8 @@ fn value(xml: &str, expression: &str) -> String {
 fn text(xml: &str, expression: &str) -> String {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
-  let expr = parse(expression).expect("parses");
-  let environment = Environment::new().with_namespace("p", "urn:p");
-  match evaluate_with(&expr, &model, model.root_node(), &environment).expect("evaluates") {
+  let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
+  match query.evaluate(&model, model.root_node()).expect("evaluates") {
     Value::NodeSet(nodes) => nodes.iter().map(|node| model.string_value(*node)).collect::<Vec<_>>().join(","),
     other => panic!("expected a node-set, got {other:?}"),
   }
@@ -32,9 +30,8 @@ fn text(xml: &str, expression: &str) -> String {
 fn error(xml: &str, expression: &str) -> String {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
-  let expr = parse(expression).expect("parses");
-  let environment = Environment::new();
-  let error = evaluate_with(&expr, &model, model.root_node(), &environment).expect_err("fails");
+  let query = XPath::new().compile(expression).expect("parses");
+  let error = query.evaluate(&model, model.root_node()).expect_err("fails");
   assert_eq!(error.kind(), ErrorKind::XPath);
   error.message().to_owned()
 }

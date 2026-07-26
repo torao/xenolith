@@ -239,7 +239,11 @@ fn round(value: f64) -> f64 {
   if !value.is_finite() || value.fract() == 0.0 {
     return value;
   }
-  (value + 0.5).floor()
+  let rounded = (value + 0.5).floor();
+  // §4.4 is explicit that rounding a value between -0.5 and zero gives *negative* zero, which
+  // `floor` does not: it returns positive zero. The two print alike, so the difference only
+  // shows through division — `1 div round(-0.5)` is -Infinity, not Infinity.
+  if rounded == 0.0 && value.is_sign_negative() { -0.0 } else { rounded }
 }
 
 /// `lang()`: whether the language in scope on the context node is `wanted`, or a sublanguage of
@@ -336,6 +340,17 @@ mod tests {
     assert_eq!(round(-1.6), -2.0);
     assert!(round(f64::NAN).is_nan());
     assert_eq!(round(f64::INFINITY), f64::INFINITY);
+  }
+
+  #[test]
+  fn rounding_towards_zero_from_below_keeps_the_sign() {
+    // §4.4: round(-0.5) is -0, not 0. Both print as "0", so the sign shows only in arithmetic.
+    for value in [-0.5, -0.3, -0.0] {
+      let rounded = round(value);
+      assert_eq!(rounded, 0.0);
+      assert!(rounded.is_sign_negative(), "round({value}) should be negative zero");
+    }
+    assert!(round(0.3).is_sign_positive(), "round(0.3) is positive zero");
   }
 
   #[test]
