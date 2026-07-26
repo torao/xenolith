@@ -1196,19 +1196,13 @@ impl<M: Model> Engine<'_, M> {
     gather_countable(self.model, self.model.root(node), &mut nodes);
     // §7.7: with `from`, counting restarts after the last node before this one that matches it.
     let mut start = 0;
-    if from.is_some() {
+    if let Some(from) = from {
       for (index, candidate) in nodes.iter().enumerate() {
         if self.model.document_order(*candidate, node) == Ordering::Greater {
           break;
         }
         let variables = self.variables();
-        let matched = from.expect("just checked").matches_using(
-          self.model,
-          *candidate,
-          namespaces,
-          &variables,
-          self.running.as_ref(),
-        )?;
+        let matched = from.matches_using(self.model, *candidate, namespaces, &variables, self.running.as_ref())?;
         if matched {
           start = index;
         }
