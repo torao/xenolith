@@ -20,7 +20,7 @@ use std::rc::Rc;
 use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_dom::{Document, NodeId, NodeType};
 use xylograph_xdm::{Model, NodeKind};
-use xylograph_xpath::{Context, Expr, Namespaces, Value, Variables};
+use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
 
 use crate::avt::{self, Piece};
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
@@ -135,11 +135,60 @@ impl Transform {
   ///
   /// As [`transform`].
   pub fn run<M: Model>(&self, stylesheet: &Stylesheet, model: &M, node: M::Node) -> Result<ResultTree> {
+    self.run_with(stylesheet, model, node, &Functions::new())
+  }
+
+  /// Runs `stylesheet`, with `functions` available to the expressions in it.
+  ///
+  /// An extension function is called by a prefixed name — `my:format(…)` — with the prefix
+  /// resolved through the stylesheet's own namespace declarations, so a stylesheet chooses what
+  /// to call it and the caller only says what it does.
+  ///
+  /// # Errors
+  ///
+  /// As [`transform`], and whatever an extension function itself raises.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_dom::build;
+  /// use xylograph_xdm::DomModel;
+  /// use xylograph_xpath::{Context, Functions, Value};
+  /// use xylograph_xslt::{Stylesheet, Transform};
+  ///
+  /// let stylesheet = Stylesheet::compile(
+  ///   br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  ///                       xmlns:my="urn:my">
+  ///         <xsl:template match="/"><xsl:value-of select="my:shout('hi')"/></xsl:template>
+  ///       </xsl:stylesheet>"#,
+  ///   "file:///s.xsl",
+  /// )?;
+  ///
+  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let model = DomModel::new(&doc);
+  ///
+  /// // The set is tied to the model it will run against, so it is built after it.
+  /// let functions = Functions::new().with("urn:my", "shout", |arguments: Vec<Value<_>>, context: &Context<'_, _>| {
+  ///   Ok(Value::String(arguments[0].string(context.model).to_uppercase()))
+  /// });
+  ///
+  /// let result = Transform::new().run_with(&stylesheet, &model, model.root_node(), &functions)?;
+  /// assert_eq!(result.text(), "HI");
+  /// # Ok::<(), xylograph_core::Error>(())
+  /// ```
+  pub fn run_with<M: Model>(
+    &self,
+    stylesheet: &Stylesheet,
+    model: &M,
+    node: M::Node,
+    functions: &Functions<M>,
+  ) -> Result<ResultTree> {
     let mut output = Document::new();
     let root = output.create_document_fragment();
     let mut engine = Engine {
       stylesheet,
       model,
+      functions,
       output,
       insertion: vec![root],
       scopes: Vec::new(),
@@ -171,6 +220,8 @@ struct Binding<N> {
 struct Engine<'a, M: Model> {
   stylesheet: &'a Stylesheet,
   model: &'a M,
+  /// The extension functions the expressions in the stylesheet may call.
+  functions: &'a Functions<M>,
   output: Document,
   /// The result nodes being filled, innermost last; new content is appended to the last.
   insertion: Vec<NodeId>,
@@ -566,8 +617,11 @@ impl<M: Model> Engine<'_, M> {
     let parsed = self.expression(expression)?;
     // The focus carries where the node sits in the list being processed, which is what
     // `position()` and `last()` report.
-    let context =
-      Context::new(self.model, focus.node, &namespaces, &variables).at(focus.node, focus.position, focus.size);
+    let context = Context::new(self.model, focus.node, &namespaces, &variables).with_functions(self.functions).at(
+      focus.node,
+      focus.position,
+      focus.size,
+    );
     xylograph_xpath::evaluate_in(&parsed, &context)
   }
 

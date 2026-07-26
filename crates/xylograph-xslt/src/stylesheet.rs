@@ -55,6 +55,19 @@ pub struct Stylesheet {
   modules: Vec<Module>,
   templates: Vec<Template>,
   variables: Vec<Variable>,
+  output: OutputMethod,
+}
+
+/// How `xsl:output` asks for the result to be written (XSLT 1.0 §16).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputMethod {
+  /// `method="xml"`, and what a stylesheet that says nothing gets.
+  #[default]
+  Xml,
+  /// `method="html"`.
+  Html,
+  /// `method="text"`: the character data of the result, and nothing else.
+  Text,
 }
 
 /// One document of a stylesheet, with the import precedence it was given.
@@ -91,7 +104,8 @@ impl Stylesheet {
   /// `xsl:output`, `xsl:key`, `xsl:strip-space` and the rest — are read past without complaint;
   /// they arrive in later phases. See `ROADMAP.md`.
   pub fn compile_with<L: Loader>(source: &[u8], system_id: &str, loader: &mut L) -> Result<Self> {
-    let mut stylesheet = Self { modules: Vec::new(), templates: Vec::new(), variables: Vec::new() };
+    let mut stylesheet =
+      Self { modules: Vec::new(), templates: Vec::new(), variables: Vec::new(), output: OutputMethod::default() };
     let principal = stylesheet.load_module(source, system_id)?;
     let mut counter = 0;
     stylesheet.assign_precedence(principal, &mut counter, loader)?;
@@ -113,6 +127,17 @@ impl Stylesheet {
   #[must_use]
   pub fn variables(&self) -> &[Variable] {
     &self.variables
+  }
+
+  /// The method `xsl:output` asked the result to be written by, `xml` if it said nothing.
+  ///
+  /// Only [`Text`](OutputMethod::Text) is carried out here, through
+  /// [`ResultTree::text`](crate::ResultTree::text). Writing a result as XML is the serializer's
+  /// job, and the details `xsl:output` can ask for — indentation, the declaration, a doctype —
+  /// arrive in a later phase.
+  #[must_use]
+  pub const fn output_method(&self) -> OutputMethod {
+    self.output
   }
 
   /// The document a module's elements belong to.
@@ -272,6 +297,18 @@ impl Stylesheet {
         "import" => {
           let imported = self.referenced_module(module, element)?;
           self.collect(imported)?;
+        }
+        "output" => {
+          if let Some(method) = self.modules[module].document.attribute(element, "method") {
+            self.output = match method {
+              "xml" => OutputMethod::Xml,
+              "html" => OutputMethod::Html,
+              "text" => OutputMethod::Text,
+              // A qualified name here names a method an implementation invented; XSLT says an
+              // unknown one may be reported.
+              other => return Err(xslt_error(format!("xsl:output method {other:?} is not one this can write"))),
+            };
+          }
         }
         // Everything else is a top-level element a later phase will read.
         _ => {}

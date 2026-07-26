@@ -18,6 +18,7 @@ use std::fmt;
 
 use xylograph_xdm::Model;
 
+use crate::extension::Functions;
 use crate::value::Value;
 
 /// The namespace a prefix in an expression stands for: Java's `NamespaceContext`.
@@ -129,12 +130,21 @@ pub struct Context<'a, M: Model> {
   pub namespaces: &'a Namespaces,
   /// The variables the expression may name.
   pub variables: &'a Variables<M::Node>,
+  /// The extension functions it may call, beyond the core library.
+  pub functions: Option<&'a Functions<M>>,
 }
 
 impl<'a, M: Model> Context<'a, M> {
-  /// A context over `node`, alone: position 1 of a set of 1.
+  /// A context over `node`, alone: position 1 of a set of 1, and no extension functions.
   pub fn new(model: &'a M, node: M::Node, namespaces: &'a Namespaces, variables: &'a Variables<M::Node>) -> Self {
-    Self { model, node, position: 1, size: 1, namespaces, variables }
+    Self { model, node, position: 1, size: 1, namespaces, variables, functions: None }
+  }
+
+  /// The same context, with extension functions available to the expression.
+  #[must_use]
+  pub fn with_functions(mut self, functions: &'a Functions<M>) -> Self {
+    self.functions = Some(functions);
+    self
   }
 
   /// The same context, moved to another node at a given position in a set of `size`.

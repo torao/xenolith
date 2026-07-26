@@ -1,9 +1,16 @@
 //! XSLT 1.0 for xylograph.
 //!
-//! This crate is being built up a piece at a time. So far it holds [`Pattern`], the test an
-//! `xsl:template`'s `match` attribute makes on a node, and [`Stylesheet`], which reads a
-//! stylesheet document into template rules and settles which of them applies to a node. The
-//! engine that runs their bodies follows — see `ROADMAP.md`, Phase 5.
+//! [`Stylesheet`] reads a stylesheet document into its template rules, [`Pattern`] is the test an
+//! `xsl:template`'s `match` makes on a node, and [`transform`] runs the rules over a source tree
+//! to build a result.
+//!
+//! This is XSLT's skeleton, not the whole of it: what runs is listed on [`transform`], and an
+//! instruction outside that list is reported rather than skipped. The rest — `xsl:copy`,
+//! `xsl:element`, `xsl:sort`, `xsl:key`, `xsl:number` and their neighbours — arrives in Phase 6;
+//! see `ROADMAP.md`.
+//!
+//! Extension functions are registered with [`Functions`](xylograph_xpath::Functions) and handed
+//! to [`Transform::run_with`]; EXSLT will be the first thing built on that.
 //!
 //! # Specifications
 //!
@@ -32,4 +39,4 @@ mod stylesheet;
 pub use engine::{DEFAULT_MAX_DEPTH, ResultTree, Transform, transform};
 pub use loader::{Loader, NoLoader};
 pub use pattern::{Alternative, Pattern};
-pub use stylesheet::{Stylesheet, Template, Variable, XSLT_NAMESPACE};
+pub use stylesheet::{OutputMethod, Stylesheet, Template, Variable, XSLT_NAMESPACE};

@@ -652,10 +652,16 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `engine` / `avt` モジュール、`ResultTree` / `Transform`（統合テスト 23 + ユニット 5 + doctest）
 - **完了条件**: 単純なスタイルシートが動く
 
-**5d. 拡張機構と出力**
-- 拡張関数・拡張要素の登録機構（5c の要求に基づいて設計）、`exsl:node-set()`
-- テキスト出力メソッド
-- **完了条件（Phase 5 全体）**: 単純なスタイルシートが動く
+**5d. 拡張機構と出力**✅ 完了
+- **拡張関数の登録機構**（決定 5 の受け皿）: `Function` トレイトと `Functions` レジストリを `xylograph-xpath` に。**Java の `XPathFunction` / `XPathFunctionResolver` そのもの**で、これにより JAXP 対応表の最後の空欄が埋まった
+  - クロージャに `Function` のブランケット実装があるので、登録に専用の型は要らない
+  - 拡張関数は必ず接頭辞付き（XPath は無接頭辞をコア関数のために予約している）。接頭辞は**展開名**に解決してから引くので、スタイルシート側が好きな接頭辞を選べる
+  - `Context` に `functions` を持たせ、`Context::with_functions` で渡す。`Transform::run_with` が XSLT からこれを供給
+  - 未登録の関数は**登録済みの一覧を添えて**エラー（何が使えるか分からないまま落ちない）
+- **出力メソッド**: `xsl:output method` を読んで `OutputMethod`（Xml / Html / Text）。**text メソッドを実装**（`ResultTree::text()` = 結果の文字データのみ）。xml/html の細部（indent・宣言・doctype）は Phase 6。書けないメソッドはエラー
+- **`exsl:node-set()` は Phase 6.5 へ移した**: RTF を木として持つ表現が要り、それは `xsl:copy-of`（Phase 6）と同時に入れるのが筋。5c で「利用者が現れてから設計する」と決めた方針をそのまま適用し、**機構だけ先に用意して実装は利用者と同時**にする
+- **成果物**: `extension` モジュール（xpath）、`Transform::run_with`、`OutputMethod`（統合テスト 9 + doctest 2）
+- **完了条件（Phase 5 全体）✅**: 単純なスタイルシートが動く
 
 ### Phase 6 — XSLT 完全化
 

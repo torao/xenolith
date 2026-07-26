@@ -23,8 +23,10 @@ pub(crate) fn call<M: Model>(
   arguments: Vec<Value<M::Node>>,
   context: &Context<'_, M>,
 ) -> Result<Value<M::Node>> {
+  // A prefixed name is an extension function, which the caller supplies; the core library is
+  // reached only by an unprefixed one.
   if let Some(prefix) = prefix {
-    return Err(unavailable(&format!("{prefix}:{local}")));
+    return extension(prefix, local, arguments, context);
   }
   let model = context.model;
   match local {
@@ -165,6 +167,43 @@ pub(crate) fn call<M: Model>(
 
     _ => Err(unavailable(local)),
   }
+}
+
+/// Calls an extension function, the prefix resolved first.
+fn extension<M: Model>(
+  prefix: &str,
+  local: &str,
+  arguments: Vec<Value<M::Node>>,
+  context: &Context<'_, M>,
+) -> Result<Value<M::Node>> {
+  let Some(namespace) = context.namespaces.get(prefix) else {
+    let message = format!(
+      "the prefix \"{prefix}\" of the function \"{prefix}:{local}\" is not bound; \
+       bind it before compiling the expression"
+    );
+    return Err(Error::new(ErrorKind::XPath, message));
+  };
+  let found = context.functions.and_then(|functions| functions.get(namespace, local));
+  let Some(function) = found else {
+    return Err(no_extension(namespace, local, context));
+  };
+  function.call(arguments, context)
+}
+
+/// Says an extension function is not registered, and what is.
+fn no_extension<M: Model>(namespace: &str, local: &str, context: &Context<'_, M>) -> Error {
+  let mut available: Vec<String> = context
+    .functions
+    .map(|functions| functions.names().map(|(namespace, local)| format!("{{{namespace}}}{local}")).collect())
+    .unwrap_or_default();
+  available.sort();
+  let known = if available.is_empty() {
+    "no extension functions are registered".to_owned()
+  } else {
+    format!("registered: {}", available.join(", "))
+  };
+  let message = format!("no extension function {{{namespace}}}{local} is registered; {known}");
+  Error::new(ErrorKind::XPath, message)
 }
 
 // --- The functions that need more than a line ---------------------------------------------------

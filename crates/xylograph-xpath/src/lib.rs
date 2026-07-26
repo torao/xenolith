@@ -56,13 +56,14 @@
 //! | `XPathExpression` | [`XPathExpression`] |
 //! | `XPathExpression.evaluate(item)` | [`XPathExpression::evaluate`] |
 //! | `XPathVariableResolver` | [`Variables`] |
+//! | `XPathFunctionResolver` | [`Functions`] |
+//! | `XPathFunction` | [`Function`] |
 //! | `XPathConstants.NODESET` / `.STRING` / … | [`Value`] and its conversions |
 //! | `XPathExpressionException` | [`ErrorKind::XPath`](xylograph_core::ErrorKind::XPath) |
 //!
-//! Two differences are deliberate. Java asks for the result type up front and casts; here the
-//! [`Value`] says which type it is and converts on request, since XPath's conversions are what
-//! the operators use anyway. And `XPathFunctionResolver` has no counterpart yet — extension
-//! functions arrive with XSLT.
+//! One difference is deliberate: Java asks for the result type up front and casts, while here
+//! the [`Value`] says which type it is and converts on request, since XPath's conversions are
+//! what the operators use anyway.
 //!
 //! [`parse`] and [`evaluate`] are the two halves underneath, for a caller that holds the
 //! [expression tree](Expr) itself — as XSLT will, to match patterns against it.
@@ -100,6 +101,7 @@ mod axis;
 mod compiled;
 mod context;
 mod eval;
+mod extension;
 mod functions;
 mod lexer;
 mod parser;
@@ -108,6 +110,7 @@ mod value;
 pub use ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
 pub use compiled::{XPath, XPathExpression};
 pub use context::{Context, Namespaces, Variables};
+pub use extension::{Function, Functions};
 pub use value::{Value, number_to_string, string_to_number};
 
 use xylograph_core::error::Result;
