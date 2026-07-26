@@ -34,11 +34,24 @@ use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespace
 /// How deep `xsl:apply-templates` and `xsl:call-template` may go before the transformation is
 /// refused.
 ///
-/// A stylesheet that recurses without end would otherwise exhaust the stack, and a guard that
-/// the stack reaches first is no guard at all — so this is set well below what a debug build
-/// with the usual two-megabyte thread stack can carry, not at what a release build could.
-/// [`Transform::with_max_depth`] raises it for a stylesheet that recurses deeply on purpose.
+/// A stylesheet that recurses without end would otherwise exhaust the stack, and a guard the
+/// stack reaches first is no guard at all — so this is set against what a level actually costs
+/// in a debug build, which is the expensive case, rather than what a release build could carry.
+/// The cost is measured rather than assumed: `the_depth_guard_is_reached_before_the_stack_is`
+/// runs a recursing stylesheet, reads the stack addresses off the levels, and fails with the
+/// figures if this limit no longer fits in one mebibyte — half of what Rust gives a spawned
+/// thread, so that a transformation has as much stack left over as it takes.
+///
+/// [`Transform::with_max_depth`] raises it for a stylesheet that recurses deeply on purpose, on
+/// a thread with the stack to match.
 pub const DEFAULT_MAX_DEPTH: usize = 200;
+
+/// The stack [`DEFAULT_MAX_DEPTH`] is chosen to fit inside.
+///
+/// Half of the two mebibytes Rust gives a spawned thread by default, so that a transformation
+/// running on such a thread has as much stack left over as it takes.
+#[cfg(test)]
+const STACK_BUDGET: usize = 1024 * 1024;
 
 /// The tree a transformation produced.
 ///
@@ -361,41 +374,18 @@ impl<M: Model> Engine<'_, M> {
   }
 
   /// Runs one XSLT instruction.
+  ///
+  /// Every arm is a call rather than a body. A template that recurses passes through here on
+  /// each turn, and a debug build gives one frame slot to each arm's locals whichever arm runs —
+  /// so writing the work inline here would charge the whole instruction set to every level of
+  /// the recursion. See [`DEFAULT_MAX_DEPTH`] for what that costs.
   fn instruction(&mut self, module: usize, element: NodeId, local: &str, focus: Focus<M::Node>) -> Result<()> {
     match local {
-      "value-of" => {
-        let select = self.required(module, element, "select", "xsl:value-of")?;
-        let text = self.string_of(&select, module, element, focus)?;
-        self.append_text(&text);
-        Ok(())
-      }
-      "text" => {
-        let text = self.stylesheet.document(module).text_content(element);
-        self.append_text(&text);
-        Ok(())
-      }
-      "if" => {
-        let test = self.required(module, element, "test", "xsl:if")?;
-        if self.evaluate(&test, module, element, focus)?.boolean() {
-          return self.run_body(module, element, focus);
-        }
-        Ok(())
-      }
+      "value-of" => self.value_of(module, element, focus),
+      "text" => self.text(module, element),
+      "if" => self.if_instruction(module, element, focus),
       "choose" => self.choose(module, element, focus),
-      "for-each" => {
-        let select = self.required(module, element, "select", "xsl:for-each")?;
-        let nodes = self.node_set(&select, module, element, focus, "xsl:for-each")?;
-        for (index, node) in nodes.iter().enumerate() {
-          let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
-          // Each turn of the loop is its own scope, so a variable declared inside does not
-          // leak into the next.
-          self.scopes.push(Vec::new());
-          let outcome = self.run_body(module, element, inner);
-          self.scopes.pop();
-          outcome?;
-        }
-        Ok(())
-      }
+      "for-each" => self.for_each(module, element, focus),
       "apply-templates" => self.apply_templates(module, element, focus),
       "call-template" => self.call_template(module, element, focus),
       "variable" | "param" => self.declare(module, element, local, focus),
@@ -403,45 +393,97 @@ impl<M: Model> Engine<'_, M> {
       "with-param" => Ok(()),
       "element" => self.element_instruction(module, element, focus),
       "attribute" => self.attribute_instruction(module, element, focus),
-      "comment" => {
-        let text = self.captured_text(module, element, focus)?;
-        let node = self.output.create_comment(&text);
-        self.append(node)
-      }
-      "processing-instruction" => {
-        let target = self.required(module, element, "name", "xsl:processing-instruction")?;
-        let target = self.attribute_value(&target, module, element, focus)?;
-        let data = self.captured_text(module, element, focus)?;
-        let node = self.output.create_processing_instruction(&target, &data).map_err(dom_error)?;
-        self.append(node)
-      }
+      "comment" => self.comment(module, element, focus),
+      "processing-instruction" => self.processing_instruction(module, element, focus),
       "copy" => self.copy(module, element, focus),
-      "copy-of" => {
-        let select = self.required(module, element, "select", "xsl:copy-of")?;
-        match self.evaluate(&select, module, element, focus)? {
-          // A node-set is copied whole, each node with everything below it.
-          Value::NodeSet(nodes) => {
-            for node in nodes {
-              self.copy_deep(node)?;
-            }
-            Ok(())
-          }
-          // Anything else is its string, which is what xsl:value-of would have given.
-          other => {
-            let text = other.string(self.model);
-            self.append_text(&text);
-            Ok(())
-          }
-        }
-      }
+      "copy-of" => self.copy_of(module, element, focus),
       "message" => self.message(module, element, focus),
       // A top-level declaration reached here is not an instruction; it was read at compile time.
       "attribute-set" | "output" | "import" | "include" | "template" => Ok(()),
+      other => self.not_implemented(other),
+    }
+  }
+
+  /// `xsl:value-of`: the string value of an expression.
+  fn value_of(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let select = self.required(module, element, "select", "xsl:value-of")?;
+    let text = self.string_of(&select, module, element, focus)?;
+    self.append_text(&text);
+    Ok(())
+  }
+
+  /// `xsl:text`: literal characters, including the whitespace §3.4 would otherwise strip.
+  fn text(&mut self, module: usize, element: NodeId) -> Result<()> {
+    let text = self.stylesheet.document(module).text_content(element);
+    self.append_text(&text);
+    Ok(())
+  }
+
+  /// `xsl:if`: the body, when the test is true.
+  fn if_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let test = self.required(module, element, "test", "xsl:if")?;
+    if self.evaluate(&test, module, element, focus)?.boolean() {
+      return self.run_body(module, element, focus);
+    }
+    Ok(())
+  }
+
+  /// `xsl:for-each`: the body once per node, each knowing its place in the list.
+  fn for_each(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let select = self.required(module, element, "select", "xsl:for-each")?;
+    let nodes = self.node_set(&select, module, element, focus, "xsl:for-each")?;
+    for (index, node) in nodes.iter().enumerate() {
+      let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
+      // Each turn of the loop is its own scope, so a variable declared inside does not leak
+      // into the next.
+      self.scopes.push(Vec::new());
+      let outcome = self.run_body(module, element, inner);
+      self.scopes.pop();
+      outcome?;
+    }
+    Ok(())
+  }
+
+  /// `xsl:comment`: a comment whose data is what the body produced.
+  fn comment(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let text = self.captured_text(module, element, focus)?;
+    let node = self.output.create_comment(&text);
+    self.append(node)
+  }
+
+  /// `xsl:processing-instruction`: a PI whose target is an AVT and whose data is the body.
+  fn processing_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let target = self.required(module, element, "name", "xsl:processing-instruction")?;
+    let target = self.attribute_value(&target, module, element, focus)?;
+    let data = self.captured_text(module, element, focus)?;
+    let node = self.output.create_processing_instruction(&target, &data).map_err(dom_error)?;
+    self.append(node)
+  }
+
+  /// `xsl:copy-of`: a node-set copied whole, or anything else as its string.
+  fn copy_of(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let select = self.required(module, element, "select", "xsl:copy-of")?;
+    match self.evaluate(&select, module, element, focus)? {
+      // A node-set is copied whole, each node with everything below it.
+      Value::NodeSet(nodes) => {
+        for node in nodes {
+          self.copy_deep(node)?;
+        }
+        Ok(())
+      }
+      // Anything else is its string, which is what xsl:value-of would have given.
       other => {
-        let message = format!("xsl:{other} is not implemented yet; see ROADMAP.md for which phase brings it");
-        Err(Error::new(ErrorKind::Xslt, message))
+        let text = other.string(self.model);
+        self.append_text(&text);
+        Ok(())
       }
     }
+  }
+
+  /// An instruction a later phase brings, named so that the stylesheet author knows which.
+  fn not_implemented(&self, local: &str) -> Result<()> {
+    let message = format!("xsl:{local} is not implemented yet; see ROADMAP.md for which phase brings it");
+    Err(Error::new(ErrorKind::Xslt, message))
   }
 
   fn choose(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
@@ -506,6 +548,8 @@ impl<M: Model> Engine<'_, M> {
   }
 
   fn call_template(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    #[cfg(test)]
+    stack_probe::record(self.depth);
     let name = self.required(module, element, "name", "xsl:call-template")?;
     let parameters = self.with_params(module, element, focus)?;
     let Some(template) = self.stylesheet.template_named(&name) else {
@@ -1002,4 +1046,76 @@ fn describe<N>(value: &Value<N>) -> &'static str {
 /// something a stylesheet did.
 fn dom_error(error: xylograph_dom::DomException) -> Error {
   Error::internal(format!("building the result tree: {error}"))
+}
+
+/// Where the stack stood at each level of a recursing transformation.
+///
+/// [`DEFAULT_MAX_DEPTH`] is only a guard if it is reached before the stack runs out, and what a
+/// level costs is a property of the compiled code rather than something that can be read off the
+/// source. So it is measured: `call_template` leaves a mark, and the test below reads the marks.
+#[cfg(test)]
+mod stack_probe {
+  use std::cell::RefCell;
+
+  thread_local! {
+    static LEVELS: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
+  }
+
+  /// Records how far down the stack this level of the recursion sits.
+  pub(super) fn record(depth: usize) {
+    let marker = 0u8;
+    let address = std::ptr::from_ref(&marker) as usize;
+    LEVELS.with(|levels| levels.borrow_mut().push((depth, address)));
+  }
+
+  /// Takes what has been recorded so far, leaving the probe empty for the next run.
+  pub(super) fn take() -> Vec<(usize, usize)> {
+    LEVELS.with(|levels| std::mem::take(&mut *levels.borrow_mut()))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::Stylesheet;
+
+  /// A stylesheet that calls itself for ever, so that the guard is what stops it.
+  const ENDLESS: &str = r#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+      <xsl:template match="/"><xsl:call-template name="loop"/></xsl:template>
+      <xsl:template name="loop"><xsl:call-template name="loop"/></xsl:template>
+    </xsl:stylesheet>"#;
+
+  #[test]
+  fn the_depth_guard_is_reached_before_the_stack_is() {
+    let stylesheet = Stylesheet::compile(ENDLESS.as_bytes(), "file:///s.xsl").expect("compiles");
+    let document = xylograph_dom::build::parse("<a/>".as_bytes()).expect("well-formed");
+    let model = xylograph_xdm::DomModel::new(&document);
+
+    let _ = stack_probe::take();
+    let outcome = transform(&stylesheet, &model, model.root_node());
+    let levels = stack_probe::take();
+
+    let error = outcome.expect_err("the guard stops it");
+    assert!(error.message().contains("templates deep"), "{}", error.message());
+
+    // The first level or two pay for setting the transformation up, so measure between two
+    // levels that are both well inside the recursion.
+    let (shallow_depth, shallow_address) = levels[1];
+    let (deep_depth, deep_address) = *levels.last().expect("the guard was reached, so levels were recorded");
+    let levels_apart = deep_depth - shallow_depth;
+    // The stack grows downwards on every target this runs on, but the subtraction is written so
+    // that it would not underflow if that ever stopped being true.
+    let bytes_apart = shallow_address.abs_diff(deep_address);
+    let per_level = bytes_apart / levels_apart;
+    let needed = per_level * DEFAULT_MAX_DEPTH;
+
+    assert!(
+      needed <= STACK_BUDGET,
+      "a template level costs {per_level} bytes, so DEFAULT_MAX_DEPTH ({DEFAULT_MAX_DEPTH}) needs \
+       {} KiB of stack — more than the {} KiB budget. Either the engine's frames have grown and \
+       should be trimmed, or DEFAULT_MAX_DEPTH should come down.",
+      needed / 1024,
+      STACK_BUDGET / 1024,
+    );
+  }
 }

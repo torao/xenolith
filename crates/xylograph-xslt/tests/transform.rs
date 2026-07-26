@@ -196,9 +196,22 @@ fn a_namespaced_literal_element_keeps_its_namespace() {
 fn recursion_without_end_is_stopped() {
   // The point of the default limit is that it is reached before the stack is, so this must come
   // back as an error rather than take the process down with it.
-  let body = "<xsl:template match=\"/\"><xsl:call-template name=\"loop\"/></xsl:template>\
-              <xsl:template name=\"loop\"><xsl:call-template name=\"loop\"/></xsl:template>";
-  assert!(error(body, "<a/>").contains("templates deep"), "{}", error(body, "<a/>"));
+  //
+  // The stack this runs on is stated rather than inherited. A test harness gives a lone test the
+  // main thread and everything else a spawned one, and those have different amounts of stack —
+  // so a test that took whatever it was given would pass or fail by how it happened to be run.
+  // Two mebibytes is what Rust gives a spawned thread by default, and that is the case the
+  // limit is chosen for; `the_depth_guard_is_reached_before_the_stack_is` measures the margin.
+  let recursion = std::thread::Builder::new()
+    .stack_size(2 * 1024 * 1024)
+    .spawn(|| {
+      let body = "<xsl:template match=\"/\"><xsl:call-template name=\"loop\"/></xsl:template>\
+                  <xsl:template name=\"loop\"><xsl:call-template name=\"loop\"/></xsl:template>";
+      error(body, "<a/>")
+    })
+    .expect("spawns");
+  let message = recursion.join().expect("the guard stops it before the stack does");
+  assert!(message.contains("templates deep"), "{message}");
 }
 
 #[test]
