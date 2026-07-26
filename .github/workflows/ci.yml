@@ -58,6 +58,13 @@ jobs:
       - run: cargo test -p xylograph-validate --no-default-features --features xml-id
       - run: cargo test -p xylograph-dom --no-default-features --features parse
       - run: cargo test -p xylograph-xinclude --no-default-features --features encodings
+      # `icu` changes what xsl:sort *answers*, not just how fast it is, so the build without it
+      # is exercised rather than assumed to behave the same.
+      - run: cargo test -p xylograph-xslt --no-default-features
+      - run: cargo test -p xylograph-xslt --no-default-features --features icu
+      # The report of what the specifications leave open is worth seeing in the build where the
+      # collation answer is the other one.
+      - run: cargo test -p xylograph --no-default-features --features parse --test behaviour -- --nocapture
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the

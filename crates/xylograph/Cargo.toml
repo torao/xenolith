@@ -11,7 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["encodings", "parse"]
+default = ["encodings", "parse", "icu"]
+# Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it, a text sort
+# compares by Unicode code point; see `tests/behaviour.rs`.
+icu = ["xylograph-xslt/icu"]
 # Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
 encodings = [
   "xylograph-core/encodings",

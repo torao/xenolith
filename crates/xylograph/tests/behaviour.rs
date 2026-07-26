@@ -60,6 +60,21 @@ fn round_trip(xml: &str) -> String {
   Serializer::new().to_string(&doc, doc.document_element().expect("a root element"))
 }
 
+/// Sorts the `i` elements of `xml` with one `xsl:sort`, and lists them in the order they come out.
+fn sorted(xml: &str, sort: &str) -> String {
+  let source = format!(
+    "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">\
+       <xsl:template match=\"/\"><xsl:for-each select=\"//i\">{sort}\
+         <xsl:value-of select=\".\"/><xsl:text> </xsl:text></xsl:for-each></xsl:template>\
+     </xsl:stylesheet>"
+  );
+  let stylesheet = xylograph::xslt::Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  let result = xylograph::xslt::transform(&stylesheet, &model, model.root_node()).expect("transforms");
+  result.text().trim_end().to_owned()
+}
+
 /// One entry of the report.
 struct Item {
   /// Where the question comes from.
@@ -186,6 +201,31 @@ fn undefined_by_the_specification() -> Vec<Item> {
     )
     .observe("no DTD: count(id('a')) over <r><i k='a'/></r>", value("<r><i k='a'/></r>", "string(count(id('a')))"))
     .observe("this build uses", "only attributes a DTD or xml:id typed as ID"),
+    item(
+      "XSLT 1.0 §10",
+      "the order two strings sort in for a text xsl:sort",
+      "says the sort uses the collating sequence for the language, without defining one; two \
+       conformant processors may put the same two strings the other way round",
+    )
+    .observe("a, z, \u{e4} — no lang", sorted("<r><i>\u{e4}</i><i>z</i><i>a</i></r>", "<xsl:sort/>"))
+    .observe("a, z, \u{e4} — lang='sv'", sorted("<r><i>\u{e4}</i><i>z</i><i>a</i></r>", "<xsl:sort lang='sv'/>"))
+    .observe("a, z, \u{e4} — lang='de'", sorted("<r><i>\u{e4}</i><i>z</i><i>a</i></r>", "<xsl:sort lang='de'/>"))
+    .observe("this build uses", if cfg!(feature = "icu") { "CLDR, through ICU4X" } else { "Unicode code point order" }),
+    item(
+      "XSLT 1.0 §10",
+      "where a sort key that is not a number goes in a numeric sort",
+      "converts the key with number(), which gives NaN for a key that is not a number, but does \
+       not say where NaN sorts",
+    )
+    .observe(
+      "2, oops, 1 — data-type='number'",
+      sorted("<r><i>2</i><i>oops</i><i>1</i></r>", "<xsl:sort data-type='number'/>"),
+    )
+    .observe("this build puts", "NaN first, which is what XSLT 2.0 later settled on")
+    .observe(
+      "descending reverses it",
+      sorted("<r><i>2</i><i>oops</i><i>1</i></r>", "<xsl:sort data-type='number' order='descending'/>"),
+    ),
   ]
 }
 
@@ -259,7 +299,18 @@ fn dependent_on_the_build() -> Vec<Item> {
     .observe("xml:base (feature xml-base)", cfg!(feature = "xml-base").to_string())
     .observe("xml:id (feature xml-id)", cfg!(feature = "xml-id").to_string())
     .observe("XInclude (feature xinclude)", cfg!(feature = "xinclude").to_string())
-    .observe("DOM building (feature parse)", cfg!(feature = "parse").to_string()),
+    .observe("DOM building (feature parse)", cfg!(feature = "parse").to_string())
+    .observe("language-aware collation (feature icu)", xylograph::xslt::language_aware_collation().to_string()),
+    item(
+      "XSLT 1.0 §10",
+      "how far apart two builds can be on the same xsl:sort",
+      "leaves the collating sequence open, so the `icu` feature changes the answer rather than \
+       merely making it faster",
+    )
+    .observe("with icu", "a language's own conventions, from CLDR — \u{e4} beside a in German, after z in Swedish")
+    .observe("without icu", "Unicode code point order, which is stable but is nobody's alphabet")
+    .observe("this build", if xylograph::xslt::language_aware_collation() { "has it" } else { "does not" })
+    .observe("a, z, \u{e4} with lang='sv'", sorted("<r><i>\u{e4}</i><i>z</i><i>a</i></r>", "<xsl:sort lang='sv'/>")),
     item(
       "",
       "what does *not* depend on the platform, though it might be expected to",

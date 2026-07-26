@@ -19,11 +19,15 @@
 //! in [`functions`](crate::functions) — `current()`, `key()`, `generate-id()`,
 //! `system-property()`, `element-available()` and `function-available()`.
 //!
-//! What is still missing is `xsl:sort`, `xsl:number`, `xsl:decimal-format`,
+//! `xsl:sort` orders the node list of an `xsl:apply-templates` or an `xsl:for-each`; how two
+//! text keys compare is [`collate`](crate::collate)'s business, and depends on the build.
+//!
+//! What is still missing is `xsl:number`, `xsl:decimal-format`,
 //! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
 //! half-runs in silence — and `element-available()` says so beforehand, from the same list.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -33,6 +37,7 @@ use xylograph_xdm::{Model, NodeKind};
 use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
 
 use crate::avt::{self, Piece};
+use crate::collate::{CaseOrder, Collator};
 use crate::functions::Running;
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
 
@@ -71,6 +76,7 @@ const INSTRUCTIONS: &[&str] = &[
   "message",
   "param",
   "processing-instruction",
+  "sort",
   "text",
   "value-of",
   "variable",
@@ -289,6 +295,48 @@ struct Binding<N> {
   value: Value<N>,
 }
 
+/// One `xsl:sort`, read once for a whole list (XSLT 1.0 §10).
+struct SortSpecification {
+  /// What to take the key from; `.` when the sort does not say.
+  select: String,
+  /// `data-type="number"`, which compares as numbers rather than as text.
+  numeric: bool,
+  /// `order="descending"`.
+  descending: bool,
+  /// How text keys are compared, and how case breaks a tie.
+  collator: Collator,
+  /// The `xsl:sort` element, which the `select` expression is read against.
+  element: NodeId,
+}
+
+/// One node's key for one `xsl:sort`.
+enum SortKey {
+  Text(String),
+  Number(f64),
+}
+
+impl SortKey {
+  /// Compares two keys of the same sort.
+  fn compare(&self, other: &Self, collator: &Collator) -> Ordering {
+    match (self, other) {
+      (Self::Text(a), Self::Text(b)) => collator.compare(a, b),
+      // A key that cannot be read as a number becomes NaN, and XSLT 1.0 §10 does not say where
+      // those go — this is a choice, not a rule. They go first, which is what XSLT 2.0 later
+      // settled on and what the processors of the time did, so a stylesheet written against one
+      // of those behaves the same here. `total_cmp` orders the rest, so no comparison is ever
+      // undefined and the sort cannot misbehave.
+      (Self::Number(a), Self::Number(b)) => match (a.is_nan(), b.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => a.total_cmp(b),
+      },
+      // Both keys come from the same xsl:sort, so they are always the same kind.
+      _ => Ordering::Equal,
+    }
+  }
+}
+
 struct Engine<'a, M: Model> {
   stylesheet: &'a Stylesheet,
   model: &'a M,
@@ -435,8 +483,8 @@ impl<M: Model> Engine<'_, M> {
       "apply-templates" => self.apply_templates(module, element, focus),
       "call-template" => self.call_template(module, element, focus),
       "variable" | "param" => self.declare(module, element, local, focus),
-      // xsl:with-param is read by the instruction it belongs to, not run on its own.
-      "with-param" => Ok(()),
+      // These are read by the instruction they belong to, not run on their own.
+      "with-param" | "sort" => Ok(()),
       "element" => self.element_instruction(module, element, focus),
       "attribute" => self.attribute_instruction(module, element, focus),
       "comment" => self.comment(module, element, focus),
@@ -477,7 +525,8 @@ impl<M: Model> Engine<'_, M> {
   /// `xsl:for-each`: the body once per node, each knowing its place in the list.
   fn for_each(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let select = self.required(module, element, "select", "xsl:for-each")?;
-    let nodes = self.node_set(&select, module, element, focus, "xsl:for-each")?;
+    let mut nodes = self.node_set(&select, module, element, focus, "xsl:for-each")?;
+    self.sort_nodes(&mut nodes, module, element, focus)?;
     for (index, node) in nodes.iter().enumerate() {
       let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
       // Each turn of the loop is its own scope, so a variable declared inside does not leak
@@ -564,10 +613,11 @@ impl<M: Model> Engine<'_, M> {
     let parameters = self.with_params(module, element, focus)?;
 
     // Without a select, the children are what the rules are applied to.
-    let nodes = match select {
+    let mut nodes = match select {
       Some(select) => self.node_set(&select, module, element, focus, "xsl:apply-templates")?,
       None => self.model.children(focus.node),
     };
+    self.sort_nodes(&mut nodes, module, element, focus)?;
     if parameters.is_empty() {
       return self.apply_to_all(&nodes, mode.as_deref());
     }
@@ -971,6 +1021,138 @@ impl<M: Model> Engine<'_, M> {
       scope.push(Binding { name, value });
     }
     Ok(())
+  }
+
+  // --- Sorting ------------------------------------------------------------------------------
+
+  /// Puts a node list into the order the `xsl:sort` children of an instruction ask for (§10).
+  ///
+  /// Nothing happens without an `xsl:sort`, and a node list is then in document order, which is
+  /// what §5.4 says it should be.
+  fn sort_nodes(
+    &mut self,
+    nodes: &mut Vec<M::Node>,
+    module: usize,
+    element: NodeId,
+    focus: Focus<M::Node>,
+  ) -> Result<()> {
+    let sorts = self.sort_specifications(module, element, focus)?;
+    if sorts.is_empty() || nodes.len() < 2 {
+      return Ok(());
+    }
+
+    // Every key is worked out before anything moves. The context position a key is evaluated
+    // with is the node's place in the list *as selected*, so it must not be read from a list
+    // that is half sorted — and it also means each key is computed once rather than once per
+    // comparison.
+    let mut keyed: Vec<(Vec<SortKey>, usize, M::Node)> = Vec::with_capacity(nodes.len());
+    for (index, node) in nodes.iter().enumerate() {
+      let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
+      let mut keys = Vec::with_capacity(sorts.len());
+      for sort in &sorts {
+        keys.push(self.sort_key(sort, module, inner)?);
+      }
+      keyed.push((keys, index, *node));
+    }
+
+    keyed.sort_by(|a, b| {
+      for (position, sort) in sorts.iter().enumerate() {
+        let ordering = a.0[position].compare(&b.0[position], &sort.collator);
+        let ordering = if sort.descending { ordering.reverse() } else { ordering };
+        if ordering != Ordering::Equal {
+          return ordering;
+        }
+      }
+      // §10 requires the sort to be stable, so equal keys keep the order they were selected in.
+      a.1.cmp(&b.1)
+    });
+
+    *nodes = keyed.into_iter().map(|(_, _, node)| node).collect();
+    Ok(())
+  }
+
+  /// Reads the `xsl:sort` children of an instruction, major key first.
+  fn sort_specifications(
+    &mut self,
+    module: usize,
+    element: NodeId,
+    focus: Focus<M::Node>,
+  ) -> Result<Vec<SortSpecification>> {
+    let children: Vec<NodeId> = self.stylesheet.document(module).children(element).collect();
+    let mut sorts = Vec::new();
+    for child in children {
+      let document = self.stylesheet.document(module);
+      let is_sort = document.node_type(child) == NodeType::Element
+        && document.namespace_uri(child) == Some(XSLT_NAMESPACE)
+        && document.local_name(child) == Some("sort");
+      if !is_sort {
+        continue;
+      }
+      sorts.push(self.read_sort(module, child, focus)?);
+    }
+    Ok(sorts)
+  }
+
+  /// Reads one `xsl:sort`.
+  ///
+  /// Its attributes other than `select` are attribute value templates, so they are expanded
+  /// once here — §10 evaluates them against the node the instruction is on, not against each of
+  /// the nodes being sorted, which is what makes one collator serve the whole list.
+  fn read_sort(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<SortSpecification> {
+    let document = self.stylesheet.document(module);
+    let select = document.attribute(element, "select").unwrap_or(".").to_owned();
+    let raw: Vec<Option<String>> = ["lang", "data-type", "order", "case-order"]
+      .iter()
+      .map(|name| document.attribute(element, name).map(ToOwned::to_owned))
+      .collect();
+
+    let mut expanded = Vec::with_capacity(raw.len());
+    for value in raw {
+      expanded.push(match value {
+        Some(value) => Some(self.attribute_value(&value, module, element, focus)?),
+        None => None,
+      });
+    }
+    let [lang, data_type, order, case_order] =
+      <[Option<String>; 4]>::try_from(expanded).expect("four attribute names were expanded, so four values came back");
+
+    let numeric = match data_type.as_deref() {
+      None | Some("text") => false,
+      Some("number") => true,
+      // A qualified name here names a type an implementation invented.
+      Some(other) => {
+        let message = format!("xsl:sort data-type {other:?} is not one this understands");
+        return Err(Error::new(ErrorKind::Xslt, message));
+      }
+    };
+    let descending = match order.as_deref() {
+      None | Some("ascending") => false,
+      Some("descending") => true,
+      Some(other) => {
+        let message = format!("xsl:sort order {other:?} is neither ascending nor descending");
+        return Err(Error::new(ErrorKind::Xslt, message));
+      }
+    };
+    let case = match case_order.as_deref() {
+      None => CaseOrder::Unstated,
+      Some("upper-first") => CaseOrder::UpperFirst,
+      Some("lower-first") => CaseOrder::LowerFirst,
+      Some(other) => {
+        let message = format!("xsl:sort case-order {other:?} is neither upper-first nor lower-first");
+        return Err(Error::new(ErrorKind::Xslt, message));
+      }
+    };
+
+    Ok(SortSpecification { select, numeric, descending, collator: Collator::new(lang.as_deref(), case), element })
+  }
+
+  /// Works out one node's key for one `xsl:sort`.
+  fn sort_key(&mut self, sort: &SortSpecification, module: usize, focus: Focus<M::Node>) -> Result<SortKey> {
+    let value = self.evaluate(&sort.select, module, sort.element, focus)?;
+    if sort.numeric {
+      return Ok(SortKey::Number(value.number(self.model)));
+    }
+    Ok(SortKey::Text(value.string(self.model)))
   }
 
   /// Fills the key tables `key()` reads (XSLT 1.0 §12.2).

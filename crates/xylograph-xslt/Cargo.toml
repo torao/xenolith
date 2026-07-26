@@ -11,13 +11,18 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = []
+default = ["icu"]
+# Language-aware collation for `xsl:sort`. Without it, sorting compares by Unicode code point,
+# which is a defensible answer but not the one a reader of a given language expects.
+icu = ["dep:icu_collator", "dep:icu_locale_core"]
 
 [dependencies]
 xylograph-core = { workspace = true }
 xylograph-dom = { workspace = true, features = ["parse"] }
 xylograph-xdm = { workspace = true }
 xylograph-xpath = { workspace = true }
+icu_collator = { workspace = true, optional = true }
+icu_locale_core = { workspace = true, optional = true }
 
 [dev-dependencies]
 xylograph-serialize = { workspace = true }
