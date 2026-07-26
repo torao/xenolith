@@ -7,12 +7,18 @@
 //!
 //! # What this phase runs
 //!
-//! Literal result elements and text, and the instructions `xsl:apply-templates`,
-//! `xsl:call-template`, `xsl:for-each`, `xsl:if`, `xsl:choose`, `xsl:value-of`, `xsl:variable`,
-//! `xsl:param`, `xsl:with-param` and `xsl:text`, together with the built-in template rules and
-//! attribute value templates. The rest of XSLT — `xsl:copy`, `xsl:element`, `xsl:sort`,
-//! `xsl:key` and the others — arrives in Phase 6; an instruction that is not understood is
-//! reported rather than skipped, so a stylesheet never half-runs in silence.
+//! Literal result elements and text; the instructions that direct the walk —
+//! `xsl:apply-templates`, `xsl:call-template`, `xsl:for-each`, `xsl:if`, `xsl:choose`,
+//! `xsl:value-of`, `xsl:variable`, `xsl:param`, `xsl:with-param` and `xsl:text`; and the
+//! instructions that build result nodes — `xsl:element`, `xsl:attribute`, `xsl:comment`,
+//! `xsl:processing-instruction`, `xsl:copy`, `xsl:copy-of` and `xsl:message`, with
+//! `xsl:attribute-set` and `use-attribute-sets` behind them. The built-in template rules and
+//! attribute value templates run throughout.
+//!
+//! What is still missing is `xsl:sort`, `xsl:key`, `xsl:number`, `xsl:decimal-format`,
+//! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
+//! instruction that is not understood is reported rather than skipped, so a stylesheet never
+//! half-runs in silence.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -43,6 +49,7 @@ pub const DEFAULT_MAX_DEPTH: usize = 200;
 pub struct ResultTree {
   document: Document,
   root: NodeId,
+  messages: Vec<String>,
 }
 
 impl ResultTree {
@@ -62,6 +69,16 @@ impl ResultTree {
   #[must_use]
   pub fn text(&self) -> String {
     self.document.text_content(self.root)
+  }
+
+  /// What `xsl:message` said while the transformation ran, in the order it was said.
+  ///
+  /// A message is for whoever is watching rather than part of the result, so it is kept beside
+  /// the tree rather than in it. One with `terminate="yes"` stops the transformation instead,
+  /// and comes back as the error.
+  #[must_use]
+  pub fn messages(&self) -> &[String] {
+    &self.messages
   }
 }
 
@@ -194,12 +211,14 @@ impl Transform {
       scopes: Vec::new(),
       expressions: HashMap::new(),
       namespaces: HashMap::new(),
+      messages: Vec::new(),
+      attribute_set_chain: Vec::new(),
       depth: 0,
       max_depth: self.max_depth,
     };
     engine.bind_global_variables(node)?;
     engine.apply(Focus { node, position: 1, size: 1 }, None)?;
-    Ok(ResultTree { document: engine.output, root })
+    Ok(ResultTree { document: engine.output, root, messages: engine.messages })
   }
 }
 
@@ -232,6 +251,10 @@ struct Engine<'a, M: Model> {
   /// The namespace bindings in scope at a stylesheet element, which its expressions are read
   /// against. Gathering them walks the ancestors, so the answers are kept.
   namespaces: HashMap<(usize, NodeId), Rc<Namespaces>>,
+  /// What xsl:message has said so far.
+  messages: Vec<String>,
+  /// The attribute sets being applied, outermost first, so one that uses itself is caught.
+  attribute_set_chain: Vec<String>,
   depth: usize,
   max_depth: usize,
 }
@@ -378,6 +401,42 @@ impl<M: Model> Engine<'_, M> {
       "variable" | "param" => self.declare(module, element, local, focus),
       // xsl:with-param is read by the instruction it belongs to, not run on its own.
       "with-param" => Ok(()),
+      "element" => self.element_instruction(module, element, focus),
+      "attribute" => self.attribute_instruction(module, element, focus),
+      "comment" => {
+        let text = self.captured_text(module, element, focus)?;
+        let node = self.output.create_comment(&text);
+        self.append(node)
+      }
+      "processing-instruction" => {
+        let target = self.required(module, element, "name", "xsl:processing-instruction")?;
+        let target = self.attribute_value(&target, module, element, focus)?;
+        let data = self.captured_text(module, element, focus)?;
+        let node = self.output.create_processing_instruction(&target, &data).map_err(dom_error)?;
+        self.append(node)
+      }
+      "copy" => self.copy(module, element, focus),
+      "copy-of" => {
+        let select = self.required(module, element, "select", "xsl:copy-of")?;
+        match self.evaluate(&select, module, element, focus)? {
+          // A node-set is copied whole, each node with everything below it.
+          Value::NodeSet(nodes) => {
+            for node in nodes {
+              self.copy_deep(node)?;
+            }
+            Ok(())
+          }
+          // Anything else is its string, which is what xsl:value-of would have given.
+          other => {
+            let text = other.string(self.model);
+            self.append_text(&text);
+            Ok(())
+          }
+        }
+      }
+      "message" => self.message(module, element, focus),
+      // A top-level declaration reached here is not an instruction; it was read at compile time.
+      "attribute-set" | "output" | "import" | "include" | "template" => Ok(()),
       other => {
         let message = format!("xsl:{other} is not implemented yet; see ROADMAP.md for which phase brings it");
         Err(Error::new(ErrorKind::Xslt, message))
@@ -515,6 +574,216 @@ impl<M: Model> Engine<'_, M> {
     Ok(Value::String(self.output.text_content(fragment)))
   }
 
+  // --- Instructions that build result nodes -------------------------------------------------
+
+  /// `xsl:element`: an element whose name is worked out while running.
+  fn element_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let name = self.required(module, element, "name", "xsl:element")?;
+    let name = self.attribute_value(&name, module, element, focus)?;
+    let namespace = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
+      Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
+      None => None,
+    };
+    let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
+    self.append(created)?;
+    self.use_attribute_sets(module, element, created, focus)?;
+    self.insertion.push(created);
+    let outcome = self.run_body(module, element, focus);
+    self.insertion.pop();
+    outcome
+  }
+
+  /// `xsl:attribute`: an attribute added to the element being built.
+  fn attribute_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let name = self.required(module, element, "name", "xsl:attribute")?;
+    let name = self.attribute_value(&name, module, element, focus)?;
+    let namespace = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
+      Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
+      None => None,
+    };
+    let value = self.captured_text(module, element, focus)?;
+    let target = *self.insertion.last().expect("there is always somewhere to put the result");
+    // An attribute added where no element is open has nowhere to go; XSLT calls that an error.
+    if self.output.node_type(target) != NodeType::Element {
+      let message = format!("xsl:attribute {name:?} has no element to be added to");
+      return Err(Error::new(ErrorKind::Xslt, message));
+    }
+    match namespace {
+      Some(namespace) => self.output.set_attribute_ns(target, Some(&namespace), &name, &value),
+      None => self.output.set_attribute(target, &name, &value),
+    }
+    .map_err(dom_error)
+  }
+
+  /// `xsl:copy`: the current node itself, without what is under it.
+  fn copy(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    match self.model.kind(focus.node) {
+      // The root copies as nothing; its content is whatever the body puts there.
+      NodeKind::Root => self.run_body(module, element, focus),
+      NodeKind::Element => {
+        let name = self.model.qualified_name(focus.node).unwrap_or_default();
+        let namespace = self.model.expanded_name(focus.node).and_then(|name| name.namespace);
+        let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
+        self.append(created)?;
+        self.use_attribute_sets(module, element, created, focus)?;
+        self.insertion.push(created);
+        let outcome = self.run_body(module, element, focus);
+        self.insertion.pop();
+        outcome
+      }
+      // Everything else copies as itself, and its body is not run.
+      _ => self.copy_shallow(focus.node),
+    }
+  }
+
+  /// Copies one node, and everything below it, into the result.
+  fn copy_deep(&mut self, node: M::Node) -> Result<()> {
+    if self.model.kind(node) != NodeKind::Element {
+      // The root has no node of its own; its children are what there is to copy.
+      if self.model.kind(node) == NodeKind::Root {
+        for child in self.model.children(node) {
+          self.copy_deep(child)?;
+        }
+        return Ok(());
+      }
+      return self.copy_shallow(node);
+    }
+    let name = self.model.qualified_name(node).unwrap_or_default();
+    let namespace = self.model.expanded_name(node).and_then(|name| name.namespace);
+    let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
+    for attribute in self.model.attributes(node) {
+      let attribute_name = self.model.qualified_name(attribute).unwrap_or_default();
+      let attribute_namespace = self.model.expanded_name(attribute).and_then(|name| name.namespace);
+      let value = self.model.string_value(attribute);
+      match attribute_namespace {
+        Some(namespace) => self.output.set_attribute_ns(created, Some(&namespace), &attribute_name, &value),
+        None => self.output.set_attribute(created, &attribute_name, &value),
+      }
+      .map_err(dom_error)?;
+    }
+    self.append(created)?;
+    self.insertion.push(created);
+    let children = self.model.children(node);
+    let mut outcome = Ok(());
+    for child in children {
+      outcome = self.copy_deep(child);
+      if outcome.is_err() {
+        break;
+      }
+    }
+    self.insertion.pop();
+    outcome
+  }
+
+  /// Copies a node that has no children of its own — text, a comment, a PI, or an attribute.
+  fn copy_shallow(&mut self, node: M::Node) -> Result<()> {
+    let value = self.model.string_value(node);
+    match self.model.kind(node) {
+      NodeKind::Text => {
+        self.append_text(&value);
+        Ok(())
+      }
+      NodeKind::Comment => {
+        let created = self.output.create_comment(&value);
+        self.append(created)
+      }
+      NodeKind::ProcessingInstruction => {
+        let target = self.model.qualified_name(node).unwrap_or_default();
+        let created = self.output.create_processing_instruction(&target, &value).map_err(dom_error)?;
+        self.append(created)
+      }
+      NodeKind::Attribute => {
+        let name = self.model.qualified_name(node).unwrap_or_default();
+        let namespace = self.model.expanded_name(node).and_then(|name| name.namespace);
+        let target = *self.insertion.last().expect("there is always somewhere to put the result");
+        if self.output.node_type(target) != NodeType::Element {
+          return Err(Error::new(ErrorKind::Xslt, format!("the attribute {name:?} has no element to be copied onto")));
+        }
+        match namespace {
+          Some(namespace) => self.output.set_attribute_ns(target, Some(&namespace), &name, &value),
+          None => self.output.set_attribute(target, &name, &value),
+        }
+        .map_err(dom_error)
+      }
+      // A namespace node is carried by the element that has it, not copied on its own.
+      NodeKind::Namespace | NodeKind::Root | NodeKind::Element => Ok(()),
+    }
+  }
+
+  /// `xsl:message`: text for whoever is watching, and a way to stop.
+  fn message(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let text = self.captured_text(module, element, focus)?;
+    let terminate = self.stylesheet.document(module).attribute(element, "terminate") == Some("yes");
+    if terminate {
+      return Err(Error::new(ErrorKind::Xslt, format!("the stylesheet stopped: {text}")));
+    }
+    self.messages.push(text);
+    Ok(())
+  }
+
+  /// Adds the attributes of the sets an element's `use-attribute-sets` names.
+  fn use_attribute_sets(
+    &mut self,
+    module: usize,
+    element: NodeId,
+    target: NodeId,
+    focus: Focus<M::Node>,
+  ) -> Result<()> {
+    // A literal result element names them in the XSLT namespace; an instruction, without one.
+    let document = self.stylesheet.document(module);
+    let named = document
+      .attribute(element, "use-attribute-sets")
+      .or_else(|| document.attribute_ns(element, Some(XSLT_NAMESPACE), "use-attribute-sets"))
+      .map(ToOwned::to_owned);
+    let Some(named) = named else { return Ok(()) };
+
+    for name in named.split_whitespace() {
+      // §7.1.4: a set that uses itself, however far around, has no meaning.
+      if self.attribute_set_chain.iter().any(|used| used == name) {
+        return Err(Error::new(ErrorKind::Xslt, format!("the attribute set {name:?} uses itself")));
+      }
+      let sets: Vec<(usize, NodeId)> =
+        self.stylesheet.attribute_sets_named(name).map(|set| (set.module(), set.element())).collect();
+      if sets.is_empty() {
+        return Err(Error::new(ErrorKind::Xslt, format!("no attribute set is named {name:?}")));
+      }
+      self.attribute_set_chain.push(name.to_owned());
+      let outcome = self.apply_attribute_sets(&sets, target, focus);
+      self.attribute_set_chain.pop();
+      outcome?;
+    }
+    Ok(())
+  }
+
+  /// Applies every declaration of one attribute set, lowest import precedence first.
+  ///
+  /// §7.1.4 merges the declarations of a name rather than choosing between them, so all of them
+  /// run and the highest precedence is left standing where two set the same attribute.
+  fn apply_attribute_sets(&mut self, sets: &[(usize, NodeId)], target: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    for &(set_module, set_element) in sets {
+      // A set may use others; those go on first, so that its own attributes win.
+      self.use_attribute_sets(set_module, set_element, target, focus)?;
+      self.insertion.push(target);
+      let outcome = self.run_body(set_module, set_element, focus);
+      self.insertion.pop();
+      outcome?;
+    }
+    Ok(())
+  }
+
+  /// Runs an instruction's content into a fragment of its own and takes its text.
+  ///
+  /// `xsl:comment`, `xsl:message` and the value of `xsl:attribute` are all text, however they
+  /// were produced, so what their bodies build is flattened rather than kept.
+  fn captured_text(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<String> {
+    let fragment = self.output.create_document_fragment();
+    self.insertion.push(fragment);
+    let outcome = self.run_body(module, element, focus);
+    self.insertion.pop();
+    outcome?;
+    Ok(self.output.text_content(fragment))
+  }
+
   // --- The result tree ----------------------------------------------------------------------
 
   /// Copies a literal result element into the result, with its attribute value templates
@@ -530,7 +799,12 @@ impl<M: Model> Engine<'_, M> {
     let attributes: Vec<(String, Option<String>, String)> = document
       .attributes(element)
       .iter()
-      .filter(|attribute| document.namespace_uri(*attribute) != Some(xylograph_core::XMLNS_NS_URI))
+      // A namespace declaration is not copied, and neither is the XSLT attribute that names
+      // attribute sets — that is an instruction to this engine, not part of the result.
+      .filter(|attribute| {
+        document.namespace_uri(*attribute) != Some(xylograph_core::XMLNS_NS_URI)
+          && document.namespace_uri(*attribute) != Some(XSLT_NAMESPACE)
+      })
       .map(|attribute| {
         (
           document.node_name(attribute),
@@ -541,6 +815,11 @@ impl<M: Model> Engine<'_, M> {
       .collect();
 
     let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
+    // The sets are applied first, so an attribute written on the element itself wins.
+    self.insertion.push(created);
+    let sets = self.use_attribute_sets(module, element, created, focus);
+    self.insertion.pop();
+    sets?;
     for (attribute_name, attribute_namespace, value) in attributes {
       let expanded = self.attribute_value(&value, module, element, focus)?;
       let outcome = match attribute_namespace {

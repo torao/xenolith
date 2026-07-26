@@ -55,7 +55,43 @@ pub struct Stylesheet {
   modules: Vec<Module>,
   templates: Vec<Template>,
   variables: Vec<Variable>,
+  attribute_sets: Vec<AttributeSet>,
   output: OutputMethod,
+}
+
+/// A named set of attributes, which `use-attribute-sets` adds to an element.
+#[derive(Debug)]
+pub struct AttributeSet {
+  name: String,
+  precedence: i32,
+  module: usize,
+  element: NodeId,
+}
+
+impl AttributeSet {
+  /// The name `use-attribute-sets` refers to it by.
+  #[must_use]
+  pub fn name(&self) -> &str {
+    &self.name
+  }
+
+  /// Its import precedence.
+  #[must_use]
+  pub const fn precedence(&self) -> i32 {
+    self.precedence
+  }
+
+  /// Which of the stylesheet's [documents](Stylesheet::document) it is in.
+  #[must_use]
+  pub const fn module(&self) -> usize {
+    self.module
+  }
+
+  /// The `xsl:attribute-set` element; its `xsl:attribute` children are what it adds.
+  #[must_use]
+  pub const fn element(&self) -> NodeId {
+    self.element
+  }
 }
 
 /// How `xsl:output` asks for the result to be written (XSLT 1.0 §16).
@@ -104,8 +140,13 @@ impl Stylesheet {
   /// `xsl:output`, `xsl:key`, `xsl:strip-space` and the rest — are read past without complaint;
   /// they arrive in later phases. See `ROADMAP.md`.
   pub fn compile_with<L: Loader>(source: &[u8], system_id: &str, loader: &mut L) -> Result<Self> {
-    let mut stylesheet =
-      Self { modules: Vec::new(), templates: Vec::new(), variables: Vec::new(), output: OutputMethod::default() };
+    let mut stylesheet = Self {
+      modules: Vec::new(),
+      templates: Vec::new(),
+      variables: Vec::new(),
+      attribute_sets: Vec::new(),
+      output: OutputMethod::default(),
+    };
     let principal = stylesheet.load_module(source, system_id)?;
     let mut counter = 0;
     stylesheet.assign_precedence(principal, &mut counter, loader)?;
@@ -127,6 +168,23 @@ impl Stylesheet {
   #[must_use]
   pub fn variables(&self) -> &[Variable] {
     &self.variables
+  }
+
+  /// The attribute sets with a given name, lowest import precedence first.
+  ///
+  /// Several declarations of one name are all used, not one chosen: XSLT 1.0 §7.1.4 says they
+  /// are merged, with a higher precedence winning where two set the same attribute — which is
+  /// what applying them in this order does.
+  pub fn attribute_sets_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a AttributeSet> + 'a {
+    let mut matching: Vec<&AttributeSet> = self.attribute_sets.iter().filter(|set| set.name == name).collect();
+    matching.sort_by_key(|set| set.precedence);
+    matching.into_iter()
+  }
+
+  /// Every attribute set the stylesheet declares.
+  #[must_use]
+  pub fn attribute_sets(&self) -> &[AttributeSet] {
+    &self.attribute_sets
   }
 
   /// The method `xsl:output` asked the result to be written by, `xml` if it said nothing.
@@ -297,6 +355,14 @@ impl Stylesheet {
         "import" => {
           let imported = self.referenced_module(module, element)?;
           self.collect(imported)?;
+        }
+        "attribute-set" => {
+          let document = &self.modules[module].document;
+          let Some(name) = document.attribute(element, "name").map(ToOwned::to_owned) else {
+            return Err(xslt_error("xsl:attribute-set needs a name"));
+          };
+          let precedence = self.modules[module].precedence;
+          self.attribute_sets.push(AttributeSet { name, precedence, module, element });
         }
         "output" => {
           if let Some(method) = self.modules[module].document.attribute(element, "method") {

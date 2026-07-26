@@ -665,14 +665,36 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 ### Phase 6 — XSLT 完全化
 
-- `copy` / `copy-of` / `element` / `attribute` / `attribute-set` / `text` / `comment` / `pi`
-- `sort` / `key` / `number` / `message` / `decimal-format`
-- `document()` / `generate-id()` / `current()` / `system-property()` / `unparsed-entity-uri()` / `format-number()`
-- `strip-space` / `preserve-space` / `namespace-alias` / `exclude-result-prefixes`
-- 前方互換処理、`fallback`、`element-available` / `function-available`
+サブフェーズへ分割する。**順序の根拠**: `document()` と RTF の木表現は、どちらも「1 つのノード空間に複数の文書」を要求する（前者は取得した文書、後者は結果木の断片）。これは `DomNode` / `DomModel` の公開 API に及ぶ変更なので、**要求が出揃ってから一度だけ意図的に**行う（6c）。それを要しない部分を先に片付ける。
+
+**6a. 結果木を作る命令**（§7）✅ 完了
+- **`xsl:element` / `xsl:attribute`**: `name` と `namespace` は AVT なので実行時に決まる。`xsl:attribute` は「今開いている要素」に付けるもので、開いている要素が無ければ**エラー**（フラグメント直下に属性は置けず、黙って捨てると結果が静かに間違う）
+- **本文をテキストに畳む命令**: `xsl:comment` / `xsl:processing-instruction` / `xsl:attribute` の値は、どう作られたものであれ文字データ。専用のフラグメントに本文を流してその `text_content` を取る（`captured_text`）
+- **`xsl:copy`（§7.5）は浅く、`xsl:copy-of`（§11.3）は深く**。root は「自分自身のノードが無い」ので `xsl:copy` では何も作らず本文だけを走らせ、`xsl:copy-of` では子を並べる。node-set 以外を `xsl:copy-of` に渡した場合はその文字列値（§11.3 の規定どおり）
+- **名前空間宣言は複製しない** — 5c のリテラル結果要素と同じ判断。要素が名前空間を保っていればシリアライザの名前空間修復が必要な宣言を書く
+- **`xsl:attribute-set`（§7.1.4）は「選ぶ」のではなく「併合する」**: 同名の宣言は全て走らせ、**インポート優先順位の低い方から**適用して高い方が上書きされずに残るようにする。集合自身の `use-attribute-sets` も辿り、**使われる側を先に**置いて使う側の属性が勝つようにした。自分自身を（間接にでも）使う集合は適用中の連鎖を持って検出しエラー
+- **`xsl:message`** は結果木ではなく `ResultTree::messages()` に貯める（見る人向けのものであって結果の一部ではない）。`terminate="yes"` は貯めずにその文言を持つエラーになる
+- **恒等変換**（`match="@*|node()"` + `xsl:copy` + `apply-templates select="@*|node()"`）が入出力一致することをテストに置いた — 個々の命令の単体確認より、外部から見て意味のある証拠になる
+- **`xsl:copy-of "$rtf"` はまだ正しくない**（RTF は文字列値のまま）。木としての表現は 6c
+- **成果物**: `AttributeSet`、`ResultTree::messages()`、engine の結果木命令群（統合テスト 19）
+- **完了条件**: §7 の命令と属性集合が通り、恒等変換が入出力一致する
+
+**6b. sort / key / number / decimal-format**
+- `xsl:sort`（ICU 照合、決定 2）、`xsl:key` と `key()`、`xsl:number`、`xsl:decimal-format` と `format-number()`
+- 無接頭辞の XSLT 関数を引ける口（`current()` / `generate-id()` / `system-property()` / `element-available()` / `function-available()`）
+
+**6c. 複数文書のノード空間**（本フェーズの設計上の要）
+- `DomModel` を複数文書に対応させ、`document()` を実装
+- RTF を木として持ち、`xsl:copy-of "$rtf"` を正しく複製。これで **`exsl:node-set()`（Phase 6.5）が解禁**される
+
+**6d. 出力メソッドの完全化**
 - `xsl:output` 全属性、HTML 出力メソッド、`disable-output-escaping`、非 UTF 出力エンコーディング
-- ICU 照合による `xsl:sort`（決定 2）
-- **完了条件**: XSLT 1.0 テストスイートの合格率を公表できる水準（目標 95%+、非合格は既知の逸脱として文書化）
+- `strip-space` / `preserve-space` / `namespace-alias` / `exclude-result-prefixes`
+- 前方互換処理、`xsl:fallback`
+
+**6e. 適合スイート**
+- OASIS/Xalan の XSLT 1.0 テストスイートを env var 方式で取り込む（Phase 4 で「XPath を網羅的に検証する外部資産はこれ」と記録したもの）
+- **完了条件（Phase 6 全体）**: 合格率を公表できる水準（目標 95%+、非合格は既知の逸脱として文書化）
 
 ### Phase 6.5 — EXSLT（決定 5）
 
