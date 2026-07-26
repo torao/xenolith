@@ -165,9 +165,66 @@ pub(crate) fn call<M: Model>(
       Ok(Value::Number(round(arguments[0].number(model))))
     }
 
-    _ => Err(unavailable(local)),
+    // Not one of the core functions. A language hosting XPath adds functions of its own with no
+    // prefix — XSLT's `current()`, `key()`, `format-number()` — so the registry is asked under
+    // the empty namespace before giving up.
+    _ => match context.functions.and_then(|functions| functions.get("", local)) {
+      Some(function) => function.call(arguments, context),
+      None => Err(unavailable(local)),
+    },
   }
 }
+
+/// Whether `name` is one of the core functions (XPath 1.0 §4).
+///
+/// The unprefixed names the language itself defines, which is what XSLT's `function-available()`
+/// has to know before it looks anywhere else.
+///
+/// # Examples
+///
+/// ```
+/// assert!(xylograph_xpath::is_core_function("substring-before"));
+/// assert!(!xylograph_xpath::is_core_function("key"), "key() is XSLT's, not XPath's");
+/// ```
+#[must_use]
+pub fn is_core_function(name: &str) -> bool {
+  CORE_FUNCTIONS.contains(&name)
+}
+
+/// The twenty-seven names of XPath 1.0 §4, in the order the specification introduces them.
+const CORE_FUNCTIONS: &[&str] = &[
+  // Node-set functions (§4.1).
+  "last",
+  "position",
+  "count",
+  "id",
+  "local-name",
+  "namespace-uri",
+  "name",
+  // String functions (§4.2).
+  "string",
+  "concat",
+  "starts-with",
+  "contains",
+  "substring-before",
+  "substring-after",
+  "substring",
+  "string-length",
+  "normalize-space",
+  "translate",
+  // Boolean functions (§4.3).
+  "boolean",
+  "not",
+  "true",
+  "false",
+  "lang",
+  // Number functions (§4.4).
+  "number",
+  "sum",
+  "floor",
+  "ceiling",
+  "round",
+];
 
 /// Calls an extension function, the prefix resolved first.
 fn extension<M: Model>(
@@ -369,6 +426,37 @@ fn unavailable(name: &str) -> Error {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Every name in [`CORE_FUNCTIONS`] is one the dispatch above actually answers to.
+  ///
+  /// The list exists so that `function-available()` can be told the truth, and a list written
+  /// beside a `match` drifts from it unless something checks. Calling each name with no
+  /// arguments gives an arity error for most of them — what matters is that none of them comes
+  /// back as unknown.
+  #[test]
+  fn the_named_core_functions_are_the_ones_that_are_dispatched() {
+    use xylograph_dom::build;
+    use xylograph_xdm::DomModel;
+
+    use crate::context::{Namespaces, Variables};
+
+    let document = build::parse("<a/>".as_bytes()).expect("well-formed");
+    let model = DomModel::new(&document);
+    let namespaces = Namespaces::new();
+    let variables = Variables::new();
+    let context = Context::new(&model, model.root_node(), &namespaces, &variables);
+
+    for name in CORE_FUNCTIONS {
+      assert!(is_core_function(name), "{name} is in the list but is_core_function says otherwise");
+      if let Err(error) = call(None, name, Vec::new(), &context) {
+        assert!(!error.message().contains("no function named"), "{name}: {}", error.message());
+      }
+    }
+
+    // And the other way: a name that is not core is reported as unknown.
+    let unknown = call(None, "key", Vec::new(), &context).expect_err("key() is XSLT's");
+    assert!(unknown.message().contains("no function named"), "{}", unknown.message());
+  }
 
   #[test]
   fn round_sends_a_half_towards_positive_infinity() {

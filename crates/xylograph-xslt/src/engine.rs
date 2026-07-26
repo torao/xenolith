@@ -15,10 +15,14 @@
 //! `xsl:attribute-set` and `use-attribute-sets` behind them. The built-in template rules and
 //! attribute value templates run throughout.
 //!
+//! On top of XPath's own functions, the expressions in a stylesheet can call the ones XSLT adds
+//! in [`functions`](crate::functions) — `current()`, `generate-id()`, `system-property()`,
+//! `element-available()` and `function-available()`.
+//!
 //! What is still missing is `xsl:sort`, `xsl:key`, `xsl:number`, `xsl:decimal-format`,
 //! `xsl:document`-style multi-document work and the output controls; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
-//! half-runs in silence.
+//! half-runs in silence — and `element-available()` says so beforehand, from the same list.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -29,6 +33,7 @@ use xylograph_xdm::{Model, NodeKind};
 use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
 
 use crate::avt::{self, Piece};
+use crate::functions::Running;
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
 
 /// How deep `xsl:apply-templates` and `xsl:call-template` may go before the transformation is
@@ -45,6 +50,31 @@ use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespace
 /// [`Transform::with_max_depth`] raises it for a stylesheet that recurses deeply on purpose, on
 /// a thread with the stack to match.
 pub const DEFAULT_MAX_DEPTH: usize = 200;
+
+/// The instructions this engine runs, which is what `element-available()` reports.
+///
+/// XSLT 1.0 §15 has a stylesheet ask before it relies on something, so the answer has to be
+/// about this implementation rather than about XSLT on paper. These are the names
+/// [`Engine::instruction`] dispatches, minus the top-level declarations that are read at compile
+/// time and are not instructions at all.
+const INSTRUCTIONS: &[&str] = &[
+  "apply-templates",
+  "attribute",
+  "call-template",
+  "choose",
+  "comment",
+  "copy",
+  "copy-of",
+  "element",
+  "for-each",
+  "if",
+  "message",
+  "param",
+  "processing-instruction",
+  "text",
+  "value-of",
+  "variable",
+];
 
 /// The stack [`DEFAULT_MAX_DEPTH`] is chosen to fit inside.
 ///
@@ -165,7 +195,7 @@ impl Transform {
   ///
   /// As [`transform`].
   pub fn run<M: Model>(&self, stylesheet: &Stylesheet, model: &M, node: M::Node) -> Result<ResultTree> {
-    self.run_with(stylesheet, model, node, &Functions::new())
+    self.run_with(stylesheet, model, node, Functions::new())
   }
 
   /// Runs `stylesheet`, with `functions` available to the expressions in it.
@@ -173,6 +203,10 @@ impl Transform {
   /// An extension function is called by a prefixed name — `my:format(…)` — with the prefix
   /// resolved through the stylesheet's own namespace declarations, so a stylesheet chooses what
   /// to call it and the caller only says what it does.
+  ///
+  /// The set is taken rather than borrowed because XSLT adds its own functions to it —
+  /// `current()`, `generate-id()` and the rest of §12.4 — and they are only meaningful for the
+  /// transformation they were built for.
   ///
   /// # Errors
   ///
@@ -202,7 +236,7 @@ impl Transform {
   ///   Ok(Value::String(arguments[0].string(context.model).to_uppercase()))
   /// });
   ///
-  /// let result = Transform::new().run_with(&stylesheet, &model, model.root_node(), &functions)?;
+  /// let result = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions)?;
   /// assert_eq!(result.text(), "HI");
   /// # Ok::<(), xylograph_core::Error>(())
   /// ```
@@ -211,14 +245,17 @@ impl Transform {
     stylesheet: &Stylesheet,
     model: &M,
     node: M::Node,
-    functions: &Functions<M>,
+    functions: Functions<M>,
   ) -> Result<ResultTree> {
     let mut output = Document::new();
     let root = output.create_document_fragment();
+    let running = Rc::new(Running::new());
+    let functions = crate::functions::register(functions, &running, INSTRUCTIONS);
     let mut engine = Engine {
       stylesheet,
       model,
       functions,
+      running,
       output,
       insertion: vec![root],
       scopes: Vec::new(),
@@ -252,8 +289,11 @@ struct Binding<N> {
 struct Engine<'a, M: Model> {
   stylesheet: &'a Stylesheet,
   model: &'a M,
-  /// The extension functions the expressions in the stylesheet may call.
-  functions: &'a Functions<M>,
+  /// The functions the expressions in the stylesheet may call: whatever the caller supplied,
+  /// with XSLT's own added.
+  functions: Functions<M>,
+  /// What the XSLT functions read to see where the transformation has got to.
+  running: Rc<Running<M::Node>>,
   output: Document,
   /// The result nodes being filled, innermost last; new content is appended to the last.
   insertion: Vec<NodeId>,
@@ -379,6 +419,9 @@ impl<M: Model> Engine<'_, M> {
   /// each turn, and a debug build gives one frame slot to each arm's locals whichever arm runs —
   /// so writing the work inline here would charge the whole instruction set to every level of
   /// the recursion. See [`DEFAULT_MAX_DEPTH`] for what that costs.
+  ///
+  /// The names below are also listed in [`INSTRUCTIONS`], which is what `element-available()`
+  /// answers from; `every_instruction_named_as_available_is_one_that_runs` checks they agree.
   fn instruction(&mut self, module: usize, element: NodeId, local: &str, focus: Focus<M::Node>) -> Result<()> {
     match local {
       "value-of" => self.value_of(module, element, focus),
@@ -938,9 +981,13 @@ impl<M: Model> Engine<'_, M> {
     let namespaces = self.namespaces_at(module, element);
     let variables = self.variables();
     let parsed = self.expression(expression)?;
+    // The node the instruction is working on is the current node for as long as this expression
+    // runs. It is set here rather than where the focus changes because a predicate moves the
+    // context node without moving the current one — that difference is what `current()` is for.
+    self.running.set_current(focus.node);
     // The focus carries where the node sits in the list being processed, which is what
     // `position()` and `last()` report.
-    let context = Context::new(self.model, focus.node, &namespaces, &variables).with_functions(self.functions).at(
+    let context = Context::new(self.model, focus.node, &namespaces, &variables).with_functions(&self.functions).at(
       focus.node,
       focus.position,
       focus.size,

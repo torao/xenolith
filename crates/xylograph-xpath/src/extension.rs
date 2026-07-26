@@ -4,6 +4,11 @@
 //! a prefix — `exsl:node-set(…)`, `my:format(…)`. What that prefix stands for is resolved like
 //! any other, and the function is then looked up by its expanded name.
 //!
+//! The empty namespace is where a language *hosting* XPath puts the functions it adds: XSLT's
+//! `current()`, `key()` and `format-number()` are written without a prefix because XSLT, not the
+//! caller, defines them. Registering under `""` is how such a function is reached, and the core
+//! library is consulted first, so nothing registered there can shadow XPath's own.
+//!
 //! This is Java's `XPathFunctionResolver` and `XPathFunction`: [`Functions`] is the set that is
 //! consulted, [`Function`] is one of them. A plain closure is a `Function`, so registering one
 //! usually needs no type of its own.

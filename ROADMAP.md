@@ -687,8 +687,31 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **完了条件**: §7 の命令と属性集合が通り、恒等変換が入出力一致する
 
 **6b. sort / key / number / decimal-format**
-- `xsl:sort`（ICU 照合、決定 2）、`xsl:key` と `key()`、`xsl:number`、`xsl:decimal-format` と `format-number()`
-- 無接頭辞の XSLT 関数を引ける口（`current()` / `generate-id()` / `system-property()` / `element-available()` / `function-available()`）
+
+規模が大きいのでさらに分割する。**順序の根拠**: `key()` も `format-number()` も「無接頭辞の XSLT 関数」なので、まずその口（6b-1）を作る。ICU 依存の導入（6b-3）は外部依存が増える唯一の回なので、それを要しないものを先に片付ける。
+
+**6b-1. XSLT 関数の口と §12.4 / §15 の関数** ✅ 完了
+- **設計上の要**: XPath は無接頭辞をコア関数のために予約しているが、**XPath を「ホストする」言語が足す関数も無接頭辞**（`current()` / `key()` / `format-number()`）。そこで `Functions` の**空名前空間**をホスト言語の置き場と定め、コア関数を先に引いてから空名前空間を見る順序にした（登録関数がコア関数を隠せない）
+- `Transform::run_with` は `Functions` を**借用ではなく受け取る**ように変更 — XSLT が自分の関数を足すため。「その変換のためだけの集合」という意味にもなる
+- **`Model::Node` に `'static` を追加**: 登録された関数は変換の間ずっと生き、ノードを跨いで保持する（`current()` の現在ノード、`generate-id()` の採番表）。木を借用するハンドルではこれができない。ハンドルは元々「同一性だけを表す索引」なので制約としては自然
+- **`current()`**（§12.4）: 述語の中では文脈ノードが候補を渡り歩く一方、現在ノードは命令が置いた場所に留まる。この差こそ `current()` の存在理由なので、**式の評価開始時**に記録する（述語に入っても動かない）。`count(//a[@id = current()/@id])` が 1、`.` にすると 2 になることをテストで対比
+- **`generate-id()`**（§12.4）: 仕様の要求は「同一ノードには毎回同じ、異なるノードには異なる、英数字で先頭は英字」だけ。**訊かれた順に採番**する（何かから導出したふりをしない）。ハッシュは衝突しうるので使わない
+- **`system-property()`**（§12.4）: 仕様が名指しする 3 つ（`xsl:version` は**数値** 1.0、`xsl:vendor`、`xsl:vendor-url`）のみ。未知のプロパティは**エラーではなく空文字列**（§12.4 の規定）
+- **`element-available()` / `function-available()`**（§15）: これは「XSLT の建前」ではなく**この実装が実際に何を走らせるか**を答えるべきもの。`element-available()` は dispatch の隣に置いた `INSTRUCTIONS` から答え、**両者が食い違わないことをテストで検査**（各名前を実際に走らせ「未実装」エラーにならないことを確認）。`function-available()` は**レジストリに直接訊く**ので、呼んだら動くかどうかと答えが原理的にずれない
+- **成果物**: `xylograph-xslt` の `functions` モジュール、`xylograph_xpath::is_core_function`（統合テスト 13 + ユニット 1）
+- **完了条件**: §12.4 / §15 の 5 関数が通り、`element-available()` が実装の実態と一致する
+
+**6b-2. `xsl:key` と `key()`**
+- トップレベル `xsl:key name/match/use` の収集、キー表の構築（`use` が node-set を返す場合は各ノードの文字列値がキー）
+- パターン照合を文書全体に適用するので、**変換開始時に一括構築**する（表ができれば `key()` は引くだけ。借用したデータを関数に持たせずに済む）
+
+**6b-3. `xsl:sort`**（ICU 照合、決定 2）
+- `icu_collator` を feature `icu`（既定 ON）で導入。**外部依存が増える唯一の回**なので単独にする（ICU4X の MSRV が 1.85 を上回らないかの確認を含む）
+- `xsl:apply-templates` / `xsl:for-each` の現在ノードリストに順序を与える。`lang` / `data-type` / `order` / `case-order`
+
+**6b-4. `xsl:number` と `xsl:decimal-format` / `format-number()`**
+- `xsl:number`（`level` single/multiple/any、`count` / `from`、書式トークン、`letter-value`、`grouping-*`）
+- `xsl:decimal-format` と `format-number()`（JDK `DecimalFormat` のサブセット）
 
 **6c. 複数文書のノード空間**（本フェーズの設計上の要）
 - `DomModel` を複数文書に対応させ、`document()` を実装

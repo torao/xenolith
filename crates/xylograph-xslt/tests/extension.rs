@@ -27,7 +27,7 @@ fn run(body: &str, xml: &str) -> Result<String, xylograph_core::Error> {
     // One that reaches for the context rather than only its arguments.
     .with("urn:my", "depth", |_: Vec<Value<_>>, context: &Context<'_, _>| Ok(Value::Number(context.size as f64)));
 
-  let result = Transform::new().run_with(&stylesheet, &model, model.root_node(), &functions)?;
+  let result = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions)?;
   Ok(result.text())
 }
 
@@ -73,7 +73,7 @@ fn a_function_whose_prefix_is_not_bound_says_so() {
   let doc = build::parse("<a/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let functions = Functions::new();
-  let error = Transform::new().run_with(&stylesheet, &model, model.root_node(), &functions).expect_err("fails");
+  let error = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect_err("fails");
   assert_eq!(error.kind(), ErrorKind::XPath);
   assert!(error.message().contains("not bound"), "{}", error.message());
 }

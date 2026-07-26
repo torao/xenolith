@@ -111,6 +111,7 @@ pub use ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
 pub use compiled::{XPath, XPathExpression};
 pub use context::{Context, Namespaces, Variables};
 pub use extension::{Function, Functions};
+pub use functions::is_core_function;
 pub use value::{Value, number_to_string, string_to_number};
 
 use xylograph_core::error::Result;

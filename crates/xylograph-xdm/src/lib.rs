@@ -92,7 +92,11 @@ pub struct ExpandedName {
 /// tree, not of the handle.
 pub trait Model {
   /// A handle to a node. Identity only — order is [`document_order`](Model::document_order).
-  type Node: Copy + Eq + Hash + Debug;
+  ///
+  /// A handle names a node without borrowing the tree, so it owns nothing with a lifetime. That
+  /// is what lets a host language built on this model — XSLT's `current()` and `key()` — keep
+  /// hold of nodes between calls, which a handle borrowed from the tree could not do.
+  type Node: Copy + Eq + Hash + Debug + 'static;
 
   /// The root of the tree the node belongs to.
   fn root(&self, node: Self::Node) -> Self::Node;
