@@ -56,8 +56,10 @@ pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   /// The base URI a relative URI in `document()` is resolved against: that of the stylesheet
   /// element whose expression is running, which §12.1 is what asks for.
   base_uri: RefCell<String>,
-  /// Where `document()` gets a tree from, if the caller supplied anywhere.
+  /// Where `document()` gets a tree from, and where a result tree fragment goes to become one.
   documents: RefCell<Rc<dyn DocumentSource<N>>>,
+  /// What each result tree fragment was adopted as, so one fragment is one tree.
+  adopted: RefCell<HashMap<xylograph_dom::NodeId, N>>,
   /// The `xsl:decimal-format` declarations `format-number()` reads its symbols from.
   ///
   /// The unnamed default is always here, whether the stylesheet declared one or not, so a
@@ -83,9 +85,26 @@ impl<N: Copy + Eq + std::hash::Hash> Running<N> {
       identifiers: RefCell::new(HashMap::new()),
       base_uri: RefCell::new(String::new()),
       documents: RefCell::new(Rc::new(NoDocuments)),
+      adopted: RefCell::new(HashMap::new()),
       decimal_formats: RefCell::new(Formats::new()),
       keys: RefCell::new(HashMap::new()),
     }
+  }
+
+  /// The node a result tree fragment became when it was adopted, so that asking twice gives the
+  /// same tree rather than two that say the same thing.
+  pub(crate) fn adopted(&self, fragment: xylograph_dom::NodeId) -> Option<N> {
+    self.adopted.borrow().get(&fragment).copied()
+  }
+
+  /// Remembers what a fragment was adopted as.
+  pub(crate) fn remember_adopted(&self, fragment: xylograph_dom::NodeId, node: N) {
+    self.adopted.borrow_mut().insert(fragment, node);
+  }
+
+  /// Puts a tree the transformation built into the model's node space.
+  pub(crate) fn adopt(&self, document: xylograph_dom::Document, root: xylograph_dom::NodeId) -> Result<Option<N>> {
+    self.documents.borrow().adopt(document, root)
   }
 
   /// Records the base URI of the stylesheet element whose expression is about to run.

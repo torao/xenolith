@@ -94,10 +94,21 @@ pub struct Documents {
   shared: Rc<Shared>,
 }
 
+/// A document that joined a model, and which of its nodes is the XPath root of it.
+///
+/// Usually the document node. A result tree fragment is the exception: XSLT lets one hold several
+/// elements side by side, which an XML document node may not, so such a tree hangs from a
+/// document fragment and *that* is its root.
+#[derive(Debug)]
+struct Held {
+  document: Document,
+  root: NodeId,
+}
+
 #[derive(Debug, Default)]
 struct Shared {
   /// The documents added, in the order they were added; index `i` is `DocumentId(i + 1)`.
-  documents: RefCell<Vec<Document>>,
+  documents: RefCell<Vec<Held>>,
   /// Where each of their nodes sits in its own document's order.
   order: RefCell<HashMap<DomNode, usize>>,
   /// The root of the document a URI was loaded into, so that one URI is fetched once.
@@ -133,9 +144,19 @@ impl Documents {
   /// # Ok::<(), xylograph_core::Error>(())
   /// ```
   pub fn add(&self, uri: &str, document: Document) -> DomNode {
+    let root = document.root();
+    self.add_rooted(uri, document, root)
+  }
+
+  /// Adds a document whose XPath root is a node inside it rather than the document node.
+  ///
+  /// XSLT's result tree fragments need this: one may hold several elements side by side, which
+  /// an XML document node may not, so such a tree hangs from a document fragment and that is
+  /// what `/` means inside it.
+  pub fn add_rooted(&self, uri: &str, document: Document, root: NodeId) -> DomNode {
     let id = {
       let mut documents = self.shared.documents.borrow_mut();
-      documents.push(document);
+      documents.push(Held { document, root });
       DocumentId(u32::try_from(documents.len()).expect("a model holds fewer than four billion documents"))
     };
 
@@ -143,7 +164,8 @@ impl Documents {
     // tree can be seen.
     let (root, order) = {
       let documents = self.shared.documents.borrow();
-      let view = View { doc: &documents[Self::index(id)], id };
+      let held = &documents[Self::index(id)];
+      let view = View { doc: &held.document, id, root: held.root };
       let root = view.root_node();
       let mut order = HashMap::new();
       let mut counter = 0;
@@ -187,12 +209,14 @@ impl Documents {
 struct View<'d> {
   doc: &'d Document,
   id: DocumentId,
+  /// Which node is the XPath root: the document node, or a fragment holding a result tree.
+  root: NodeId,
 }
 
 impl View<'_> {
-  /// The root node — the document.
+  /// The root node.
   fn root_node(&self) -> DomNode {
-    DomNode::Tree { document: self.id, node: self.doc.root() }
+    DomNode::Tree { document: self.id, node: self.root }
   }
 
   /// The XPath node for a DOM node: a text or CDATA node maps to its run's text node.
@@ -241,7 +265,9 @@ impl View<'_> {
 
   fn children_of(&self, node: DomNode) -> Vec<DomNode> {
     let DomNode::Tree { node: id, .. } = node else { return Vec::new() };
-    if !matches!(self.doc.node_type(id), NodeType::Document | NodeType::Element) {
+    // A document fragment is here because a result tree fragment hangs from one; it is the root
+    // of that tree, and its children are the tree.
+    if !matches!(self.doc.node_type(id), NodeType::Document | NodeType::Element | NodeType::DocumentFragment) {
       return Vec::new();
     }
     let mut children = Vec::new();
@@ -388,6 +414,13 @@ impl View<'_> {
 
   fn parent(&self, node: DomNode) -> Option<DomNode> {
     let tree = |id| DomNode::Tree { document: self.id, node: id };
+    // The root has no parent, whichever node plays that part; a fragment holding a result tree
+    // sits inside a document that is not part of the tree at all.
+    if let DomNode::Tree { node: id, .. } = node {
+      if id == self.root {
+        return None;
+      }
+    }
     match node {
       DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::Attribute => {
         self.doc.owner_element(id).map(tree)
@@ -434,7 +467,7 @@ impl View<'_> {
   fn string_value(&self, node: DomNode) -> String {
     match node {
       DomNode::Tree { node: id, .. } => match self.doc.node_type(id) {
-        NodeType::Document | NodeType::Element => self.doc.text_content(id),
+        NodeType::Document | NodeType::Element | NodeType::DocumentFragment => self.doc.text_content(id),
         NodeType::Attribute | NodeType::Comment | NodeType::ProcessingInstruction => {
           self.doc.node_value(id).unwrap_or_default().to_owned()
         }
@@ -480,7 +513,7 @@ impl<'a> DomModel<'a> {
   /// Anything added to `documents` afterwards becomes part of this model's node space.
   #[must_use]
   pub fn with_documents(doc: &'a Document, documents: &Documents) -> Self {
-    let view = View { doc, id: DocumentId::PRIMARY };
+    let view = View { doc, id: DocumentId::PRIMARY, root: doc.root() };
     let mut order = HashMap::new();
     let mut counter = 0;
     view.number(view.root_node(), &mut order, &mut counter);
@@ -496,7 +529,7 @@ impl<'a> DomModel<'a> {
   /// The XPath node for a DOM node of the primary document.
   #[must_use]
   pub fn node(&self, id: NodeId) -> DomNode {
-    View { doc: self.primary, id: DocumentId::PRIMARY }.node(id)
+    View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.root() }.node(id)
   }
 
   /// The further documents this model can see, for adding one or looking one up.
@@ -508,16 +541,16 @@ impl<'a> DomModel<'a> {
   /// Reads a node through the view of whichever document it belongs to.
   fn view<T>(&self, node: DomNode, read: impl FnOnce(&View<'_>) -> T) -> T {
     if node.document() == DocumentId::PRIMARY {
-      return read(&View { doc: self.primary, id: DocumentId::PRIMARY });
+      return read(&View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.root() });
     }
-    let documents: Ref<'_, Vec<Document>> = self.extra.shared.documents.borrow();
+    let documents: Ref<'_, Vec<Held>> = self.extra.shared.documents.borrow();
     let index = Documents::index(node.document());
     // A node naming a document this model has never held cannot be produced by the model, and
     // handing one in from elsewhere is the caller mixing two node spaces.
-    let Some(doc) = documents.get(index) else {
+    let Some(held) = documents.get(index) else {
       panic!("a node from document {index} was read by a model that does not hold it");
     };
-    read(&View { doc, id: node.document() })
+    read(&View { doc: &held.document, id: node.document(), root: held.root })
   }
 
   /// Where a node sits in its own document's order.

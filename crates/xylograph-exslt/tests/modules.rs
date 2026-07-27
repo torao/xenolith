@@ -174,10 +174,11 @@ mod common {
   }
 
   #[test]
-  fn node_set_is_absent_rather_than_wrong() {
-    // It needs the engine to hand a result tree fragment into the model's node space, which is
-    // still to come; answering with the fragment's string would be quietly wrong.
-    assert_eq!(value_of("function-available('exsl:node-set')", NUMBERS), "false");
+  fn node_set_is_the_identity_on_something_that_is_already_a_node_set() {
+    // Converting a result tree fragment is `tests/node_set.rs`; this is the other half, which
+    // needs no engine help at all.
+    assert_eq!(value_of("count(exsl:node-set(//n))", NUMBERS), "4");
+    assert_eq!(value_of("function-available('exsl:node-set')", NUMBERS), "true");
   }
 }
 

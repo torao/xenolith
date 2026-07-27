@@ -45,7 +45,7 @@ pub(crate) fn nodes<M: Model>(name: &str, value: &Value<M::Node>) -> Result<Vec<
 }
 
 /// Names a value's type for a message.
-#[cfg(any(feature = "math", feature = "sets"))]
+#[cfg(any(feature = "common", feature = "math", feature = "sets"))]
 pub(crate) fn describe<N>(value: &Value<N>) -> &'static str {
   match value {
     Value::NodeSet(_) => "a node-set",

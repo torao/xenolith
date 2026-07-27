@@ -50,7 +50,7 @@ use std::rc::Rc;
 use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_dom::{Document, NodeId, NodeType};
 use xylograph_xdm::{Model, NodeKind};
-use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
+use xylograph_xpath::{Context, Expr, Functions, Namespaces, PathStart, Value, Variables};
 
 use crate::avt::{self, Piece};
 use crate::collate::{CaseOrder, Collator};
@@ -1709,8 +1709,8 @@ impl<M: Model> Engine<'_, M> {
     focus: Focus<M::Node>,
   ) -> Result<Value<M::Node>> {
     let namespaces = self.namespaces_at(module, element);
-    let variables = self.variables();
     let parsed = self.expression(expression)?;
+    let variables = self.variables_for(&parsed, &namespaces)?;
     // The node the instruction is working on is the current node for as long as this expression
     // runs. It is set here rather than where the focus changes because a predicate moves the
     // context node without moving the current one — that difference is what `current()` is for.
@@ -1801,6 +1801,67 @@ impl<M: Model> Engine<'_, M> {
     variables
   }
 
+  /// The variables in scope, with any result tree fragment the expression asks to see as a tree.
+  ///
+  /// XSLT 1.0 §11.1 makes a fragment a string everywhere, and the one thing that lifts that is
+  /// `exsl:node-set()`. So the lifting happens here, for the names that expression actually
+  /// passes to it and no others: a fragment used any other way stays a string, and `$rtf/foo`
+  /// without `exsl:node-set()` is refused, as a conforming XSLT 1.0 processor refuses it.
+  ///
+  /// That the engine knows one extension function by name is not an accident of layering. §11.1
+  /// restricts fragments *because* converting one needs the processor's help, and every XSLT 1.0
+  /// processor answers that with the same function; there is nothing for an extension to hook.
+  fn variables_for(&mut self, expression: &Expr, namespaces: &Namespaces) -> Result<Variables<M::Node>> {
+    let mut wanted = Vec::new();
+    fragments_wanted(expression, namespaces, &mut wanted);
+    let mut variables = self.variables();
+    for name in wanted {
+      let Some(fragment) = self.bound_fragment(&name) else { continue };
+      let root = self.as_tree(fragment)?;
+      variables = variables.with(&name, Value::NodeSet(vec![root]));
+    }
+    Ok(variables)
+  }
+
+  /// The fragment a name is bound to, if its innermost binding holds one.
+  fn bound_fragment(&self, name: &str) -> Option<NodeId> {
+    self
+      .scopes
+      .iter()
+      .rev()
+      .flat_map(|scope| scope.iter().rev())
+      .find(|binding| binding.name == name)
+      .and_then(|binding| binding.fragment)
+  }
+
+  /// Copies a fragment into a document of its own and puts it in the model's node space.
+  ///
+  /// The answer is kept, so that asking twice gives the same nodes: two calls to
+  /// `exsl:node-set()` on one variable have to compare equal, or `count($a | $a)` would be two.
+  fn as_tree(&mut self, fragment: NodeId) -> Result<M::Node> {
+    if let Some(root) = self.running.adopted(fragment) {
+      return Ok(root);
+    }
+    // The tree hangs from a fragment rather than from the document node: §11.1 lets a result
+    // tree fragment hold several elements side by side, and a document may hold only one.
+    let mut document = Document::new();
+    let root = document.create_document_fragment();
+    for child in self.output.children(fragment).collect::<Vec<_>>() {
+      let imported = document.import_node(&self.output, child, true).map_err(dom_error)?;
+      document.append_child(root, imported).map_err(dom_error)?;
+    }
+    let adopted = self.running.adopt(document, root)?.ok_or_else(|| {
+      Error::new(
+        ErrorKind::Xslt,
+        "exsl:node-set() needs somewhere to put the tree; run the transformation with a \
+         TreeSpace (or a LoadedDocuments) sharing the model's Documents handle"
+          .to_owned(),
+      )
+    })?;
+    self.running.remember_adopted(fragment, adopted);
+    Ok(adopted)
+  }
+
   /// Reads an attribute an instruction cannot do without.
   fn required(&self, module: usize, element: NodeId, attribute: &str, what: &str) -> Result<String> {
     self
@@ -1857,6 +1918,56 @@ impl<M: Model> Engine<'_, M> {
       current = self.model.parent(node);
     }
     false
+  }
+}
+
+/// The namespace of EXSLT's common module, whose `node-set()` lifts §11.1's restriction.
+const EXSLT_COMMON: &str = "http://exslt.org/common";
+
+/// Collects the variable names an expression passes to `exsl:node-set()`.
+///
+/// Only a variable reference is looked for, because only a variable can hold a result tree
+/// fragment: no expression produces one, so `exsl:node-set(<anything else>)` cannot be about a
+/// fragment and needs no lifting.
+fn fragments_wanted(expression: &Expr, namespaces: &Namespaces, into: &mut Vec<String>) {
+  if let Expr::Function { prefix: Some(prefix), local, arguments } = expression {
+    if local == "node-set" && namespaces.get(prefix) == Some(EXSLT_COMMON) {
+      if let [Expr::Variable { prefix, local }] = arguments.as_slice() {
+        let name = match prefix {
+          Some(prefix) => format!("{prefix}:{local}"),
+          None => local.clone(),
+        };
+        into.push(name);
+      }
+    }
+  }
+  for child in children_of(expression) {
+    fragments_wanted(child, namespaces, into);
+  }
+}
+
+/// The expressions written inside another.
+fn children_of(expression: &Expr) -> Vec<&Expr> {
+  match expression {
+    Expr::Binary { left, right, .. } => vec![left.as_ref(), right.as_ref()],
+    Expr::Negate(inner) => vec![inner.as_ref()],
+    Expr::Function { arguments, .. } => arguments.iter().collect(),
+    Expr::Filter { expr, predicates } => {
+      let mut inside = vec![expr.as_ref()];
+      inside.extend(predicates.iter());
+      inside
+    }
+    Expr::Path(path) => {
+      let mut inside: Vec<&Expr> = Vec::new();
+      if let PathStart::Expr(start) = &path.start {
+        inside.push(start.as_ref());
+      }
+      for step in &path.steps {
+        inside.extend(step.predicates.iter());
+      }
+      inside
+    }
+    Expr::Literal(_) | Expr::Number(_) | Expr::Variable { .. } => Vec::new(),
   }
 }
 

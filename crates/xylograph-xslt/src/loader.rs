@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 
 use xylograph_core::error::{Error, ErrorKind, Result};
-use xylograph_dom::build;
+use xylograph_dom::{Document, NodeId, build};
 use xylograph_xdm::{Documents, DomNode};
 
 /// Fetches the bytes of a stylesheet module named by an absolute URI.
@@ -59,6 +59,25 @@ pub trait DocumentSource<N> {
   ///
   /// If the document is there but cannot be served or read.
   fn document(&self, uri: &str) -> Result<Option<N>>;
+
+  /// Takes a tree the transformation built and gives back its root as a node of the model.
+  ///
+  /// This is what `exsl:node-set()` needs: a result tree fragment lives in the engine's own
+  /// result document, and turning it into a node-set means putting it where the model can read
+  /// it. The default is to take nothing, so a caller who supplied nowhere gets an error saying
+  /// so rather than a node-set of somebody else's tree.
+  ///
+  /// `root` is the node the tree hangs from, which is a document fragment rather than the
+  /// document node: XSLT lets a result tree fragment hold several elements side by side, and an
+  /// XML document node may not.
+  ///
+  /// # Errors
+  ///
+  /// If the tree cannot be taken in.
+  fn adopt(&self, document: Document, root: NodeId) -> Result<Option<N>> {
+    let _ = (document, root);
+    Ok(None)
+  }
 }
 
 /// A source that has nothing, so `document()` always finds nothing.
@@ -123,4 +142,75 @@ impl<L: Loader> DocumentSource<DomNode> for LoadedDocuments<L> {
     let document = build::parse_with_system_id(source.as_slice(), uri)?;
     Ok(Some(self.documents.add(uri, document)))
   }
+
+  fn adopt(&self, document: Document, root: NodeId) -> Result<Option<DomNode>> {
+    Ok(Some(adopt_into(&self.documents, document, root)))
+  }
+}
+
+/// A place for trees the transformation builds, with nothing to fetch.
+///
+/// `document()` finds nothing here — fetching is I/O and stays opt-in — but a result tree
+/// fragment can be adopted, which is all `exsl:node-set()` asks for. Use it when a stylesheet
+/// needs `exsl:node-set()` and no external documents. The handle must be the one the model was
+/// built with, or the nodes it hands back name a document that model cannot read:
+///
+/// ```
+/// use std::rc::Rc;
+/// use xylograph_dom::build;
+/// use xylograph_xdm::{DomModel, Documents};
+/// use xylograph_xpath::Functions;
+/// use xylograph_xslt::{Stylesheet, Transform, TreeSpace};
+///
+/// let stylesheet = Stylesheet::compile(
+///   br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+///         <xsl:template match="/">ran</xsl:template>
+///       </xsl:stylesheet>"#,
+///   "file:///s.xsl",
+/// )?;
+///
+/// let source = build::parse("<a/>".as_bytes())?;
+/// let documents = Documents::new();
+/// let model = DomModel::with_documents(&source, &documents);
+/// let space = Rc::new(TreeSpace::new(&documents));
+///
+/// let result = Transform::new()
+///   .run_with_documents(&stylesheet, &model, model.root_node(), Functions::new(), space)?;
+/// assert_eq!(result.text(), "ran");
+/// # Ok::<(), xylograph_core::Error>(())
+/// ```
+///
+/// The `xylograph-exslt` crate's `common` module has the example that actually calls
+/// `exsl:node-set()`; it lives there because the function does.
+#[derive(Clone, Debug)]
+pub struct TreeSpace {
+  documents: Documents,
+}
+
+impl TreeSpace {
+  /// A place tied to the handle a model reads.
+  #[must_use]
+  pub fn new(documents: &Documents) -> Self {
+    Self { documents: documents.clone() }
+  }
+}
+
+impl DocumentSource<DomNode> for TreeSpace {
+  fn document(&self, _uri: &str) -> Result<Option<DomNode>> {
+    Ok(None)
+  }
+
+  fn adopt(&self, document: Document, root: NodeId) -> Result<Option<DomNode>> {
+    Ok(Some(adopt_into(&self.documents, document, root)))
+  }
+}
+
+/// Adds a tree the transformation built, under a URI no document can be fetched from.
+///
+/// A fragment has no URI of its own, and giving it one that could be fetched would make two
+/// unrelated things collide in [`Documents::find`]. The counter keeps each adoption separate,
+/// since two fragments are two trees even when they say the same thing.
+fn adopt_into(documents: &Documents, document: Document, root: NodeId) -> DomNode {
+  let uri = format!("urn:xylograph:result-tree-fragment:{}", documents.len());
+  documents.add_rooted(&uri, document, root)
 }

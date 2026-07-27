@@ -80,7 +80,7 @@ mod stylesheet;
 
 pub use collate::language_aware_collation;
 pub use engine::{DEFAULT_MAX_DEPTH, ResultTree, Transform, transform};
-pub use loader::{DocumentSource, LoadedDocuments, Loader, NoDocuments, NoLoader};
+pub use loader::{DocumentSource, LoadedDocuments, Loader, NoDocuments, NoLoader, TreeSpace};
 pub use output::Output;
 pub use pattern::{Alternative, KeyTable, Pattern};
 pub use stylesheet::{AttributeSet, Key, OutputMethod, Stylesheet, Template, Variable, XSLT_NAMESPACE};

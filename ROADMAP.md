@@ -811,9 +811,19 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `xylograph-exslt` クレート、`register()` / `modules()`（統合テスト 19 + ユニット 4 + doctest 3）
 - **完了条件**: 3 モジュールが XSLT から呼べ、feature 単独ビルドが通る
 
-**6.5b. `exsl:node-set()` と `exsl:document`**
-- RTF を `Documents` に加えてモデルの節点空間に載せる受け渡しをエンジンに追加（6c が置き場を用意済み）
-- `exsl:document` は複数結果文書の書き出し
+**6.5b. `exsl:node-set()`** ✅ 完了
+- **通常の拡張関数にはできない唯一の関数**。§11.1 により RTF を運べる式が存在しないので、関数が呼ばれた時点で引数は既に文字列になっている。よって**持ち上げはエンジンが行う**: 式の中に `exsl:node-set($x)` を見つけたら、その断片を専用の文書へ複製してモデルの節点空間に載せ、**その式の評価に限り** `$x` を node-set に束ね直す
+  - **`$rtf/foo` は依然としてエラー**（準拠 XSLT 1.0 処理系と同じ）。ここで動いて他所で動かないスタイルシートを作らない
+  - エンジンが拡張関数の名前を 1 つ知ることになるが、これは層の乱れではない。§11.1 が RTF を制限しているのは**変換に処理系の助けが要るから**であり、どの XSLT 1.0 処理系も同じ関数でそれに答えている
+- **DOM の制約とぶつかった（テストで発覚）**: RTF は**複数のトップレベル要素**を持てるが、XML の文書ノードは文書要素を 1 つしか持てない。そこで採り入れた木は**文書フラグメントからぶら下げ**、`Documents::add_rooted` で「XPath 上の根はこのノード」と指定する。`DomModel` 側も `DocumentFragment` を根として扱えるようにした
+- 同じ断片を 2 回訊いたら**同じ木**を返す（覚えておく）。さもないと `count($a | $a)` が 2 になり同一性が意味を失う。異なる断片は異なる木
+- 置き場が無い場合は**何を渡せばよいかを述べるエラー**（間違ったものから答えを作らない）。`TreeSpace` を新設（`document()` は何も見つけないが、断片は採り入れる）
+- **`exsl:document` は 6.5c 以降へ**: これは関数ではなく**拡張要素**で、`extension-element-prefixes` と `element-available` を含む拡張要素の機構がエンジンに要る。関数の話とは別物なので分ける
+- **成果物**: `TreeSpace`、`DocumentSource::adopt`、`Documents::add_rooted`（統合テスト 13）
+- **完了条件**: 変換した断片を走査・照合・整列でき、変換していない断片は従来どおり拒否される
+
+**6.5c. `strings` ほか**
+- `strings` / `functions` / `dates-and-times` / `regular-expressions`、および拡張要素の機構（`exsl:document`）
 
 **6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト
