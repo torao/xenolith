@@ -116,9 +116,22 @@ as documented deviations). CI fetches the suite on every push. Cases needing mac
 does not yet have are counted as skipped and reported, never silently passed.
 
 XPath has no official W3C suite of its own — the XML Query Test Suite covers 2.0, and the corpus
-that exercises XPath 1.0 thoroughly is the OASIS XSLT suite, which needs XSLT to run and will be
-wired up when it exists. A differential comparison against **Java**, whose behaviour this library
-sets out to match, is built on the same expression corpus once the library is complete.
+that exercises XPath 1.0 thoroughly is the OASIS/Xalan XSLT suite. The harness for that is in
+place and takes the suite the same way:
+
+```bash
+XSLTCONF=xslt-conformance cargo test -p xylograph-xslt --test conformance -- --nocapture
+```
+
+It prints how many cases were judged, passed, failed and skipped, and groups the failures by
+kind. **The pass rate has not been measured yet** — the suite is not vendored and has not been
+run here, so no figure is claimed. Setting `XSLTCONF_MAX_FAILURES` makes the run fail above a
+budget; until someone has looked at the report there is no honest number to put there. The
+harness itself is checked on every run against a small suite built by the test, so a harness that
+had stopped finding cases would not look like a clean skip.
+
+A differential comparison against **Java**, whose behaviour this library sets out to match, is
+built on the same expression corpus once the library is complete.
 
 Property-based tests (`cargo test -p xylograph-xpath --test properties`) cover what a
 hand-written case cannot: that the lexer never panics on arbitrary text, that number formatting
