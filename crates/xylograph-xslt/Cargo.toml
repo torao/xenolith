@@ -15,6 +15,8 @@ default = ["icu"]
 # Language-aware collation for `xsl:sort`. Without it, sorting compares by Unicode code point,
 # which is a defensible answer but not the one a reader of a given language expects.
 icu = ["dep:icu_collator", "dep:icu_locale_core"]
+# Writing a result in an encoding other than UTF-8, as `xsl:output encoding` may ask.
+encodings = ["dep:encoding_rs"]
 
 [dependencies]
 xylograph-core = { workspace = true }
@@ -23,6 +25,7 @@ xylograph-xdm = { workspace = true }
 xylograph-xpath = { workspace = true }
 icu_collator = { workspace = true, optional = true }
 icu_locale_core = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 xylograph-serialize = { workspace = true }

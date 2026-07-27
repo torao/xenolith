@@ -17,6 +17,7 @@ use xylograph_xpath::{Namespaces, Variables};
 
 use crate::decimal::{Formats, Symbols};
 use crate::loader::{Loader, NoLoader};
+use crate::output::Output;
 use crate::pattern::{KeyTable, NoKeys, Pattern};
 
 /// The namespace that marks an element as an XSLT instruction rather than a result element.
@@ -61,7 +62,23 @@ pub struct Stylesheet {
   decimal_formats: Formats,
   space: Vec<SpaceRule>,
   aliases: Vec<NamespaceAlias>,
-  output: OutputMethod,
+  output: Output,
+  /// The import precedence that set each `xsl:output` attribute, so a lower one cannot undo it.
+  output_set: OutputPrecedence,
+}
+
+/// Which import precedence set each attribute of [`Output`], for §16's merging.
+#[derive(Debug, Default)]
+struct OutputPrecedence {
+  method: Option<i32>,
+  version: Option<i32>,
+  encoding: Option<i32>,
+  omit_xml_declaration: Option<i32>,
+  standalone: Option<i32>,
+  doctype_public: Option<i32>,
+  doctype_system: Option<i32>,
+  indent: Option<i32>,
+  media_type: Option<i32>,
 }
 
 /// One element name in an `xsl:strip-space` or `xsl:preserve-space` (XSLT 1.0 §3.4).
@@ -277,7 +294,8 @@ impl Stylesheet {
       decimal_formats: Formats::new(),
       space: Vec::new(),
       aliases: Vec::new(),
-      output: OutputMethod::default(),
+      output: Output::default(),
+      output_set: OutputPrecedence::default(),
     };
     let principal = stylesheet.load_module(source, system_id)?;
     let mut counter = 0;
@@ -389,14 +407,18 @@ impl Stylesheet {
   }
 
   /// The method `xsl:output` asked the result to be written by, `xml` if it said nothing.
-  ///
-  /// Only [`Text`](OutputMethod::Text) is carried out here, through
-  /// [`ResultTree::text`](crate::ResultTree::text). Writing a result as XML is the serializer's
-  /// job, and the details `xsl:output` can ask for — indentation, the declaration, a doctype —
-  /// arrive in a later phase.
   #[must_use]
   pub const fn output_method(&self) -> OutputMethod {
-    self.output
+    self.output.method()
+  }
+
+  /// Everything `xsl:output` asked for, with every declaration merged (§16).
+  ///
+  /// [`ResultTree::serialize`](crate::ResultTree::serialize) carries it out; this is here for a
+  /// caller who wants to write the result some other way and still honour what was asked.
+  #[must_use]
+  pub const fn output(&self) -> &Output {
+    &self.output
   }
 
   /// The document a module's elements belong to.
@@ -599,18 +621,7 @@ impl Stylesheet {
         "decimal-format" => self.read_decimal_format(module, element)?,
         "strip-space" | "preserve-space" => self.read_space(module, element, local == "strip-space")?,
         "namespace-alias" => self.read_namespace_alias(module, element)?,
-        "output" => {
-          if let Some(method) = self.modules[module].document.attribute(element, "method") {
-            self.output = match method {
-              "xml" => OutputMethod::Xml,
-              "html" => OutputMethod::Html,
-              "text" => OutputMethod::Text,
-              // A qualified name here names a method an implementation invented; XSLT says an
-              // unknown one may be reported.
-              other => return Err(xslt_error(format!("xsl:output method {other:?} is not one this can write"))),
-            };
-          }
-        }
+        "output" => self.read_output(module, element)?,
         // Everything else is a top-level element a later phase will read.
         _ => {}
       }
@@ -680,6 +691,88 @@ impl Stylesheet {
         })
         .collect(),
     )
+  }
+
+  /// Reads a top-level `xsl:output` (§16).
+  ///
+  /// §16 merges the declarations attribute by attribute rather than choosing one of them, so a
+  /// module may set the encoding and an imported one the indentation. Where two set the same
+  /// attribute the higher import precedence wins; `cdata-section-elements` is the exception, and
+  /// is the union of them all.
+  fn read_output(&mut self, module: usize, element: NodeId) -> Result<()> {
+    let precedence = self.modules[module].precedence;
+    let document = &self.modules[module].document;
+    let namespaces = in_scope_namespaces(document, element);
+
+    // Whether this declaration outranks whatever set an attribute before it. Equal precedence
+    // means a later declaration wins, which is §16's recovery from what it calls an error.
+    let wins = |set: &mut Option<i32>| {
+      if set.is_some_and(|current| current > precedence) {
+        return false;
+      }
+      *set = Some(precedence);
+      true
+    };
+
+    if let Some(method) = document.attribute(element, "method") {
+      if wins(&mut self.output_set.method) {
+        self.output.method = match method {
+          "xml" => OutputMethod::Xml,
+          "html" => OutputMethod::Html,
+          "text" => OutputMethod::Text,
+          // A qualified name here names a method an implementation invented; XSLT says an
+          // unknown one may be reported.
+          other => return Err(xslt_error(format!("xsl:output method {other:?} is not one this can write"))),
+        };
+      }
+    }
+    for (attribute, slot, set) in [
+      ("version", &mut self.output.version, &mut self.output_set.version),
+      ("encoding", &mut self.output.encoding, &mut self.output_set.encoding),
+      ("doctype-public", &mut self.output.doctype_public, &mut self.output_set.doctype_public),
+      ("doctype-system", &mut self.output.doctype_system, &mut self.output_set.doctype_system),
+      ("media-type", &mut self.output.media_type, &mut self.output_set.media_type),
+    ] {
+      if let Some(value) = document.attribute(element, attribute) {
+        if wins(set) {
+          *slot = Some(value.to_owned());
+        }
+      }
+    }
+    for (attribute, slot, set) in [
+      ("omit-xml-declaration", &mut self.output.omit_xml_declaration, &mut self.output_set.omit_xml_declaration),
+      ("indent", &mut self.output.indent, &mut self.output_set.indent),
+    ] {
+      if let Some(value) = document.attribute(element, attribute) {
+        if wins(set) {
+          *slot = value == "yes";
+        }
+      }
+    }
+    if let Some(value) = document.attribute(element, "standalone") {
+      if wins(&mut self.output_set.standalone) {
+        self.output.standalone = Some(value == "yes");
+      }
+    }
+    // The union, whatever the precedences: every declaration names elements that are to be
+    // written as CDATA, and none of them takes that back.
+    if let Some(elements) = document.attribute(element, "cdata-section-elements").map(ToOwned::to_owned) {
+      for name in elements.split_whitespace() {
+        let expanded = match name.split_once(':') {
+          None => (None, name.to_owned()),
+          Some((prefix, local)) => match namespaces.get(prefix) {
+            Some(namespace) => (Some(namespace.to_owned()), local.to_owned()),
+            None => {
+              return Err(xslt_error(format!("the prefix {prefix:?} of cdata-section-elements is not bound")));
+            }
+          },
+        };
+        if !self.output.cdata_section_elements.contains(&expanded) {
+          self.output.cdata_section_elements.push(expanded);
+        }
+      }
+    }
+    Ok(())
   }
 
   /// Reads a top-level `xsl:strip-space` or `xsl:preserve-space` (§3.4).

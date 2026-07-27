@@ -62,6 +62,9 @@ jobs:
       # is exercised rather than assumed to behave the same.
       - run: cargo test -p xylograph-xslt --no-default-features
       - run: cargo test -p xylograph-xslt --no-default-features --features icu
+      # Without `encodings`, an xsl:output encoding other than UTF-8 must be refused by name
+      # rather than written wrongly, which only this build exercises.
+      - run: cargo test -p xylograph-xslt --no-default-features --features encodings
       # The report of what the specifications leave open is worth seeing in the build where the
       # collation answer is the other one.
       - run: cargo test -p xylograph --no-default-features --features parse --test behaviour -- --nocapture

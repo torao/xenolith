@@ -8,10 +8,9 @@
 //! outside that list is reported rather than skipped. The walk and the instructions that build
 //! result nodes are in place — including `xsl:element`, `xsl:attribute`, `xsl:copy`,
 //! `xsl:copy-of` and [`AttributeSet`]s — as are [`Key`]s and the `key()` they serve, and
-//! `xsl:sort`, `xsl:number` and `xsl:decimal-format`, and `document()` through a
-//! [`DocumentSource`]. The output controls are still to come. A stylesheet can ask what is here
-//! before relying on it, with `element-available()` and `function-available()`. See
-//! `ROADMAP.md`.
+//! `xsl:sort`, `xsl:number` and `xsl:decimal-format`, `document()` through a [`DocumentSource`],
+//! and [`Output`] carrying out what `xsl:output` asked. A stylesheet can ask what is here before
+//! relying on it, with `element-available()` and `function-available()`. See `ROADMAP.md`.
 //!
 //! # Fetching
 //!
@@ -20,6 +19,10 @@
 //! each serves nothing, so a transformation reads no more than it was handed.
 //!
 //! # Features
+//!
+//! `encodings` (off by default here, on through the facade) lets [`ResultTree::to_bytes`] write
+//! a result in the encoding `xsl:output` named. Without it, anything but UTF-8 is an error
+//! saying so — never bytes in one encoding under a declaration naming another.
 //!
 //! `icu` (on by default) gives `xsl:sort` a language's own collation, from CLDR through ICU4X.
 //! Without it a text sort compares by Unicode code point — a defensible order, but not the one a
@@ -42,7 +45,7 @@
 //!   `xsl:element`, `xsl:attribute`, `xsl:copy` and the [attribute sets of §7.1.4] are defined —
 //!   [numbering (§7.7)], [sorting (§10)], [result tree fragments (§11.1)], [`document()`
 //!   (§12.1)], [keys (§12.2)], [`format-number()` (§12.3)], the [additional functions of §12.4],
-//!   and [what a stylesheet may ask about the processor (§15)].
+//!   [what a stylesheet may ask about the processor (§15)], and [output (§16)].
 //! - [XPath 1.0] — W3C Recommendation 16 November 1999, whose paths a pattern is a subset of and
 //!   whose expressions a predicate is.
 //!
@@ -61,6 +64,7 @@
 //! [`format-number()` (§12.3)]: https://www.w3.org/TR/1999/REC-xslt-19991116#format-number
 //! [additional functions of §12.4]: https://www.w3.org/TR/1999/REC-xslt-19991116#add-func
 //! [what a stylesheet may ask about the processor (§15)]: https://www.w3.org/TR/1999/REC-xslt-19991116#fallback
+//! [output (§16)]: https://www.w3.org/TR/1999/REC-xslt-19991116#output
 //! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
 
 mod avt;
@@ -70,11 +74,13 @@ mod engine;
 mod functions;
 mod loader;
 mod number;
+mod output;
 mod pattern;
 mod stylesheet;
 
 pub use collate::language_aware_collation;
 pub use engine::{DEFAULT_MAX_DEPTH, ResultTree, Transform, transform};
 pub use loader::{DocumentSource, LoadedDocuments, Loader, NoDocuments, NoLoader};
+pub use output::Output;
 pub use pattern::{Alternative, KeyTable, Pattern};
 pub use stylesheet::{AttributeSet, Key, OutputMethod, Stylesheet, Template, Variable, XSLT_NAMESPACE};

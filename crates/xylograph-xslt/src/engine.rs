@@ -44,7 +44,7 @@
 //! [`Functions`] registry, fixed to one model type, cannot be given.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use xylograph_core::error::{Error, ErrorKind, Result};
@@ -57,6 +57,7 @@ use crate::collate::{CaseOrder, Collator};
 use crate::functions::Running;
 use crate::loader::{DocumentSource, NoDocuments};
 use crate::number::{Format, Grouping, LetterValue};
+use crate::output::{self, Output, Writer};
 use crate::pattern::Pattern;
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
 
@@ -120,6 +121,9 @@ pub struct ResultTree {
   document: Document,
   root: NodeId,
   messages: Vec<String>,
+  output: Output,
+  /// The text nodes written with `disable-output-escaping`, which go out as they stand.
+  raw: HashSet<NodeId>,
 }
 
 impl ResultTree {
@@ -149,6 +153,54 @@ impl ResultTree {
   #[must_use]
   pub fn messages(&self) -> &[String] {
     &self.messages
+  }
+
+  /// What `xsl:output` asked for.
+  #[must_use]
+  pub const fn output(&self) -> &Output {
+    &self.output
+  }
+
+  /// Writes the result out the way `xsl:output` asked (XSLT 1.0 §16).
+  ///
+  /// The XML method writes XML, the HTML method HTML — which is not the same thing, since an
+  /// empty element is written `<br>` and a `script` holds text that must not be escaped — and
+  /// the text method writes the characters and no markup.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_dom::build;
+  /// use xylograph_xdm::DomModel;
+  /// use xylograph_xslt::{Stylesheet, transform};
+  ///
+  /// let stylesheet = Stylesheet::compile(
+  ///   br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  ///         <xsl:output method="html" omit-xml-declaration="yes"/>
+  ///         <xsl:template match="/"><p>text<br/></p></xsl:template>
+  ///       </xsl:stylesheet>"#,
+  ///   "file:///s.xsl",
+  /// )?;
+  ///
+  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let model = DomModel::new(&doc);
+  /// let result = transform(&stylesheet, &model, model.root_node())?;
+  /// assert_eq!(result.serialize(), "<p>text<br></p>", "the HTML method leaves br open");
+  /// # Ok::<(), xylograph_core::Error>(())
+  /// ```
+  #[must_use]
+  pub fn serialize(&self) -> String {
+    Writer::new(&self.document, &self.output, &self.raw).write(self.root)
+  }
+
+  /// Writes the result as bytes, in the encoding `xsl:output` asked for.
+  ///
+  /// # Errors
+  ///
+  /// [`ErrorKind::Xslt`] if the encoding is not one this build can write — which needs the
+  /// `encodings` feature for anything but UTF-8.
+  pub fn to_bytes(&self) -> Result<Vec<u8>> {
+    output::encode(&self.serialize(), self.output.encoding())
   }
 }
 
@@ -351,6 +403,7 @@ impl Transform {
       expressions: HashMap::new(),
       namespaces: HashMap::new(),
       messages: Vec::new(),
+      raw: HashSet::new(),
       attribute_set_chain: Vec::new(),
       depth: 0,
       max_depth: self.max_depth,
@@ -360,7 +413,13 @@ impl Transform {
     // read a global variable, so the variables go first and then the tables.
     engine.build_keys(node)?;
     engine.apply(Focus { node, position: 1, size: 1 }, None)?;
-    Ok(ResultTree { document: engine.output, root, messages: engine.messages })
+    Ok(ResultTree {
+      document: engine.output,
+      root,
+      messages: engine.messages,
+      output: stylesheet.output().clone(),
+      raw: engine.raw,
+    })
   }
 }
 
@@ -443,6 +502,8 @@ struct Engine<'a, M: Model> {
   namespaces: HashMap<(usize, NodeId), Rc<Namespaces>>,
   /// What xsl:message has said so far.
   messages: Vec<String>,
+  /// Result text nodes written with `disable-output-escaping`.
+  raw: HashSet<NodeId>,
   /// The attribute sets being applied, outermost first, so one that uses itself is caught.
   attribute_set_chain: Vec<String>,
   depth: usize,
@@ -592,15 +653,30 @@ impl<M: Model> Engine<'_, M> {
   fn value_of(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let select = self.required(module, element, "select", "xsl:value-of")?;
     let text = self.string_of(&select, module, element, focus)?;
-    self.append_text(&text);
+    self.append_maybe_raw(module, element, &text);
     Ok(())
   }
 
   /// `xsl:text`: literal characters, including the whitespace §3.4 would otherwise strip.
   fn text(&mut self, module: usize, element: NodeId) -> Result<()> {
     let text = self.stylesheet.document(module).text_content(element);
-    self.append_text(&text);
+    self.append_maybe_raw(module, element, &text);
     Ok(())
+  }
+
+  /// Appends text, remembering it if `disable-output-escaping="yes"` was asked for (§16.4).
+  ///
+  /// Only `xsl:value-of` and `xsl:text` may ask, and only these two call this. The mark is on
+  /// the node rather than on the text, so text that reaches the result any other way — a copy,
+  /// a literal — is escaped as it should be even if it says the same thing.
+  fn append_maybe_raw(&mut self, module: usize, element: NodeId, text: &str) {
+    let disabled = self.stylesheet.document(module).attribute(element, "disable-output-escaping") == Some("yes");
+    let node = self.append_text_node(text);
+    if disabled {
+      if let Some(node) = node {
+        self.raw.insert(node);
+      }
+    }
   }
 
   /// `xsl:if`: the body, when the test is true.
@@ -1176,12 +1252,18 @@ impl<M: Model> Engine<'_, M> {
   }
 
   fn append_text(&mut self, text: &str) {
+    let _ = self.append_text_node(text);
+  }
+
+  /// Appends text, giving the node it became so that a caller can mark it.
+  fn append_text_node(&mut self, text: &str) -> Option<NodeId> {
     if text.is_empty() {
-      return;
+      return None;
     }
     let node = self.output.create_text_node(text);
     let parent = *self.insertion.last().expect("there is always somewhere to put the result");
     let _ = self.output.append_child(parent, node);
+    Some(node)
   }
 
   // --- Expressions --------------------------------------------------------------------------

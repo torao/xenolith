@@ -22,6 +22,7 @@ encodings = [
   "xylograph-validate/encodings",
   "xylograph-dom/encodings",
   "xylograph-xinclude?/encodings",
+  "xylograph-xslt/encodings",
 ]
 # Build a DOM from parsed XML: xylograph::dom::build.
 parse = ["xylograph-dom/parse"]
