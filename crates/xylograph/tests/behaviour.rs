@@ -60,6 +60,41 @@ fn round_trip(xml: &str) -> String {
   Serializer::new().to_string(&doc, doc.document_element().expect("a root element"))
 }
 
+/// Fetches two documents and lists their items, showing how the two trees order against each other.
+fn ordered_across_documents() -> String {
+  use std::rc::Rc;
+  use xylograph::xdm::Documents;
+  use xylograph::xslt::{LoadedDocuments, Loader};
+
+  /// A loader serving two documents, each with two items.
+  struct Two;
+  impl Loader for Two {
+    fn load(&mut self, uri: &str) -> xylograph::Result<Vec<u8>> {
+      let which = if uri.ends_with("one.xml") { "1" } else { "2" };
+      Ok(format!("<r><i>{which}a</i><i>{which}b</i></r>").into_bytes())
+    }
+  }
+
+  let source = build::parse("<a><w>one.xml</w><w>two.xml</w></a>".as_bytes()).expect("well-formed");
+  let documents = Documents::new();
+  let model = DomModel::with_documents(&source, &documents);
+  let available = Rc::new(LoadedDocuments::new(&documents, Two));
+
+  let stylesheet = xylograph::xslt::Stylesheet::compile(
+    br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+          <xsl:template match="/"><xsl:for-each select="document(//w)//i">
+            <xsl:value-of select="."/><xsl:text> </xsl:text></xsl:for-each></xsl:template>
+        </xsl:stylesheet>"#,
+    "file:///dir/s.xsl",
+  )
+  .expect("compiles");
+
+  let result = xylograph::xslt::Transform::new()
+    .run_with_documents(&stylesheet, &model, model.root_node(), xylograph::xpath::Functions::new(), available)
+    .expect("transforms");
+  result.text().trim_end().to_owned()
+}
+
 /// Evaluates an expression inside a stylesheet, where XSLT's own functions are reachable.
 fn formatted(expression: &str) -> String {
   let source = format!(
@@ -252,6 +287,15 @@ fn undefined_by_the_specification() -> Vec<Item> {
       "descending reverses it",
       sorted("<r><i>2</i><i>oops</i><i>1</i></r>", "<xsl:sort data-type='number' order='descending'/>"),
     ),
+    item(
+      "XPath 1.0 §5",
+      "how nodes of two different documents are ordered against each other",
+      "requires a total order over every node, but says the order between nodes of different \
+       documents is implementation-dependent — asking only that it be consistent",
+    )
+    .observe("two documents fetched by document()", ordered_across_documents())
+    .observe("this build puts", "a whole document before or after another, never interleaved")
+    .observe("and orders them by", "when they joined the model — the one it was built over first"),
     item(
       "XSLT 1.0 §7.7.1",
       "what an xsl:number format token of `i` means when letter-value is absent",

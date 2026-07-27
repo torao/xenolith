@@ -252,6 +252,12 @@ impl Stylesheet {
     &self.attribute_sets
   }
 
+  /// The base URI of a stylesheet element: its `xml:base` if it has one, else its module's own.
+  pub(crate) fn base_uri(&self, module: usize, element: NodeId) -> String {
+    let module = &self.modules[module];
+    module.document.base_uri(element).unwrap_or_else(|| module.system_id.clone())
+  }
+
   /// The `xsl:decimal-format` declarations, by expanded name; the unnamed one is the default.
   pub(crate) fn decimal_formats(&self) -> &Formats {
     &self.decimal_formats

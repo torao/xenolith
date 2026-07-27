@@ -43,7 +43,7 @@
 
 mod dom;
 
-pub use dom::{DomModel, DomNode};
+pub use dom::{DocumentId, Documents, DomModel, DomNode};
 
 use std::cmp::Ordering;
 use std::fmt::Debug;

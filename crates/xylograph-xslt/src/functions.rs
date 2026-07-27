@@ -26,6 +26,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt;
 use std::rc::Rc;
 
 use xylograph_core::error::{Error, ErrorKind, Result};
@@ -33,6 +34,7 @@ use xylograph_xdm::Model;
 use xylograph_xpath::{Context, Functions, Value, is_core_function};
 
 use crate::decimal::{Formats, Pattern as DecimalPattern};
+use crate::loader::{DocumentSource, NoDocuments};
 use crate::pattern::KeyTable;
 use crate::stylesheet::XSLT_NAMESPACE;
 
@@ -42,7 +44,6 @@ use crate::stylesheet::XSLT_NAMESPACE;
 /// from inside an expression sees where the transformation has got to. Everything in it is a
 /// node handle or a string — nothing borrowed from the tree — which is what lets the closures
 /// outlive any one step of the run.
-#[derive(Debug)]
 pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   /// The node the innermost instruction is working on: what `current()` reports.
   ///
@@ -52,6 +53,11 @@ pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   current: Cell<Option<N>>,
   /// The identifiers `generate-id()` has handed out, so that a node keeps the one it was given.
   identifiers: RefCell<HashMap<N, String>>,
+  /// The base URI a relative URI in `document()` is resolved against: that of the stylesheet
+  /// element whose expression is running, which §12.1 is what asks for.
+  base_uri: RefCell<String>,
+  /// Where `document()` gets a tree from, if the caller supplied anywhere.
+  documents: RefCell<Rc<dyn DocumentSource<N>>>,
   /// The `xsl:decimal-format` declarations `format-number()` reads its symbols from.
   ///
   /// The unnamed default is always here, whether the stylesheet declared one or not, so a
@@ -75,9 +81,22 @@ impl<N: Copy + Eq + std::hash::Hash> Running<N> {
     Self {
       current: Cell::new(None),
       identifiers: RefCell::new(HashMap::new()),
+      base_uri: RefCell::new(String::new()),
+      documents: RefCell::new(Rc::new(NoDocuments)),
       decimal_formats: RefCell::new(Formats::new()),
       keys: RefCell::new(HashMap::new()),
     }
+  }
+
+  /// Records the base URI of the stylesheet element whose expression is about to run.
+  pub(crate) fn set_base_uri(&self, uri: &str) {
+    self.base_uri.borrow_mut().clear();
+    self.base_uri.borrow_mut().push_str(uri);
+  }
+
+  /// Takes the source `document()` will ask.
+  pub(crate) fn set_documents(&self, documents: Rc<dyn DocumentSource<N>>) {
+    *self.documents.borrow_mut() = documents;
   }
 
   /// Takes the `xsl:decimal-format` declarations, supplying the default if none was declared.
@@ -114,6 +133,20 @@ impl<N: Copy + Eq + std::hash::Hash> Running<N> {
   }
 }
 
+// Written by hand: a document source is a trait object, which cannot be printed, and what it
+// has fetched so far is more informative than its type would be anyway.
+impl<N: Copy + Eq + std::hash::Hash + fmt::Debug> fmt::Debug for Running<N> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("Running")
+      .field("current", &self.current.get())
+      .field("identifiers", &self.identifiers.borrow().len())
+      .field("base_uri", &self.base_uri.borrow())
+      .field("decimal_formats", &self.decimal_formats.borrow().len())
+      .field("keys", &self.keys.borrow().len())
+      .finish_non_exhaustive()
+  }
+}
+
 /// The key tables are also what a pattern beginning `key(…)` is matched against.
 impl<N: Copy + Eq + std::hash::Hash> KeyTable<N> for Running<N> {
   fn lookup(&self, namespace: Option<&str>, local: &str, value: &str) -> Vec<N> {
@@ -135,8 +168,34 @@ pub(crate) fn register<M: Model>(
   let for_identifier = Rc::clone(running);
   let for_key = Rc::clone(running);
   let for_number = Rc::clone(running);
+  let for_document = Rc::clone(running);
 
   functions
+    .with("", "document", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
+      arity("document", &arguments, 1, Some(2))?;
+      // §12.1: a node-set argument names one URI per node, taken from each node's string value;
+      // anything else names one.
+      let wanted: Vec<String> = match &arguments[0] {
+        Value::NodeSet(nodes) => nodes.iter().map(|node| context.model.string_value(*node)).collect(),
+        other => vec![other.string(context.model)],
+      };
+      let base = for_document.base_uri.borrow().clone();
+      let source = Rc::clone(&for_document.documents.borrow());
+
+      let mut roots: Vec<M::Node> = Vec::new();
+      for reference in wanted {
+        let absolute = xylograph_core::uri::resolve(&base, &reference)?;
+        // §12.1 lets a processor recover from a document it cannot retrieve by giving nothing,
+        // which is what a source with no such document reports.
+        if let Some(root) = source.document(&absolute)? {
+          roots.push(root);
+        }
+      }
+      // A node-set: each document once, and in the model's order.
+      roots.sort_by(|a, b| context.model.document_order(*a, *b));
+      roots.dedup();
+      Ok(Value::NodeSet(roots))
+    })
     .with("", "format-number", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
       arity("format-number", &arguments, 2, Some(3))?;
       let number = arguments[0].number(context.model);

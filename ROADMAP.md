@@ -749,9 +749,19 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `decimal` モジュール、`Symbols` / `Formats`（統合テスト 15 + ユニット 12）
 - **完了条件（Phase 6b 全体）✅**: sort / key / number / decimal-format と無接頭辞 XSLT 関数が揃う
 
-**6c. 複数文書のノード空間**（本フェーズの設計上の要）
-- `DomModel` を複数文書に対応させ、`document()` を実装
-- RTF を木として持ち、`xsl:copy-of "$rtf"` を正しく複製。これで **`exsl:node-set()`（Phase 6.5）が解禁**される
+**6c. 複数文書のノード空間**（本フェーズの設計上の要）✅ 完了
+- **`DomNode` が所属文書を持つ**ようになった（`DocumentId`）。`DomModel` は「構築元の 1 文書」＋「後から加わった文書群」を見る。variant がタプルから構造体になる破壊的変更だが、**`DomNode` の variant は `dom.rs` の外で構築も分解もされていなかった**ので波及は無かった
+- **設計の要点は「関数はモデルを借用できない」こと**。`document()` は変換開始前に登録され変換全体より長く生きるので、`&DomModel` を持てない。そこで**共有ハンドル `Documents`（`Rc` 内部可変）** を導入し、モデルと `document()` の実装が同じものを指すようにした。`DomModel::with_documents` で結び付ける
+- 取得は `DocumentSource` トレイト（既定は `NoDocuments` = 何も無い）。**I/O は `Loader` と同じくオプトイン** — 既定で外部文書を取りに行かない。`LoadedDocuments` が `Loader` と `Documents` を繋ぐ
+- 同一 URI は 1 回だけ取得し、以後同じノードを返す（§12.1。`document('a') | document('a')` が 1 ノードであることをテスト）
+- **`Model::root()` はノード自身の文書の根を返す** — `document()` で得たノードに適用したテンプレート中の `/` はその文書の根を意味する
+- **文書間の順序は XPath 1.0 §5 が実装依存と明言**しているので**決定 9 の対象**。文書単位でまとまる（交互にならない）順序を採用し、レポートに実測を出す
+- **RTF は結局この節点空間を要さなかった**: §11.1 が RTF に許すのは「文字列」と「`xsl:copy-of`」の 2 つだけ。前者は従来どおり文字列値で足り、後者は**エンジン自身の結果文書内の複製**で済む（ソースモデルを一切経由しない）。よって `Binding` に `fragment: Option<NodeId>` を持たせるだけで済んだ
+  - RTF を運べる式は変数参照しかない（§11.1）ので、`xsl:copy-of` が `$name` 形だけを見るのは近道ではなく**場合分けの全体**
+  - **`exsl:node-set()`（Phase 6.5）は依然として要 `Documents`**: RTF を node-set に昇格させるには結果木の断片をモデルの節点空間に置く必要がある。その置き場は 6c で用意できたので、6.5 は「断片を `Documents` に加える」だけになる
+- **既知の逸脱**: 相対 URI は**常にスタイルシート要素の基底 URI**に対して解決する。§12.1 は node-set 引数の場合「各ノードの基底 URI」と規定するが、XDM の `Model` はノードごとの基底 URI を持たない。第 2 引数も同様。ドキュメントに明記
+- **成果物**: `DocumentId` / `Documents` / `DomModel::with_documents`（xdm）、`DocumentSource` / `NoDocuments` / `LoadedDocuments` / `Transform::run_with_documents`（xslt）（統合テスト 16 + doctest 2）
+- **完了条件**: `document()` が別文書の木を走査・照合でき、`xsl:copy-of "$rtf"` が木を複製する
 
 **6d. 出力メソッドの完全化**
 - `xsl:output` 全属性、HTML 出力メソッド、`disable-output-escaping`、非 UTF 出力エンコーディング

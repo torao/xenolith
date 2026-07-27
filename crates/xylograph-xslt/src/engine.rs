@@ -16,15 +16,15 @@
 //! attribute value templates run throughout.
 //!
 //! On top of XPath's own functions, the expressions in a stylesheet can call the ones XSLT adds
-//! in [`functions`](crate::functions) — `current()`, `key()`, `format-number()`,
+//! in [`functions`](crate::functions) — `current()`, `document()`, `key()`, `format-number()`,
 //! `generate-id()`, `system-property()`, `element-available()` and `function-available()`.
 //!
 //! `xsl:sort` orders the node list of an `xsl:apply-templates` or an `xsl:for-each`; how two
 //! text keys compare is [`collate`](crate::collate)'s business, and depends on the build.
 //! `xsl:number` works out where a node sits and writes it as [`number`](crate::number) asks.
 //!
-//! What is still missing is `document()` and the multi-document work behind it, and the output
-//! controls — `xsl:strip-space`, `xsl:namespace-alias`, `xsl:fallback`; see `ROADMAP.md`. An
+//! What is still missing is the output controls — `xsl:strip-space`, `xsl:namespace-alias`,
+//! `xsl:fallback` and what `xsl:output` asks for beyond its method; see `ROADMAP.md`. An
 //! instruction that is not understood is reported rather than skipped, so a stylesheet never
 //! half-runs in silence — and `element-available()` says so beforehand, from the same list.
 
@@ -40,6 +40,7 @@ use xylograph_xpath::{Context, Expr, Functions, Namespaces, Value, Variables};
 use crate::avt::{self, Piece};
 use crate::collate::{CaseOrder, Collator};
 use crate::functions::Running;
+use crate::loader::{DocumentSource, NoDocuments};
 use crate::number::{Format, Grouping, LetterValue};
 use crate::pattern::Pattern;
 use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
@@ -257,10 +258,71 @@ impl Transform {
     node: M::Node,
     functions: Functions<M>,
   ) -> Result<ResultTree> {
+    self.run_with_documents(stylesheet, model, node, functions, Rc::new(NoDocuments))
+  }
+
+  /// Runs `stylesheet`, with `documents` for `document()` to fetch trees through.
+  ///
+  /// The source must put what it fetches into the same node space `model` reads, or the nodes it
+  /// hands back name documents that model cannot see.
+  /// [`LoadedDocuments`](crate::LoadedDocuments) does that by sharing a
+  /// [`Documents`](xylograph_xdm::Documents) handle with the model.
+  ///
+  /// # Errors
+  ///
+  /// As [`transform`], and whatever the document source raises for a document it cannot serve.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use std::rc::Rc;
+  /// use xylograph_core::error::Result;
+  /// use xylograph_dom::build;
+  /// use xylograph_xdm::{DomModel, Documents};
+  /// use xylograph_xpath::Functions;
+  /// use xylograph_xslt::{LoadedDocuments, Loader, Stylesheet, Transform};
+  ///
+  /// // A loader that serves one document, whatever it is asked for.
+  /// struct Fixed;
+  /// impl Loader for Fixed {
+  ///   fn load(&mut self, _uri: &str) -> Result<Vec<u8>> {
+  ///     Ok(b"<extra><name>Ada</name></extra>".to_vec())
+  ///   }
+  /// }
+  ///
+  /// let stylesheet = Stylesheet::compile(
+  ///   br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  ///         <xsl:template match="/">
+  ///           <xsl:value-of select="document('other.xml')//name"/>
+  ///         </xsl:template>
+  ///       </xsl:stylesheet>"#,
+  ///   "file:///s.xsl",
+  /// )?;
+  ///
+  /// let source = build::parse("<a/>".as_bytes())?;
+  /// // The handle is shared: the model reads what the source fetches.
+  /// let documents = Documents::new();
+  /// let model = DomModel::with_documents(&source, &documents);
+  /// let available = Rc::new(LoadedDocuments::new(&documents, Fixed));
+  ///
+  /// let result = Transform::new()
+  ///   .run_with_documents(&stylesheet, &model, model.root_node(), Functions::new(), available)?;
+  /// assert_eq!(result.text().trim(), "Ada");
+  /// # Ok::<(), xylograph_core::Error>(())
+  /// ```
+  pub fn run_with_documents<M: Model>(
+    &self,
+    stylesheet: &Stylesheet,
+    model: &M,
+    node: M::Node,
+    functions: Functions<M>,
+    documents: Rc<dyn DocumentSource<M::Node>>,
+  ) -> Result<ResultTree> {
     let mut output = Document::new();
     let root = output.create_document_fragment();
     let running = Rc::new(Running::new());
     running.set_decimal_formats(stylesheet.decimal_formats());
+    running.set_documents(documents);
     let functions = crate::functions::register(functions, &running, INSTRUCTIONS);
     let mut engine = Engine {
       stylesheet,
@@ -298,6 +360,9 @@ struct Focus<N> {
 struct Binding<N> {
   name: String,
   value: Value<N>,
+  /// The result tree fragment the binding holds, when its value came from content rather than
+  /// from a `select`. §11.1 lets `xsl:copy-of` copy it; everything else sees only `value`.
+  fragment: Option<NodeId>,
 }
 
 /// One `xsl:sort`, read once for a whole list (XSLT 1.0 §10).
@@ -561,9 +626,16 @@ impl<M: Model> Engine<'_, M> {
     self.append(node)
   }
 
-  /// `xsl:copy-of`: a node-set copied whole, or anything else as its string.
+  /// `xsl:copy-of`: a node-set copied whole, a result tree fragment copied whole, or anything
+  /// else as its string.
   fn copy_of(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let select = self.required(module, element, "select", "xsl:copy-of")?;
+    // §11.1 gives a result tree fragment no expression that can carry it, so a variable
+    // reference is the only way one can reach here — which is why looking for exactly that is
+    // not a shortcut but the whole of the case.
+    if let Some(fragment) = self.selected_fragment(&select)? {
+      return self.copy_fragment(fragment);
+    }
     match self.evaluate(&select, module, element, focus)? {
       // A node-set is copied whole, each node with everything below it.
       Value::NodeSet(nodes) => {
@@ -579,6 +651,38 @@ impl<M: Model> Engine<'_, M> {
         Ok(())
       }
     }
+  }
+
+  /// The fragment an expression names, if it is exactly `$name` for a variable holding one.
+  fn selected_fragment(&mut self, select: &str) -> Result<Option<NodeId>> {
+    // Variables are bound by the name as written, prefix and all, as everywhere in this engine.
+    let Expr::Variable { prefix, local } = self.expression(select)? else { return Ok(None) };
+    let name = match prefix {
+      Some(prefix) => format!("{prefix}:{local}"),
+      None => local,
+    };
+    // Innermost binding of the name wins, as everywhere else.
+    Ok(
+      self
+        .scopes
+        .iter()
+        .rev()
+        .flat_map(|scope| scope.iter().rev())
+        .find(|binding| binding.name == name)
+        .and_then(|binding| binding.fragment),
+    )
+  }
+
+  /// Copies a result tree fragment of the engine's own document into the result.
+  ///
+  /// Both trees are the engine's, so this copies node to node rather than going through the
+  /// source model as [`copy_deep`](Self::copy_deep) does.
+  fn copy_fragment(&mut self, fragment: NodeId) -> Result<()> {
+    for child in self.output.children(fragment).collect::<Vec<_>>() {
+      let copy = self.output.clone_node(child, true).map_err(dom_error)?;
+      self.append(copy)?;
+    }
+    Ok(())
   }
 
   /// An instruction a later phase brings, named so that the stylesheet author knows which.
@@ -636,7 +740,10 @@ impl<M: Model> Engine<'_, M> {
         .map(|template: &Template| (template.module(), template.element()));
       match matched {
         Some((template_module, template_element)) => {
-          let copies = parameters.iter().map(|p| Binding { name: p.name.clone(), value: p.value.clone() }).collect();
+          let copies = parameters
+            .iter()
+            .map(|p| Binding { name: p.name.clone(), value: p.value.clone(), fragment: p.fragment })
+            .collect();
           self.depth += 1;
           let outcome = self.run_template(template_module, template_element, inner, copies);
           self.depth -= 1;
@@ -681,8 +788,8 @@ impl<M: Model> Engine<'_, M> {
         continue;
       }
       let name = self.required(module, child, "name", "xsl:with-param")?;
-      let value = self.declared_value(module, child, focus)?;
-      parameters.push(Binding { name, value });
+      let (value, fragment) = self.declared_value(module, child, focus)?;
+      parameters.push(Binding { name, value, fragment });
     }
     Ok(parameters)
   }
@@ -695,29 +802,36 @@ impl<M: Model> Engine<'_, M> {
     if local == "param" && self.scopes.last().is_some_and(|scope| scope.iter().any(|b| b.name == name)) {
       return Ok(());
     }
-    let value = self.declared_value(module, element, focus)?;
+    let (value, fragment) = self.declared_value(module, element, focus)?;
     if let Some(scope) = self.scopes.last_mut() {
-      scope.push(Binding { name, value });
+      scope.push(Binding { name, value, fragment });
     }
     Ok(())
   }
 
-  /// The value a declaration carries: its `select`, or the text its content produces.
+  /// The value a declaration carries: its `select`, or what its content produces.
   ///
-  /// XSLT calls the second a result tree fragment. Until `exsl:node-set` and `xsl:copy-of` give
-  /// one somewhere to go, its string is all that can be observed of it — which is what XSLT 1.0
-  /// allows a fragment to be used as — so that is what is kept.
-  fn declared_value(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<Value<M::Node>> {
+  /// XSLT calls the second a result tree fragment, and §11.1 lets it be used in only two ways:
+  /// as a string, and by `xsl:copy-of`. So both are kept — the string, which is what an
+  /// expression sees, and the fragment itself, which is what `xsl:copy-of` copies. A fragment
+  /// lives in the engine's own result document, so keeping it costs a node identifier and needs
+  /// nothing of the source model.
+  fn declared_value(
+    &mut self,
+    module: usize,
+    element: NodeId,
+    focus: Focus<M::Node>,
+  ) -> Result<(Value<M::Node>, Option<NodeId>)> {
     if let Some(select) = self.stylesheet.document(module).attribute(element, "select").map(ToOwned::to_owned) {
-      return self.evaluate(&select, module, element, focus);
+      return Ok((self.evaluate(&select, module, element, focus)?, None));
     }
-    // Run the content into a fragment of its own, then take its text.
+    // Run the content into a fragment of its own, and keep both it and its text.
     let fragment = self.output.create_document_fragment();
     self.insertion.push(fragment);
     let outcome = self.run_body(module, element, focus);
     self.insertion.pop();
     outcome?;
-    Ok(Value::String(self.output.text_content(fragment)))
+    Ok((Value::String(self.output.text_content(fragment)), Some(fragment)))
   }
 
   // --- Instructions that build result nodes -------------------------------------------------
@@ -1021,10 +1135,10 @@ impl<M: Model> Engine<'_, M> {
         continue;
       }
       let focus = Focus { node, position: 1, size: 1 };
-      let value = self.declared_value(module, element, focus)?;
+      let (value, fragment) = self.declared_value(module, element, focus)?;
       let scope = self.scopes.last_mut().expect("the global scope was just pushed");
       scope.retain(|binding| binding.name != name);
-      scope.push(Binding { name, value });
+      scope.push(Binding { name, value, fragment });
     }
     Ok(())
   }
@@ -1446,6 +1560,9 @@ impl<M: Model> Engine<'_, M> {
     // runs. It is set here rather than where the focus changes because a predicate moves the
     // context node without moving the current one — that difference is what `current()` is for.
     self.running.set_current(focus.node);
+    // §12.1 resolves a relative URI in document() against the base URI of the stylesheet element
+    // the expression was written on, so that travels with the expression too.
+    self.running.set_base_uri(&self.stylesheet.base_uri(module, element));
     // The focus carries where the node sits in the list being processed, which is what
     // `position()` and `last()` report.
     let context = Context::new(self.model, focus.node, &namespaces, &variables).with_functions(&self.functions).at(
