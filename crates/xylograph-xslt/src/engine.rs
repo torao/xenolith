@@ -23,10 +23,25 @@
 //! text keys compare is [`collate`](crate::collate)'s business, and depends on the build.
 //! `xsl:number` works out where a node sits and writes it as [`number`](crate::number) asks.
 //!
-//! What is still missing is the output controls — `xsl:strip-space`, `xsl:namespace-alias`,
-//! `xsl:fallback` and what `xsl:output` asks for beyond its method; see `ROADMAP.md`. An
-//! instruction that is not understood is reported rather than skipped, so a stylesheet never
-//! half-runs in silence — and `element-available()` says so beforehand, from the same list.
+//! `xsl:strip-space` decides which source whitespace reaches a template rule, and
+//! `xsl:namespace-alias` which namespace a literal result element lands in.
+//!
+//! What is still missing is what `xsl:output` asks for beyond its method — indentation, the
+//! declaration, a doctype, `disable-output-escaping`; see `ROADMAP.md`. An instruction that is
+//! not understood is reported rather than skipped, so a stylesheet never half-runs in silence —
+//! and `element-available()` says so beforehand, from the same list. A stylesheet written for a
+//! later XSLT (§2.5) is read forgivingly instead: an element this does not know waits until it
+//! is reached, and then defers to its `xsl:fallback`.
+//!
+//! # Whitespace stripping, and how far it reaches
+//!
+//! §3.4 describes `xsl:strip-space` as removing nodes from the source tree. Here it is applied
+//! where the engine takes a list of source nodes — the children a built-in rule walks, and what
+//! `xsl:apply-templates` and `xsl:for-each` select — so what is *processed* is right. An XPath
+//! expression evaluated for its own sake still counts them: `count(//text())` sees the
+//! whitespace that `xsl:apply-templates` would not have processed. Filtering inside the model
+//! instead would need a wrapping [`Model`] whose node type is the same, which the
+//! [`Functions`] registry, fixed to one model type, cannot be given.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -75,6 +90,7 @@ const INSTRUCTIONS: &[&str] = &[
   "copy",
   "copy-of",
   "element",
+  "fallback",
   "for-each",
   "if",
   "message",
@@ -460,7 +476,8 @@ impl<M: Model> Engine<'_, M> {
   fn built_in(&mut self, focus: Focus<M::Node>, mode: Option<&str>) -> Result<()> {
     match self.model.kind(focus.node) {
       NodeKind::Root | NodeKind::Element => {
-        let children = self.model.children(focus.node);
+        let mut children = self.model.children(focus.node);
+        self.strip_whitespace(&mut children);
         self.apply_to_all(&children, mode)
       }
       NodeKind::Text | NodeKind::Attribute => {
@@ -563,9 +580,11 @@ impl<M: Model> Engine<'_, M> {
       "copy-of" => self.copy_of(module, element, focus),
       "number" => self.number(module, element, focus),
       "message" => self.message(module, element, focus),
+      "fallback" => Self::fallback(),
       // A top-level declaration reached here is not an instruction; it was read at compile time.
-      "attribute-set" | "output" | "import" | "include" | "template" | "key" | "decimal-format" => Ok(()),
-      other => self.not_implemented(other),
+      "attribute-set" | "output" | "import" | "include" | "template" | "key" | "decimal-format" | "strip-space"
+      | "preserve-space" | "namespace-alias" => Ok(()),
+      other => self.not_implemented(module, element, other, focus),
     }
   }
 
@@ -597,6 +616,7 @@ impl<M: Model> Engine<'_, M> {
   fn for_each(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let select = self.required(module, element, "select", "xsl:for-each")?;
     let mut nodes = self.node_set(&select, module, element, focus, "xsl:for-each")?;
+    self.strip_whitespace(&mut nodes);
     self.sort_nodes(&mut nodes, module, element, focus)?;
     for (index, node) in nodes.iter().enumerate() {
       let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
@@ -685,10 +705,45 @@ impl<M: Model> Engine<'_, M> {
     Ok(())
   }
 
-  /// An instruction a later phase brings, named so that the stylesheet author knows which.
-  fn not_implemented(&self, local: &str) -> Result<()> {
+  /// `xsl:fallback`: what to do instead of an element this cannot run.
+  ///
+  /// §15 says a fallback reached on its own does nothing: it is only meaningful inside an
+  /// element that was not understood, and this engine understood the one it is in.
+  const fn fallback() -> Result<()> {
+    Ok(())
+  }
+
+  /// An XSLT element this engine does not run.
+  ///
+  /// §2.5: in a module written for a later XSLT, such an element is not an error until it is
+  /// reached, and then its `xsl:fallback` children are run instead. Without a fallback — or in a
+  /// module that says it is XSLT 1.0, where the element is simply wrong — it is reported, since
+  /// a stylesheet that half-runs is worse than one that stops.
+  fn not_implemented(&mut self, module: usize, element: NodeId, local: &str, focus: Focus<M::Node>) -> Result<()> {
+    if self.stylesheet.forwards_compatible(module) {
+      let fallbacks = self.fallback_children(module, element);
+      if !fallbacks.is_empty() {
+        for fallback in fallbacks {
+          self.run_body(module, fallback, focus)?;
+        }
+        return Ok(());
+      }
+    }
     let message = format!("xsl:{local} is not implemented yet; see ROADMAP.md for which phase brings it");
     Err(Error::new(ErrorKind::Xslt, message))
+  }
+
+  /// The `xsl:fallback` children of an element.
+  fn fallback_children(&self, module: usize, element: NodeId) -> Vec<NodeId> {
+    let document = self.stylesheet.document(module);
+    document
+      .children(element)
+      .filter(|&child| {
+        document.node_type(child) == NodeType::Element
+          && document.namespace_uri(child) == Some(XSLT_NAMESPACE)
+          && document.local_name(child) == Some("fallback")
+      })
+      .collect()
   }
 
   fn choose(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
@@ -727,6 +782,7 @@ impl<M: Model> Engine<'_, M> {
       Some(select) => self.node_set(&select, module, element, focus, "xsl:apply-templates")?,
       None => self.model.children(focus.node),
     };
+    self.strip_whitespace(&mut nodes);
     self.sort_nodes(&mut nodes, module, element, focus)?;
     if parameters.is_empty() {
       return self.apply_to_all(&nodes, mode.as_deref());
@@ -1052,10 +1108,26 @@ impl<M: Model> Engine<'_, M> {
   /// Namespace declarations are not copied: the element keeps its name and namespace, and the
   /// serializer writes whatever declarations the result needs. That also keeps the stylesheet's
   /// own `xmlns:xsl` out of the output without having to exclude it by hand.
+  /// The namespace a literal result element or attribute goes into the result as (§7.1.1).
+  ///
+  /// The common case is no aliasing at all, and then this is what was written.
+  fn aliased_namespace(&self, written: Option<String>) -> Option<String> {
+    if !self.stylesheet.has_aliases() {
+      return written;
+    }
+    match self.stylesheet.aliased(written.as_deref()) {
+      Some(result) => result,
+      None => written,
+    }
+  }
+
   fn literal_element(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let document = self.stylesheet.document(module);
     let name = document.node_name(element);
-    let namespace = document.namespace_uri(element).map(ToOwned::to_owned);
+    let written = document.namespace_uri(element).map(ToOwned::to_owned);
+    // §7.1.1: an xsl:namespace-alias sends a namespace of the stylesheet into the result as a
+    // different one, which is how a stylesheet writes elements of the namespace it is itself in.
+    let namespace = self.aliased_namespace(written);
     let attributes: Vec<(String, Option<String>, String)> = document
       .attributes(element)
       .iter()
@@ -1082,6 +1154,7 @@ impl<M: Model> Engine<'_, M> {
     sets?;
     for (attribute_name, attribute_namespace, value) in attributes {
       let expanded = self.attribute_value(&value, module, element, focus)?;
+      let attribute_namespace = self.aliased_namespace(attribute_namespace);
       let outcome = match attribute_namespace {
         Some(namespace) => self.output.set_attribute_ns(created, Some(&namespace), &attribute_name, &expanded),
         None => self.output.set_attribute(created, &attribute_name, &expanded),
@@ -1654,6 +1727,54 @@ impl<M: Model> Engine<'_, M> {
       .attribute(element, attribute)
       .map(ToOwned::to_owned)
       .ok_or_else(|| Error::new(ErrorKind::Xslt, format!("{what} needs a {attribute}")))
+  }
+
+  // --- Whitespace in the source ---------------------------------------------------------------
+
+  /// Drops from a list of source nodes the whitespace `xsl:strip-space` asked to be rid of.
+  fn strip_whitespace(&self, nodes: &mut Vec<M::Node>) {
+    if !self.stylesheet.strips_anything() {
+      return;
+    }
+    nodes.retain(|node| !self.is_stripped(*node));
+  }
+
+  /// Whether a source node is whitespace `xsl:strip-space` asked to be rid of (§3.4).
+  ///
+  /// Only whitespace-only text counts, and only where the element holding it was named — the
+  /// default is to keep every character of the source. `xml:space="preserve"` on the element or
+  /// an ancestor overrules the stylesheet, as §3.4 says it must.
+  fn is_stripped(&self, node: M::Node) -> bool {
+    if self.model.kind(node) != NodeKind::Text {
+      return false;
+    }
+    if !self.model.string_value(node).chars().all(xylograph_core::chars::is_whitespace) {
+      return false;
+    }
+    let Some(parent) = self.model.parent(node) else { return false };
+    let Some(name) = self.model.expanded_name(parent) else { return false };
+    if !self.stylesheet.strips_whitespace(&name) {
+      return false;
+    }
+    !self.space_is_preserved(parent)
+  }
+
+  /// Whether `xml:space="preserve"` is in force on an element or above it.
+  fn space_is_preserved(&self, element: M::Node) -> bool {
+    let mut current = Some(element);
+    while let Some(node) = current {
+      for attribute in self.model.attributes(node) {
+        let is_xml_space = self.model.expanded_name(attribute).is_some_and(|name| {
+          name.local == "space" && name.namespace.as_deref() == Some(xylograph_core::name::XML_NS_URI)
+        });
+        if is_xml_space {
+          // The nearest declaration decides, whichever way it goes.
+          return self.model.string_value(attribute) == "preserve";
+        }
+      }
+      current = self.model.parent(node);
+    }
+    false
   }
 }
 

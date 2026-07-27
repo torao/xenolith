@@ -763,10 +763,21 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `DocumentId` / `Documents` / `DomModel::with_documents`（xdm）、`DocumentSource` / `NoDocuments` / `LoadedDocuments` / `Transform::run_with_documents`（xslt）（統合テスト 16 + doctest 2）
 - **完了条件**: `document()` が別文書の木を走査・照合でき、`xsl:copy-of "$rtf"` が木を複製する
 
-**6d. 出力メソッドの完全化**
+**6d. 処理の制御と出力**
+
+2 分割する。「スタイルシートが処理について言うこと」（6d-1）と「結果をどう書き出すか」（6d-2）は、触る場所（engine / serializer）も検証の仕方も別。
+
+**6d-1. 処理の制御**（§3.4、§7.1.1、§2.5、§15）✅ 完了
+- **`xsl:strip-space` / `xsl:preserve-space`**（§3.4）: 既定は「ソースの空白は保つ」。競合解決は §5.5 と同じ（名前 0 / `prefix:*` -0.25 / `*` -0.5、インポート優先順位が先）。`xml:space="preserve"` はスタイルシートに優先し、**最も近い宣言が決める**
+  - **既知の逸脱**: 除去は**エンジンがノードリストを取る箇所**（組み込み規則の子・`apply-templates`・`for-each`）で行う。仕様上は「ソース木そのものから除去」なので、`count(//text())` のような **XPath 式の内部**からは除去前のノードが見える。モデル側で濾すには `Model` をラップする必要があり、`Functions<M>` が `M` に固定されているため型が合わなくなる。6e の適合スイートで影響を測る
+- **`xsl:namespace-alias`**（§7.1.1）: リテラル結果要素・属性の名前空間を差し替える。`#default` は既定名前空間を指すが、**`in_scope_namespaces` は既定名前空間を意図的に落としている**（XPath の接頭辞は既定名前空間を指せないため）ので、別途 `default_namespace` を引く
+- **`exclude-result-prefixes` は実質不要**だった: 5c の判断で**名前空間宣言をそもそも複製していない**（要素は名前と名前空間を保ち、シリアライザが必要な宣言だけ書く）。除外すべきものが最初から結果に出ない。テストで確認済み
+- **前方互換処理**（§2.5）+ **`xsl:fallback`**（§15）: `version` が 1.0 より大きいモジュールでは、未知の XSLT 要素は**到達して初めて**問題になり、`xsl:fallback` があればそれを走らせる。数値として読めない `version` は「後の XSLT」ではないので 1.0 扱い（未知要素はエラーのまま）
+- **成果物**: `SpaceRule` / `NameTest` / `NamespaceAlias`（統合テスト 20）
+- **完了条件**: §3.4 の競合解決と `xml:space`、§7.1.1 の別名、§2.5 の前方互換が通る
+
+**6d-2. 出力**（§16）
 - `xsl:output` 全属性、HTML 出力メソッド、`disable-output-escaping`、非 UTF 出力エンコーディング
-- `strip-space` / `preserve-space` / `namespace-alias` / `exclude-result-prefixes`
-- 前方互換処理、`xsl:fallback`
 
 **6e. 適合スイート**
 - OASIS/Xalan の XSLT 1.0 テストスイートを env var 方式で取り込む（Phase 4 で「XPath を網羅的に検証する外部資産はこれ」と記録したもの）

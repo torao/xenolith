@@ -105,9 +105,9 @@ fn an_unknown_system_property_is_empty_rather_than_an_error() {
 fn element_available_answers_for_this_implementation() {
   assert_eq!(value_of("element-available('xsl:if')", "<a/>"), "true");
   assert_eq!(value_of("element-available('xsl:copy-of')", "<a/>"), "true");
-  // Not implemented yet, so the honest answer is false — which is what lets a stylesheet pick
-  // another route rather than fail part-way through.
-  assert_eq!(value_of("element-available('xsl:fallback')", "<a/>"), "false");
+  // Not an XSLT 1.0 element at all, so the honest answer is false — which is what lets a
+  // stylesheet pick another route rather than fail part-way through.
+  assert_eq!(value_of("element-available('xsl:perform-magic')", "<a/>"), "false");
   // A top-level declaration is not an instruction.
   assert_eq!(value_of("element-available('xsl:template')", "<a/>"), "false");
   // An element outside the XSLT namespace is nobody's instruction here.

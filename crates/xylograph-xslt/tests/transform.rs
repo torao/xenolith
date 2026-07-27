@@ -237,9 +237,11 @@ fn the_depth_a_transformation_may_reach_can_be_set() {
 
 #[test]
 fn an_instruction_that_is_not_implemented_says_so_rather_than_being_skipped() {
-  let body = "<xsl:template match=\"/\"><xsl:fallback/></xsl:template>";
+  // Not an XSLT 1.0 instruction at all, and this stylesheet says it is 1.0, so it is an error
+  // rather than something to fall back from.
+  let body = "<xsl:template match=\"/\"><xsl:perform-magic/></xsl:template>";
   let message = error(body, "<a/>");
-  assert!(message.contains("xsl:fallback"), "{message}");
+  assert!(message.contains("xsl:perform-magic"), "{message}");
   assert!(message.contains("ROADMAP"), "{message}");
 }
 

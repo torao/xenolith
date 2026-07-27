@@ -12,7 +12,7 @@
 use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_core::uri;
 use xylograph_dom::{Document, NodeId, NodeType, build};
-use xylograph_xdm::Model;
+use xylograph_xdm::{ExpandedName, Model};
 use xylograph_xpath::{Namespaces, Variables};
 
 use crate::decimal::{Formats, Symbols};
@@ -59,7 +59,70 @@ pub struct Stylesheet {
   attribute_sets: Vec<AttributeSet>,
   keys: Vec<Key>,
   decimal_formats: Formats,
+  space: Vec<SpaceRule>,
+  aliases: Vec<NamespaceAlias>,
   output: OutputMethod,
+}
+
+/// One element name in an `xsl:strip-space` or `xsl:preserve-space` (XSLT 1.0 §3.4).
+#[derive(Debug)]
+struct SpaceRule {
+  test: NameTest,
+  /// True for `xsl:strip-space`, false for `xsl:preserve-space`.
+  strip: bool,
+  precedence: i32,
+}
+
+/// A name test as `elements` writes one: `*`, `prefix:*`, or a qualified name.
+#[derive(Debug)]
+enum NameTest {
+  /// `*` — every element.
+  Any,
+  /// `prefix:*` — every element of a namespace.
+  Namespace(Option<String>),
+  /// A name, its prefix already resolved.
+  Name { namespace: Option<String>, local: String },
+}
+
+impl NameTest {
+  /// Reads one name of an `elements` list, resolving its prefix where it was written.
+  fn parse(text: &str, namespaces: &Namespaces) -> Result<Self> {
+    let resolve = |prefix: &str| {
+      namespaces
+        .get(prefix)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| xslt_error(format!("the prefix {prefix:?} of the element name {text:?} is not bound")))
+    };
+    match text.split_once(':') {
+      None if text == "*" => Ok(Self::Any),
+      None => Ok(Self::Name { namespace: None, local: text.to_owned() }),
+      Some((prefix, "*")) => Ok(Self::Namespace(Some(resolve(prefix)?))),
+      Some((prefix, local)) => Ok(Self::Name { namespace: Some(resolve(prefix)?), local: local.to_owned() }),
+    }
+  }
+
+  /// Whether an element's expanded name passes, and how specific the test is.
+  ///
+  /// §3.4 settles a conflict between two rules the way §5.5 settles one between two template
+  /// rules, so the same default priorities decide: a name is 0, `prefix:*` is -0.25, `*` -0.5.
+  fn matches(&self, name: &ExpandedName) -> Option<f64> {
+    match self {
+      Self::Any => Some(-0.5),
+      Self::Namespace(namespace) => (name.namespace == *namespace).then_some(-0.25),
+      Self::Name { namespace, local } => (name.namespace == *namespace && name.local == *local).then_some(0.0),
+    }
+  }
+}
+
+/// An `xsl:namespace-alias`: a namespace of the stylesheet standing for one of the result
+/// (XSLT 1.0 §7.1.1).
+#[derive(Debug)]
+struct NamespaceAlias {
+  /// The namespace a literal result element is written in.
+  stylesheet: Option<String>,
+  /// The namespace it goes into the result as.
+  result: Option<String>,
+  precedence: i32,
 }
 
 /// An `xsl:key`: which nodes it covers, and what value each is found by (XSLT 1.0 §12.2).
@@ -175,6 +238,8 @@ struct Module {
   document: Document,
   system_id: String,
   precedence: i32,
+  /// Whether its `version` names a later XSLT than this one, which §2.5 asks to be forgiving of.
+  forwards_compatible: bool,
 }
 
 impl Stylesheet {
@@ -210,6 +275,8 @@ impl Stylesheet {
       attribute_sets: Vec::new(),
       keys: Vec::new(),
       decimal_formats: Formats::new(),
+      space: Vec::new(),
+      aliases: Vec::new(),
       output: OutputMethod::default(),
     };
     let principal = stylesheet.load_module(source, system_id)?;
@@ -250,6 +317,55 @@ impl Stylesheet {
   #[must_use]
   pub fn attribute_sets(&self) -> &[AttributeSet] {
     &self.attribute_sets
+  }
+
+  /// Whether whitespace-only text under an element of this name is stripped (§3.4).
+  ///
+  /// The default is to keep it: XSLT strips source whitespace only where a stylesheet asks. Of
+  /// the rules that name an element, the one of highest import precedence wins, and among those
+  /// the most specific name test — which is §5.5's ordering, as §3.4 says to use.
+  pub(crate) fn strips_whitespace(&self, name: &ExpandedName) -> bool {
+    let mut best: Option<(i32, f64, bool)> = None;
+    for rule in &self.space {
+      let Some(specificity) = rule.test.matches(name) else { continue };
+      let candidate = (rule.precedence, specificity, rule.strip);
+      let better = match best {
+        None => true,
+        Some((precedence, current, _)) => (rule.precedence, specificity) > (precedence, current),
+      };
+      if better {
+        best = Some(candidate);
+      }
+    }
+    best.is_some_and(|(_, _, strip)| strip)
+  }
+
+  /// Whether any `xsl:strip-space` was declared at all, so the engine can skip the question.
+  pub(crate) fn strips_anything(&self) -> bool {
+    self.space.iter().any(|rule| rule.strip)
+  }
+
+  /// The namespace a literal result element of `namespace` goes into the result as (§7.1.1).
+  pub(crate) fn aliased(&self, namespace: Option<&str>) -> Option<Option<String>> {
+    self
+      .aliases
+      .iter()
+      .filter(|alias| alias.stylesheet.as_deref() == namespace)
+      .max_by_key(|alias| alias.precedence)
+      .map(|alias| alias.result.clone())
+  }
+
+  /// Whether the stylesheet asked for any namespace aliasing.
+  pub(crate) fn has_aliases(&self) -> bool {
+    !self.aliases.is_empty()
+  }
+
+  /// Whether a module was written for a version of XSLT later than this one (§2.5).
+  ///
+  /// Such a module is processed *forwards-compatibly*: an element this does not know is not an
+  /// error until it is actually run, and then only if it has no `xsl:fallback`.
+  pub(crate) fn forwards_compatible(&self, module: usize) -> bool {
+    self.modules[module].forwards_compatible
   }
 
   /// The base URI of a stylesheet element: its `xml:base` if it has one, else its module's own.
@@ -363,7 +479,15 @@ impl Stylesheet {
   /// Parses a module and adds it, returning its index.
   fn load_module(&mut self, source: &[u8], system_id: &str) -> Result<usize> {
     let document = build::parse_with_system_id(source, system_id)?;
-    self.modules.push(Module { document, system_id: system_id.to_owned(), precedence: 0 });
+    // §2.5: a stylesheet whose version is not 1.0 was written for a later XSLT, and this must
+    // read it forgivingly rather than refuse it. A version that is not a number at all is not
+    // a later XSLT, so it is read as 1.0 and its unknown elements stay errors.
+    let forwards_compatible = document
+      .document_element()
+      .and_then(|root| document.attribute(root, "version"))
+      .and_then(|version| version.trim().parse::<f64>().ok())
+      .is_some_and(|version| version > 1.0);
+    self.modules.push(Module { document, system_id: system_id.to_owned(), precedence: 0, forwards_compatible });
     Ok(self.modules.len() - 1)
   }
 
@@ -473,6 +597,8 @@ impl Stylesheet {
           self.keys.push(key);
         }
         "decimal-format" => self.read_decimal_format(module, element)?,
+        "strip-space" | "preserve-space" => self.read_space(module, element, local == "strip-space")?,
+        "namespace-alias" => self.read_namespace_alias(module, element)?,
         "output" => {
           if let Some(method) = self.modules[module].document.attribute(element, "method") {
             self.output = match method {
@@ -554,6 +680,48 @@ impl Stylesheet {
         })
         .collect(),
     )
+  }
+
+  /// Reads a top-level `xsl:strip-space` or `xsl:preserve-space` (§3.4).
+  fn read_space(&mut self, module: usize, element: NodeId, strip: bool) -> Result<()> {
+    let document = &self.modules[module].document;
+    let namespaces = in_scope_namespaces(document, element);
+    let what = if strip { "xsl:strip-space" } else { "xsl:preserve-space" };
+    let Some(elements) = document.attribute(element, "elements") else {
+      return Err(xslt_error(format!("{what} needs an elements")));
+    };
+    let precedence = self.modules[module].precedence;
+    for name in elements.to_owned().split_whitespace() {
+      let test = NameTest::parse(name, &namespaces)?;
+      self.space.push(SpaceRule { test, strip, precedence });
+    }
+    Ok(())
+  }
+
+  /// Reads a top-level `xsl:namespace-alias` (§7.1.1).
+  fn read_namespace_alias(&mut self, module: usize, element: NodeId) -> Result<()> {
+    let document = &self.modules[module].document;
+    let namespaces = in_scope_namespaces(document, element);
+    // `#default` names the default namespace, which may be no namespace at all.
+    let resolve = |attribute: &str| -> Result<Option<String>> {
+      let Some(prefix) = document.attribute(element, attribute) else {
+        return Err(xslt_error(format!("xsl:namespace-alias needs a {attribute}")));
+      };
+      if prefix == "#default" {
+        return Ok(default_namespace(document, element));
+      }
+      match namespaces.get(prefix) {
+        Some(namespace) => Ok(Some(namespace.to_owned())),
+        None => Err(xslt_error(format!("the prefix {prefix:?} of xsl:namespace-alias is not bound"))),
+      }
+    };
+    let alias = NamespaceAlias {
+      stylesheet: resolve("stylesheet-prefix")?,
+      result: resolve("result-prefix")?,
+      precedence: self.modules[module].precedence,
+    };
+    self.aliases.push(alias);
+    Ok(())
   }
 
   /// Reads a top-level `xsl:decimal-format` (§12.3).
@@ -878,6 +1046,28 @@ pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Names
     current = document.parent(node);
   }
   namespaces
+}
+
+/// The default namespace in scope on an element, which no prefix names.
+///
+/// [`in_scope_namespaces`] leaves this out on purpose: an XPath prefix can never stand for the
+/// default namespace, so an expression has no use for it. `xsl:namespace-alias` does, through
+/// `#default`, which is why it is looked up separately rather than by widening that.
+fn default_namespace(document: &Document, element: NodeId) -> Option<String> {
+  let mut current = Some(element);
+  while let Some(node) = current {
+    if document.node_type(node) == NodeType::Element {
+      for attribute in document.attributes(node).iter() {
+        if document.node_name(attribute) == "xmlns" {
+          let value = document.node_value(attribute).unwrap_or_default();
+          // An empty value undeclares it, putting the element in no namespace.
+          return (!value.is_empty()).then(|| value.to_owned());
+        }
+      }
+    }
+    current = document.parent(node);
+  }
+  None
 }
 
 fn xslt_error(message: impl Into<String>) -> Error {
