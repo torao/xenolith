@@ -652,6 +652,7 @@ version = "0.0.0"
 dependencies = [
  "xylograph-core",
  "xylograph-dom",
+ "xylograph-exslt",
  "xylograph-parser",
  "xylograph-serialize",
  "xylograph-validate",
@@ -674,6 +675,17 @@ version = "0.0.0"
 dependencies = [
  "xylograph-core",
  "xylograph-parser",
+]
+
+[[package]]
+name = "xylograph-exslt"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-dom",
+ "xylograph-xdm",
+ "xylograph-xpath",
+ "xylograph-xslt",
 ]
 
 [[package]]

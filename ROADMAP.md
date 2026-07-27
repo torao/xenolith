@@ -795,9 +795,28 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 ### Phase 6.5 — EXSLT（決定 5）
 
-- common（`node-set`, `object-type`, `exsl:document`）→ strings → math → sets → functions → dates-and-times → regular-expressions の順
-- 各モジュールを feature フラグで個別に切れる構成にし、`function-available()` が feature 状態と一致することをテストする
-- **完了条件**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト
+**順序を変更した**: ROADMAP 当初は common → strings → math → sets の順だったが、**`exsl:node-set()` だけがエンジンの協力を要する**（結果木の断片をモデルの節点空間に渡す必要がある）。値だけで完結するモジュールを先に片付け、エンジン側の受け渡しを要するものを後に回す。
+
+**6.5a. クレートと値だけで完結するモジュール** ✅ 完了
+- 新クレート `xylograph-exslt`。**エンジンに組み込まない** — 決定 5 のとおり、Phase 5d の拡張関数レジストリの**最初の利用者**として、通常の拡張関数として登録する。「レジストリの設計が正しかったか」の検査でもある
+- **モジュールごとに feature**（`common` / `math` / `sets`、既定 ON）。`function-available()` は**レジストリに直接訊く**ので、feature 状態と自動的に一致する（手で同期させるものが無い）。CI で各 feature 単独ビルドを走らせて確認
+- **`math`**: min / max / lowest / highest / abs / sqrt / power / exp / log / 三角関数 / atan2 / constant
+  - `min` / `max` は空 node-set で NaN、`lowest` / `highest` は空 node-set（前者は数、後者はノードを返すため）
+  - **数でないノードが 1 つでもあれば全体が NaN** — その上で算術した場合と同じ答え
+  - `constant` は EXSLT の綴り `SQRRT2` と通常の `SQRT2` の両方を受ける
+- **`sets`**: difference / intersection / distinct / has-same-node / leading / trailing
+  - **同一性による比較と文字列値による比較を混同しない**。difference / intersection / has-same-node は**ノードの同一性**、distinct は**文字列値**（これがグループ化に使える理由）。取り違えると「もっともらしいが間違った」答えになるので、各関数にどちらかを明記
+- **`common`**: `object-type()` のみ。**`node-set()` は未実装**（`function-available()` が false と答える）— 断片の文字列で答えるのは「静かに間違い」なので、無いことを正しく主張する
+- **feature が全て OFF のビルドも正当**なので、共有ヘルパは使う feature で個別に `#[cfg]` する（`-D warnings` の dead_code を避けるため）
+- **成果物**: `xylograph-exslt` クレート、`register()` / `modules()`（統合テスト 19 + ユニット 4 + doctest 3）
+- **完了条件**: 3 モジュールが XSLT から呼べ、feature 単独ビルドが通る
+
+**6.5b. `exsl:node-set()` と `exsl:document`**
+- RTF を `Documents` に加えてモデルの節点空間に載せる受け渡しをエンジンに追加（6c が置き場を用意済み）
+- `exsl:document` は複数結果文書の書き出し
+
+**6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト
 
 ### Phase 7 — 統合 API とツール
 

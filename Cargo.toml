@@ -24,6 +24,7 @@ xylograph-xinclude = { version = "0.0.0", path = "crates/xylograph-xinclude", de
 xylograph-xdm = { version = "0.0.0", path = "crates/xylograph-xdm", default-features = false }
 xylograph-xpath = { version = "0.0.0", path = "crates/xylograph-xpath", default-features = false }
 xylograph-xslt = { version = "0.0.0", path = "crates/xylograph-xslt", default-features = false }
+xylograph-exslt = { version = "0.0.0", path = "crates/xylograph-exslt", default-features = false }
 encoding_rs = "0.8"
 # The collation `xsl:sort` needs for a language other than code-point order (ROADMAP decision 2).
 icu_collator = "2"

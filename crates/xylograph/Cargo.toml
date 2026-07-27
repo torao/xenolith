@@ -11,7 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["encodings", "parse", "icu"]
+default = ["encodings", "parse", "icu", "exslt"]
+# EXSLT extension functions for XSLT: xylograph::exslt.
+exslt = ["dep:xylograph-exslt"]
 # Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it, a text sort
 # compares by Unicode code point; see `tests/behaviour.rs`.
 icu = ["xylograph-xslt/icu"]
@@ -45,6 +47,7 @@ xylograph-xdm = { workspace = true }
 xylograph-xpath = { workspace = true }
 xylograph-xslt = { workspace = true }
 xylograph-xinclude = { workspace = true, optional = true }
+xylograph-exslt = { workspace = true, optional = true }
 
 [lints]
 workspace = true

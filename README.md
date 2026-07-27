@@ -36,8 +36,10 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-xslt`](crates/xylograph-xslt) | Phase 6d | XSLT 1.0, in progress: match patterns, stylesheet compilation (`xsl:import` / `xsl:include`, import precedence, conflict resolution), and an engine that runs `apply-templates`, `call-template`, `for-each`, `if`, `choose`, `value-of`, variables and parameters, the built-in rules, literal result elements and attribute value templates, plus the result-tree instructions `element`, `attribute`, `comment`, `processing-instruction`, `copy`, `copy-of` and `message` with attribute sets, `xsl:key` with `key()`, `xsl:sort` with language-aware collation, `xsl:number`, `xsl:decimal-format` with `format-number()`, `document()` over a multi-document node space, result tree fragments as trees, and XSLT's own functions `current()`, `generate-id()`, `system-property()`, `element-available()` and `function-available()`, and `xsl:output` carried out for the XML, HTML and text methods with `disable-output-escaping` |
 
-Crates for EXSLT and the CLI arrive in later phases;
-each is re-exported through the facade as it lands. See the roadmap.
+| [`xylograph-exslt`](crates/xylograph-exslt) | Phase 6.5a | EXSLT extension functions, one feature per module: `math` (minimum, maximum, powers, logarithms, trigonometry), `sets` (difference, intersection, distinct and the rest) and `common`'s `object-type()`. Nothing is built into the engine — these are registered the way any caller's functions are |
+
+The CLI arrives in a later phase; each crate is re-exported through the facade as it lands. See
+the roadmap.
 
 ## Building
 
@@ -73,6 +75,7 @@ cargo test --workspace --no-default-features
 |---|---|---|
 | `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error naming the feature |
 | `parse` | on | `dom::build`, which turns parsed XML into a DOM tree |
+| `exslt` | on | `exslt`, the EXSLT extension functions. Each module has a feature of its own on that crate, and `function-available()` answers from the registry, so it agrees with the build without anything keeping the two in step |
 | `icu` | on | Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it a text sort compares by Unicode code point. XSLT 1.0 §10 leaves the collating sequence to the processor, so this changes the *answer*, not just the speed — see the behaviour report |
 | `xinclude` | off | `xinclude`, which expands `xi:include` over a DOM. Off by default: it fetches resources |
 | `tokio` | off | `AsyncReader`, over `tokio`'s `AsyncRead`. Only `io-util` is pulled in; the runtime stays the caller's choice |

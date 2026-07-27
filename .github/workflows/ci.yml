@@ -65,6 +65,12 @@ jobs:
       # Without `encodings`, an xsl:output encoding other than UTF-8 must be refused by name
       # rather than written wrongly, which only this build exercises.
       - run: cargo test -p xylograph-xslt --no-default-features --features encodings
+      # Each EXSLT module on its own, so that `function-available()` agreeing with the features
+      # is checked in the builds where they differ, not only where they are all on.
+      - run: cargo test -p xylograph-exslt --no-default-features
+      - run: cargo test -p xylograph-exslt --no-default-features --features common
+      - run: cargo test -p xylograph-exslt --no-default-features --features math
+      - run: cargo test -p xylograph-exslt --no-default-features --features sets
       # The report of what the specifications leave open is worth seeing in the build where the
       # collation answer is the other one.
       - run: cargo test -p xylograph --no-default-features --features parse --test behaviour -- --nocapture
