@@ -4,17 +4,17 @@
 //! legitimate one — every feature is optional — and an unused helper there would be dead code
 //! under the workspace's `-D warnings`.
 
-#[cfg(any(feature = "common", feature = "math", feature = "sets"))]
+#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
 use xylograph_core::error::{Error, ErrorKind, Result};
 #[cfg(any(feature = "math", feature = "sets"))]
 use xylograph_xdm::Model;
 #[cfg(any(feature = "math", feature = "sets"))]
 use xylograph_xpath::Context;
-#[cfg(any(feature = "common", feature = "math", feature = "sets"))]
+#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
 use xylograph_xpath::Value;
 
 /// Checks how many arguments a function was given.
-#[cfg(any(feature = "common", feature = "math", feature = "sets"))]
+#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
 pub(crate) fn arity<N>(name: &str, arguments: &[Value<N>], least: usize, most: Option<usize>) -> Result<()> {
   let found = arguments.len();
   if found < least || most.is_some_and(|most| found > most) {

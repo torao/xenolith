@@ -11,22 +11,27 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["common", "math", "sets"]
+default = ["common", "math", "sets", "strings"]
 # http://exslt.org/common — object-type(), and node-set() when the engine can adopt a fragment.
 common = []
 # http://exslt.org/math — the arithmetic XPath 1.0 leaves out.
 math = []
 # http://exslt.org/sets — node-set operations beyond union.
 sets = []
+# http://exslt.org/strings — string handling beyond substring-before.
+strings = []
 
 [dependencies]
 xylograph-core = { workspace = true }
+xylograph-dom = { workspace = true }
 xylograph-xdm = { workspace = true }
 xylograph-xpath = { workspace = true }
+# For DocumentSource: str:tokenize and str:split answer with nodes, and nodes have to go
+# somewhere the model can read them.
+xylograph-xslt = { workspace = true }
 
 [dev-dependencies]
 xylograph-dom = { workspace = true, features = ["parse"] }
-xylograph-xslt = { workspace = true }
 
 [lints]
 workspace = true

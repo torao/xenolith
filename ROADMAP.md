@@ -822,8 +822,16 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **成果物**: `TreeSpace`、`DocumentSource::adopt`、`Documents::add_rooted`（統合テスト 13）
 - **完了条件**: 変換した断片を走査・照合・整列でき、変換していない断片は従来どおり拒否される
 
-**6.5c. `strings` ほか**
-- `strings` / `functions` / `dates-and-times` / `regular-expressions`、および拡張要素の機構（`exsl:document`）
+**6.5c. `strings`** ✅ 完了
+- `concat` / `padding` / `align` / `encode-uri` / `decode-uri` / `tokenize` / `split`
+- **`tokenize` と `split` はノードで答える**（複数の文字列を持てる XPath 1.0 の値は node-set しかないため）。つまり木を作る必要があり、6.5b と同じ受け渡しが要る。よって `register_with(functions, trees)` を追加し、`register` は「置き場なし」版とした。置き場が無ければ**何を渡せばよいかを述べるエラー**で、推測では答えない
+  - このため `xylograph-exslt` は `xylograph-xslt` を**本依存**にした（`DocumentSource` のため）。循環はしない（xslt は exslt を知らない）
+- `tokenize` の第 2 引数は**各文字がそれぞれ区切り**、`split` は**全体で 1 つの区切り**。EXSLT の定義どおりで、取り違えると `'a--b'` の分割結果が変わる
+- `align` の幅は**数値ではなく文字列**で与える（`str:align('x', '.....')` は 5 文字幅）。溢れた場合は「揃えた側を残す」ように切る
+- `decode-uri` は**復号できない `%` をそのまま残す**。EXSLT は「不正な URI なら空文字列」と言うが、往復して戻る文字列の方が有用で、黙って失うより良い
+- **残っていること**: `functions` / `dates-and-times` / `regular-expressions`、および拡張**要素**の機構（`exsl:document`、`extension-element-prefixes`）
+- **成果物**: `strings` モジュール、`register_with`（統合テスト 11 + ユニット 8 + doctest 1）
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（上記 3 モジュールと拡張要素が残る）
 
 **6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト

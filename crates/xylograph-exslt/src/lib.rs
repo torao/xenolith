@@ -49,9 +49,10 @@
 //! | `common` | `http://exslt.org/common` | [`object-type()`](common); `node-set()` needs the engine to adopt a fragment, and arrives with it |
 //! | `math` | `http://exslt.org/math` | [minimum, maximum, powers, logarithms and trigonometry](math) |
 //! | `sets` | `http://exslt.org/sets` | [difference, intersection, and the rest](sets) |
+//! | `strings` | `http://exslt.org/str` | [splitting, padding, aligning and URI escaping](strings) |
 //!
-//! `strings`, `functions`, `dates-and-times` and `regular-expressions` arrive in later
-//! sub-phases; see `ROADMAP.md`.
+//! `functions`, `dates-and-times` and `regular-expressions` arrive in later sub-phases; see
+//! `ROADMAP.md`.
 //!
 //! # Specifications
 //!
@@ -75,26 +76,70 @@ pub mod common;
 pub mod math;
 #[cfg(feature = "sets")]
 pub mod sets;
+#[cfg(feature = "strings")]
+pub mod strings;
 
 mod support;
 
+use std::rc::Rc;
+
 use xylograph_xdm::Model;
 use xylograph_xpath::Functions;
+use xylograph_xslt::{DocumentSource, NoDocuments};
 
 /// Adds every EXSLT module this build has to a set of functions.
+///
+/// `str:tokenize` and `str:split` answer with nodes and so need somewhere to put them; with this
+/// they report that rather than answering. Use [`register_with`] to give them somewhere.
 ///
 /// # Examples
 ///
 /// See the crate documentation.
 #[must_use]
 pub fn register<M: Model>(functions: Functions<M>) -> Functions<M> {
+  register_with(functions, &(Rc::new(NoDocuments) as Rc<dyn DocumentSource<M::Node>>))
+}
+
+/// Adds every EXSLT module this build has, with somewhere for the functions that build trees.
+///
+/// `trees` must share the model's `Documents` handle, or the nodes handed back name a document
+/// that model cannot read — `xylograph_xslt::TreeSpace` is the usual one.
+///
+/// # Examples
+///
+/// One handle, shared three ways: the model reads it, the transformation puts documents in it,
+/// and the functions build trees in it. (The [`strings`] module's own documentation has the
+/// example that calls one of the two functions this matters for.)
+///
+/// ```
+/// use std::rc::Rc;
+/// use xylograph_dom::build;
+/// use xylograph_xdm::{DomModel, Documents, DomNode};
+/// use xylograph_xpath::Functions;
+/// use xylograph_xslt::{DocumentSource, TreeSpace};
+///
+/// let source = build::parse("<a/>".as_bytes())?;
+/// let documents = Documents::new();
+/// let model = DomModel::with_documents(&source, &documents);
+/// let space: Rc<dyn DocumentSource<DomNode>> = Rc::new(TreeSpace::new(&documents));
+///
+/// // The set is tied to the model it will run against, which is what names the node type here.
+/// let functions: Functions<DomModel<'_>> = xylograph_exslt::register_with(Functions::new(), &space);
+/// # let _ = (model, functions);
+/// # Ok::<(), xylograph_core::Error>(())
+/// ```
+#[must_use]
+pub fn register_with<M: Model>(functions: Functions<M>, trees: &Rc<dyn DocumentSource<M::Node>>) -> Functions<M> {
   let functions = functions;
+  let _ = trees;
   #[cfg(feature = "common")]
   let functions = common::register(functions);
   #[cfg(feature = "math")]
   let functions = math::register(functions);
   #[cfg(feature = "sets")]
   let functions = sets::register(functions);
+  #[cfg(feature = "strings")]
+  let functions = strings::register(functions, trees);
   functions
 }
 
@@ -119,6 +164,9 @@ pub fn modules() -> Vec<&'static str> {
   if cfg!(feature = "sets") {
     modules.push(sets::NAMESPACE);
   }
+  if cfg!(feature = "strings") {
+    modules.push(strings::NAMESPACE);
+  }
   modules
 }
 
@@ -135,4 +183,8 @@ mod math {
 #[cfg(not(feature = "sets"))]
 mod sets {
   pub(crate) const NAMESPACE: &str = "http://exslt.org/set";
+}
+#[cfg(not(feature = "strings"))]
+mod strings {
+  pub(crate) const NAMESPACE: &str = "http://exslt.org/str";
 }
