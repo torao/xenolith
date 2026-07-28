@@ -838,7 +838,21 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - 拡張要素は §15 の経路を通る: **`xsl:fallback` があればそれを走らせ、無ければエラー**。本実装は拡張要素を 1 つも持たないので必ずどちらか。`element-available()` は false を返し続ける（スタイルシートが事前に別経路を選べる）
 - **`exsl:document` は実装しない**。拡張要素を 1 つ実装するには「エンジンの外から結果木を組み立てる」インタフェースが要り、それは関数レジストリよりずっと広い面になる。**利用者が出揃ってから設計する**というこれまでの方針をここでも適用し、識別だけを先に正した
 - **成果物**: `Stylesheet::is_extension_element`、`Engine::extension_element`（統合テスト 5）
-- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` / `dates-and-times` / `regular-expressions` が残る）
+
+**6.5e. `dates-and-times`**（日時の読み取り）✅ 完了
+- XML Schema Part 2 の 8 形式（`dateTime` / `date` / `time` / `gYearMonth` / `gYear` / `gMonthDay` / `gMonth` / `gDay`）を読む。引数を省くと現在時刻
+- **持っていない部分は捏造しない**: `time` に月は無いので `date:month-in-year('13:45:30')` は NaN、`date:month-name` は空文字列
+- **暦は先発グレゴリオ暦**（XML Schema Part 2 §D）。`date:leap-year('1500')` は false — 当時の暦では閏年だったが、仕様が指定しているのはグレゴリオ暦を過去へ延長したもの
+- **`-` の曖昧さ**が読み取りの要: 年の符号にも「その部分が無い」印にもなる（`--07` は年の無い 7 月、`---29` は月の無い 29 日）。数値として読む前に**形で判別**する
+- 日付計算は Howard Hinnant の `days_from_civil` / `civil_from_days`。エポック近傍だけでなく暦全域で正確。往復テストで検証
+- ISO 週番号は「木曜日を含む年に属する」規則。1 月 1 日が前年の第 53 週になる場合をテスト
+- **`add` / `sub` / `difference` / `duration` は未実装**: 月を含む duration は固定長ではなく、XML Schema Part 2 §E が専用の手続き（「31 日に 1 か月足す」の規則を含む）を定めている。**近似で作ると「正しく見えてずれる」答えになる**ので、アクセサの延長ではなく独立した作業として残す
+- **内部 feature `_module`** を導入。モジュールを 1 つ足すたびに共有ヘルパの `cfg(any(...))` を数か所直す必要があったのを解消
+- **成果物**: `dates` モジュール（統合テスト 12 + ユニット 12）
+
+**6.5f. `regular-expressions`**
+- `regexp:test` / `regexp:match` / `regexp:replace`。正規表現エンジンの選定（外部依存）を伴う
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` と `regular-expressions`、および日時の duration 演算が残る）
 
 **6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト

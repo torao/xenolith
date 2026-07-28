@@ -2,19 +2,21 @@
 //!
 //! Each helper is compiled only for the modules that use it. A build with no module at all is a
 //! legitimate one — every feature is optional — and an unused helper there would be dead code
-//! under the workspace's `-D warnings`.
+//! under the workspace's `-D warnings`. `_module` is the internal feature every module turns on,
+//! so what every module needs is gated on that rather than on a list to be edited each time one
+//! is added.
 
-#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
+#[cfg(feature = "_module")]
 use xylograph_core::error::{Error, ErrorKind, Result};
 #[cfg(any(feature = "math", feature = "sets"))]
 use xylograph_xdm::Model;
 #[cfg(any(feature = "math", feature = "sets"))]
 use xylograph_xpath::Context;
-#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
+#[cfg(feature = "_module")]
 use xylograph_xpath::Value;
 
 /// Checks how many arguments a function was given.
-#[cfg(any(feature = "common", feature = "math", feature = "sets", feature = "strings"))]
+#[cfg(feature = "_module")]
 pub(crate) fn arity<N>(name: &str, arguments: &[Value<N>], least: usize, most: Option<usize>) -> Result<()> {
   let found = arguments.len();
   if found < least || most.is_some_and(|most| found > most) {

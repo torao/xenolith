@@ -72,6 +72,7 @@ jobs:
       - run: cargo test -p xylograph-exslt --no-default-features --features math
       - run: cargo test -p xylograph-exslt --no-default-features --features sets
       - run: cargo test -p xylograph-exslt --no-default-features --features strings
+      - run: cargo test -p xylograph-exslt --no-default-features --features dates
       # The report of what the specifications leave open is worth seeing in the build where the
       # collation answer is the other one.
       - run: cargo test -p xylograph --no-default-features --features parse --test behaviour -- --nocapture

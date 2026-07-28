@@ -50,9 +50,9 @@
 //! | `math` | `http://exslt.org/math` | [minimum, maximum, powers, logarithms and trigonometry](math) |
 //! | `sets` | `http://exslt.org/sets` | [difference, intersection, and the rest](sets) |
 //! | `strings` | `http://exslt.org/str` | [splitting, padding, aligning and URI escaping](strings) |
+//! | `dates` | `http://exslt.org/dates-and-times` | [reading a date or a time apart](dates) |
 //!
-//! `functions`, `dates-and-times` and `regular-expressions` arrive in later sub-phases; see
-//! `ROADMAP.md`.
+//! `functions` and `regular-expressions` arrive in later sub-phases; see `ROADMAP.md`.
 //!
 //! # Specifications
 //!
@@ -72,6 +72,8 @@
 
 #[cfg(feature = "common")]
 pub mod common;
+#[cfg(feature = "dates")]
+pub mod dates;
 #[cfg(feature = "math")]
 pub mod math;
 #[cfg(feature = "sets")]
@@ -134,6 +136,8 @@ pub fn register_with<M: Model>(functions: Functions<M>, trees: &Rc<dyn DocumentS
   let _ = trees;
   #[cfg(feature = "common")]
   let functions = common::register(functions);
+  #[cfg(feature = "dates")]
+  let functions = dates::register(functions);
   #[cfg(feature = "math")]
   let functions = math::register(functions);
   #[cfg(feature = "sets")]
@@ -158,6 +162,9 @@ pub fn modules() -> Vec<&'static str> {
   if cfg!(feature = "common") {
     modules.push(common::NAMESPACE);
   }
+  if cfg!(feature = "dates") {
+    modules.push(dates::NAMESPACE);
+  }
   if cfg!(feature = "math") {
     modules.push(math::NAMESPACE);
   }
@@ -175,6 +182,10 @@ pub fn modules() -> Vec<&'static str> {
 #[cfg(not(feature = "common"))]
 mod common {
   pub(crate) const NAMESPACE: &str = "http://exslt.org/common";
+}
+#[cfg(not(feature = "dates"))]
+mod dates {
+  pub(crate) const NAMESPACE: &str = "http://exslt.org/dates-and-times";
 }
 #[cfg(not(feature = "math"))]
 mod math {

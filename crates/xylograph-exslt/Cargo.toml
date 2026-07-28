@@ -11,15 +11,21 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["common", "math", "sets", "strings"]
+default = ["common", "dates", "math", "sets", "strings"]
 # http://exslt.org/common — object-type(), and node-set() when the engine can adopt a fragment.
-common = []
+common = ["_module"]
 # http://exslt.org/math — the arithmetic XPath 1.0 leaves out.
-math = []
+math = ["_module"]
+# http://exslt.org/dates-and-times — reading a date or a time apart.
+dates = ["_module"]
 # http://exslt.org/sets — node-set operations beyond union.
-sets = []
+sets = ["_module"]
 # http://exslt.org/strings — string handling beyond substring-before.
-strings = []
+strings = ["_module"]
+# Internal, turned on by every module above. A build with no module at all is legitimate, and
+# this is what tells the shared helpers whether anything uses them; naming every module in a
+# `cfg(any(…))` instead would need editing in several places each time one is added.
+_module = []
 
 [dependencies]
 xylograph-core = { workspace = true }
