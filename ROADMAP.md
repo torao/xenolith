@@ -850,9 +850,19 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **内部 feature `_module`** を導入。モジュールを 1 つ足すたびに共有ヘルパの `cfg(any(...))` を数か所直す必要があったのを解消
 - **成果物**: `dates` モジュール（統合テスト 12 + ユニット 12）
 
-**6.5f. `regular-expressions`**
-- `regexp:test` / `regexp:match` / `regexp:replace`。正規表現エンジンの選定（外部依存）を伴う
-- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` と `regular-expressions`、および日時の duration 演算が残る）
+**6.5f. `regular-expressions`** ✅ 完了
+- `regexp:test` / `regexp:match` / `regexp:replace`、フラグ `g` / `i` / `m`
+- **正規表現エンジンは `regex` クレート**（MSRV 1.65 なので 1.85 は問題なし）。**線形時間のマッチャで、後方参照と先読みが無い** — `(a)\1` や `(?=a)` は**エラーにする**（黙って false を返すと「単に一致しなかった」ように見える）
+  - これは libxslt（バックトラック方式）との**実際の差異**であり、入力によって停止しないマッチャを持たないことの対価。ドキュメントに明記
+- **未知のフラグはエラー**。「指定したのに黙って無視された」より「知らないと言われる」方が良い
+- `regexp:replace` の置換文字列は**そのまま**入る。EXSLT は `$1` について何も言っておらず libxslt もそう読まないので、`$` はドル記号
+- `regexp:match` は `g` の有無で**答えの意味が変わる**（EXSLT の設計）: 有れば「全体の一致ごとに 1 つ」、無ければ「最初の一致と各捕獲群」
+- **成果物**: `regexp` モジュール（統合テスト 13 + ユニット 3）
+
+**6.5g. `functions`**（`func:function` / `func:result`）— 未着手
+- スタイルシート自身が関数を宣言する仕組み。**エンジンへの再入**が要る: 関数本体を実行するのはエンジンだが、その関数が呼ばれるのは既にエンジンが式を評価している最中で、登録された関数はエンジンを借用できない（6.5b と同じ壁の、より強い形）
+- `exsl:document` と同じく「エンジンの外から結果木を組み立てる」面が要るので、**両者は同時に設計する**のが筋
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions`、`exsl:document`、日時の duration 演算が残る）
 
 **6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト

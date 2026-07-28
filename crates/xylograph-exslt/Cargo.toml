@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["common", "dates", "math", "sets", "strings"]
+default = ["common", "dates", "math", "regexp", "sets", "strings"]
 # http://exslt.org/common — object-type(), and node-set() when the engine can adopt a fragment.
 common = ["_module"]
 # http://exslt.org/math — the arithmetic XPath 1.0 leaves out.
@@ -22,6 +22,8 @@ dates = ["_module"]
 sets = ["_module"]
 # http://exslt.org/strings — string handling beyond substring-before.
 strings = ["_module"]
+# http://exslt.org/regular-expressions — testing, matching and replacing with a pattern.
+regexp = ["_module", "dep:regex"]
 # Internal, turned on by every module above. A build with no module at all is legitimate, and
 # this is what tells the shared helpers whether anything uses them; naming every module in a
 # `cfg(any(…))` instead would need editing in several places each time one is added.
@@ -35,6 +37,7 @@ xylograph-xpath = { workspace = true }
 # For DocumentSource: str:tokenize and str:split answer with nodes, and nodes have to go
 # somewhere the model can read them.
 xylograph-xslt = { workspace = true }
+regex = { workspace = true, optional = true }
 
 [dev-dependencies]
 xylograph-dom = { workspace = true, features = ["parse"] }

@@ -51,8 +51,10 @@
 //! | `sets` | `http://exslt.org/sets` | [difference, intersection, and the rest](sets) |
 //! | `strings` | `http://exslt.org/str` | [splitting, padding, aligning and URI escaping](strings) |
 //! | `dates` | `http://exslt.org/dates-and-times` | [reading a date or a time apart](dates) |
+//! | `regexp` | `http://exslt.org/regular-expressions` | [testing, matching and replacing](regexp) |
 //!
-//! `functions` and `regular-expressions` arrive in later sub-phases; see `ROADMAP.md`.
+//! `functions` — where a stylesheet declares a function of its own — arrives later; see
+//! `ROADMAP.md`.
 //!
 //! # Specifications
 //!
@@ -76,6 +78,8 @@ pub mod common;
 pub mod dates;
 #[cfg(feature = "math")]
 pub mod math;
+#[cfg(feature = "regexp")]
+pub mod regexp;
 #[cfg(feature = "sets")]
 pub mod sets;
 #[cfg(feature = "strings")]
@@ -144,6 +148,8 @@ pub fn register_with<M: Model>(functions: Functions<M>, trees: &Rc<dyn DocumentS
   let functions = sets::register(functions);
   #[cfg(feature = "strings")]
   let functions = strings::register(functions, trees);
+  #[cfg(feature = "regexp")]
+  let functions = regexp::register(functions, trees);
   functions
 }
 
@@ -174,6 +180,9 @@ pub fn modules() -> Vec<&'static str> {
   if cfg!(feature = "strings") {
     modules.push(strings::NAMESPACE);
   }
+  if cfg!(feature = "regexp") {
+    modules.push(regexp::NAMESPACE);
+  }
   modules
 }
 
@@ -198,4 +207,8 @@ mod sets {
 #[cfg(not(feature = "strings"))]
 mod strings {
   pub(crate) const NAMESPACE: &str = "http://exslt.org/str";
+}
+#[cfg(not(feature = "regexp"))]
+mod regexp {
+  pub(crate) const NAMESPACE: &str = "http://exslt.org/regular-expressions";
 }
