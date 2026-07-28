@@ -869,9 +869,16 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 ### Phase 7 — 統合 API とツール
 
-- `javax.xml.transform` 相当のファサード（Source/Result の組み合わせ、`URIResolver`, `ErrorListener`, パラメータ受け渡し）
-- CLI（`transform` / `xpath` / `validate` / `format`）
-- ドキュメント、Java からの移行ガイド
+**7a. `javax.xml.transform` 相当のファサード** ✅ 完了
+- `xylograph::transform` に `Source` / `Transformer` / `Transformed`。**下の層でできることの並べ替え**であって新しい能力ではない — JAXP から来た人が探す場所に、探す形で置く
+- **決定 3 の適用**: W3C が規定したものはそのまま、JAXP が発明したものは Rust 的に再設計。setter ではなく消費するメソッド、例外ではなく `Result`、そして **`ErrorListener` は無い** — `xsl:message` の内容は結果の横に返り、fatal になるものは `Err` そのもの。「登録し忘れると見落とす」経路を作らない
+- **機能の穴を 1 つ埋めた**: 呼び出し側から**大域 `xsl:param` に値を渡せなかった**（`Transform::with_parameter`）。§11.4 どおり、渡された引数は既定値を評価せずに置き換える。トップレベル `xsl:variable` は名前が同じでも**設定できない** — 2 つの宣言が存在する理由がその区別なので
+- **テストが実配線のバグを 1 つ捕まえた**: ワークスペースの feature 方針（クレート間依存は default features off）により、ファサードの `exslt` feature が **EXSLT クレートを「中身ゼロで」有効化**していた。全 EXSLT 呼び出しが失敗する状態で、`Cargo.toml` でモジュールを明示して解消
+- **成果物**: `xylograph::transform`（統合テスト 17 + doctest 1）、`Transform::with_parameter`、`Loader for Box<L>`
+
+**7b. CLI**（`transform` / `xpath` / `validate` / `format`）
+
+**7c. ドキュメントと Java からの移行ガイド**
 
 ### Phase 8 — 品質と性能
 

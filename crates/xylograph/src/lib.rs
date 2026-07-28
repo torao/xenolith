@@ -12,6 +12,8 @@
 //! - [`serialize`] — writing a DOM subtree back to XML text.
 //! - [`xdm`] — the XPath data model: a node-model trait and its DOM implementation.
 //! - [`xpath`] — XPath 1.0: compiling an expression and evaluating it.
+//! - [`transform`] — `javax.xml.transform`'s shape: compile a stylesheet once, set parameters,
+//!   run it over as many documents as you like.
 //! - [`xslt`] — XSLT 1.0: patterns, stylesheets, the engine, and writing the result.
 //! - `exslt` (feature `exslt`) — EXSLT extension functions for XSLT.
 //! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
@@ -102,6 +104,8 @@ pub use xylograph_exslt as exslt;
 /// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
 #[cfg(feature = "xinclude")]
 pub use xylograph_xinclude as xinclude;
+
+pub mod transform;
 
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};

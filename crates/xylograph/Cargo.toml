@@ -12,8 +12,18 @@ categories.workspace = true
 
 [features]
 default = ["encodings", "parse", "icu", "exslt"]
-# EXSLT extension functions for XSLT: xylograph::exslt.
-exslt = ["dep:xylograph-exslt"]
+# EXSLT extension functions for XSLT: xylograph::exslt. Inter-crate dependencies have their
+# default features off (see the feature policy in ROADMAP.md), so the modules are named here —
+# without this the crate would be present with nothing in it, and every EXSLT call would fail.
+exslt = [
+  "dep:xylograph-exslt",
+  "xylograph-exslt/common",
+  "xylograph-exslt/dates",
+  "xylograph-exslt/math",
+  "xylograph-exslt/regexp",
+  "xylograph-exslt/sets",
+  "xylograph-exslt/strings",
+]
 # Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it, a text sort
 # compares by Unicode code point; see `tests/behaviour.rs`.
 icu = ["xylograph-xslt/icu"]

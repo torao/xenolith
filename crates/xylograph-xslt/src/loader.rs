@@ -22,6 +22,13 @@ pub trait Loader {
   fn load(&mut self, uri: &str) -> Result<Vec<u8>>;
 }
 
+/// A boxed loader is a loader, so one can be chosen at run time.
+impl<L: Loader + ?Sized> Loader for Box<L> {
+  fn load(&mut self, uri: &str) -> Result<Vec<u8>> {
+    (**self).load(uri)
+  }
+}
+
 /// A loader that serves nothing, for a stylesheet held in one document.
 ///
 /// [`Stylesheet::compile`](crate::Stylesheet::compile) uses this, so a stylesheet that turns out

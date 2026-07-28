@@ -243,9 +243,11 @@ pub fn transform<M: Model>(stylesheet: &Stylesheet, model: &M, node: M::Node) ->
 /// A transformation, with the limits it is run under.
 ///
 /// [`transform`] is this with the defaults; build one of these to change them.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Transform {
   max_depth: usize,
+  /// Values for the stylesheet's top-level `xsl:param`s, as the caller supplied them.
+  parameters: Vec<(String, String)>,
 }
 
 impl Default for Transform {
@@ -258,7 +260,7 @@ impl Transform {
   /// A transformation with the default limits.
   #[must_use]
   pub const fn new() -> Self {
-    Self { max_depth: DEFAULT_MAX_DEPTH }
+    Self { max_depth: DEFAULT_MAX_DEPTH, parameters: Vec::new() }
   }
 
   /// How deep template application may go before the transformation is refused.
@@ -266,8 +268,47 @@ impl Transform {
   /// The default is deliberately conservative — see [`DEFAULT_MAX_DEPTH`]'s reasoning. Raise it
   /// for a stylesheet that recurses deeply on purpose, on a thread with the stack to match.
   #[must_use]
-  pub const fn with_max_depth(mut self, depth: usize) -> Self {
+  pub fn with_max_depth(mut self, depth: usize) -> Self {
     self.max_depth = depth;
+    self
+  }
+
+  /// Supplies a value for one of the stylesheet's top-level `xsl:param`s (XSLT 1.0 §11.4).
+  ///
+  /// A parameter given here takes that value and its own default is not evaluated. A top-level
+  /// `xsl:variable` is not a parameter and cannot be set this way, whatever it is called — which
+  /// is the difference the two declarations exist to draw.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylograph_dom::build;
+  /// use xylograph_xdm::DomModel;
+  /// use xylograph_xslt::{Stylesheet, Transform};
+  ///
+  /// let stylesheet = Stylesheet::compile(
+  ///   br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  ///         <xsl:param name="greeting">Hello</xsl:param>
+  ///         <xsl:template match="/"><xsl:value-of select="$greeting"/></xsl:template>
+  ///       </xsl:stylesheet>"#,
+  ///   "file:///s.xsl",
+  /// )?;
+  ///
+  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let model = DomModel::new(&doc);
+  ///
+  /// let default = Transform::new().run(&stylesheet, &model, model.root_node())?;
+  /// assert_eq!(default.text(), "Hello");
+  ///
+  /// let given = Transform::new().with_parameter("greeting", "Good day");
+  /// assert_eq!(given.run(&stylesheet, &model, model.root_node())?.text(), "Good day");
+  /// # Ok::<(), xylograph_core::Error>(())
+  /// ```
+  #[must_use]
+  pub fn with_parameter(mut self, name: &str, value: &str) -> Self {
+    // The last value given for a name is the one used, so setting one twice is not an error.
+    self.parameters.retain(|(supplied, _)| supplied != name);
+    self.parameters.push((name.to_owned(), value.to_owned()));
     self
   }
 
@@ -411,7 +452,7 @@ impl Transform {
       depth: 0,
       max_depth: self.max_depth,
     };
-    engine.bind_global_variables(node)?;
+    engine.bind_global_variables(node, &self.parameters)?;
     // Keys are built before the walk: a global variable may call key(), and a key's `use` may
     // read a global variable, so the variables go first and then the tables.
     engine.build_keys(node)?;
@@ -1304,24 +1345,41 @@ impl<M: Model> Engine<'_, M> {
   /// They are evaluated in the order they were declared, so one that refers to another declared
   /// after it is not resolved. XSLT allows that order; sorting the declarations by what they
   /// depend on arrives with the rest of the top-level elements.
-  fn bind_global_variables(&mut self, node: M::Node) -> Result<()> {
+  fn bind_global_variables(&mut self, node: M::Node, supplied: &[(String, String)]) -> Result<()> {
     self.scopes.push(Vec::new());
-    let declarations: Vec<(usize, NodeId, String, i32)> = self
+    let declarations: Vec<(usize, NodeId, String, i32, bool)> = self
       .stylesheet
       .variables()
       .iter()
-      .map(|variable| (variable.module(), variable.element(), variable.name().to_owned(), variable.precedence()))
+      .map(|variable| {
+        (
+          variable.module(),
+          variable.element(),
+          variable.name().to_owned(),
+          variable.precedence(),
+          variable.is_parameter(),
+        )
+      })
       .collect();
 
-    for (module, element, name, precedence) in declarations {
+    for (module, element, name, precedence, is_parameter) in declarations {
       // A declaration of the same name in a module of higher precedence has already won.
       let shadowed =
         self.stylesheet.variables().iter().any(|other| other.name() == name && other.precedence() > precedence);
       if shadowed {
         continue;
       }
-      let focus = Focus { node, position: 1, size: 1 };
-      let (value, fragment) = self.declared_value(module, element, focus)?;
+      // §11.4: a parameter the caller supplied takes the value given, and its own `select` or
+      // content — its *default* — is not evaluated at all. A variable is not a parameter and
+      // cannot be set from outside, however the caller spells its name.
+      let given = if is_parameter { supplied.iter().find(|(supplied, _)| *supplied == name) } else { None };
+      let (value, fragment) = match given {
+        Some((_, value)) => (Value::String(value.clone()), None),
+        None => {
+          let focus = Focus { node, position: 1, size: 1 };
+          self.declared_value(module, element, focus)?
+        }
+      };
       let scope = self.scopes.last_mut().expect("the global scope was just pushed");
       scope.retain(|binding| binding.name != name);
       scope.push(Binding { name, value, fragment });

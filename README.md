@@ -160,11 +160,25 @@ pin down never appears there; it belongs in a test that asserts it.
 ## Coming from Java
 
 The APIs follow their Java counterparts where the names carry meaning, so what you know there
-transfers: `org.w3c.dom` in [`xylograph-dom`](crates/xylograph-dom), and `javax.xml.xpath` in
+transfers: `org.w3c.dom` in [`xylograph-dom`](crates/xylograph-dom), `javax.xml.xpath` in
 [`xylograph-xpath`](crates/xylograph-xpath) — `XPath` is the environment, `XPathExpression` the
 compiled expression, `Namespaces` the `NamespaceContext`, `Variables` the
-`XPathVariableResolver`. Each crate's documentation carries the mapping in full, including where
-it deliberately differs.
+`XPathVariableResolver` — and `javax.xml.transform` in `xylograph::transform`:
+
+```rust
+use xylograph::transform::{Source, Transformer};
+
+let transformer = Transformer::compile(Source::bytes(stylesheet))?
+  .with_parameter("greeting", "Good day");
+let result = transformer.transform(Source::bytes(document))?;
+println!("{}", result.text());
+# Ok::<(), xylograph::Error>(())
+```
+
+Each crate's documentation carries the mapping in full, including where it deliberately differs —
+a builder instead of setters, a `Result` instead of an exception, and no `ErrorListener` to
+install, since what `xsl:message` said comes back beside the result and anything fatal is the
+error of the call.
 
 ## License
 
