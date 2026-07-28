@@ -45,7 +45,8 @@
 //!   `xsl:element`, `xsl:attribute`, `xsl:copy` and the [attribute sets of §7.1.4] are defined —
 //!   [numbering (§7.7)], [sorting (§10)], [result tree fragments (§11.1)], [`document()`
 //!   (§12.1)], [keys (§12.2)], [`format-number()` (§12.3)], the [additional functions of §12.4],
-//!   [what a stylesheet may ask about the processor (§15)], and [output (§16)].
+//!   [extension elements (§14)], [what a stylesheet may ask about the processor (§15)], and
+//!   [output (§16)].
 //! - [XPath 1.0] — W3C Recommendation 16 November 1999, whose paths a pattern is a subset of and
 //!   whose expressions a predicate is.
 //!
@@ -63,6 +64,7 @@
 //! [keys (§12.2)]: https://www.w3.org/TR/1999/REC-xslt-19991116#key
 //! [`format-number()` (§12.3)]: https://www.w3.org/TR/1999/REC-xslt-19991116#format-number
 //! [additional functions of §12.4]: https://www.w3.org/TR/1999/REC-xslt-19991116#add-func
+//! [extension elements (§14)]: https://www.w3.org/TR/1999/REC-xslt-19991116#extension
 //! [what a stylesheet may ask about the processor (§15)]: https://www.w3.org/TR/1999/REC-xslt-19991116#fallback
 //! [output (§16)]: https://www.w3.org/TR/1999/REC-xslt-19991116#output
 //! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/

@@ -24,7 +24,10 @@
 //! `xsl:number` works out where a node sits and writes it as [`number`](crate::number) asks.
 //!
 //! `xsl:strip-space` decides which source whitespace reaches a template rule, and
-//! `xsl:namespace-alias` which namespace a literal result element lands in.
+//! `xsl:namespace-alias` which namespace a literal result element lands in. An element whose
+//! namespace `extension-element-prefixes` names is an extension element (§14): this engine
+//! implements none, so such an element defers to its `xsl:fallback` or is reported — never
+//! copied into the result, where it would look like output the stylesheet meant.
 //!
 //! What is still missing is what `xsl:output` asks for beyond its method — indentation, the
 //! declaration, a doctype, `disable-output-escaping`; see `ROADMAP.md`. An instruction that is
@@ -606,6 +609,12 @@ impl<M: Model> Engine<'_, M> {
           let local = document.local_name(node).unwrap_or_default().to_owned();
           return self.instruction(module, node, &local, focus);
         }
+        // §14: an element whose namespace a `extension-element-prefixes` names is an extension
+        // *element*, not something to copy into the result. This engine implements none, so it
+        // falls back or reports — never leaks the element into the output.
+        if self.stylesheet.is_extension_element(module, node) {
+          return self.extension_element(module, node, focus);
+        }
         self.literal_element(module, node, focus)
       }
       _ => Ok(()),
@@ -806,6 +815,28 @@ impl<M: Model> Engine<'_, M> {
       }
     }
     let message = format!("xsl:{local} is not implemented yet; see ROADMAP.md for which phase brings it");
+    Err(Error::new(ErrorKind::Xslt, message))
+  }
+
+  /// An extension element (XSLT 1.0 §14).
+  ///
+  /// This engine implements none, so every one of them takes §15's route: run the
+  /// `xsl:fallback` children if there are any, and report otherwise. What must not happen — and
+  /// did, before extension elements were told apart from literal ones — is the element being
+  /// copied into the result, where it would look like output the stylesheet meant to produce.
+  fn extension_element(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let fallbacks = self.fallback_children(module, element);
+    if !fallbacks.is_empty() {
+      for fallback in fallbacks {
+        self.run_body(module, fallback, focus)?;
+      }
+      return Ok(());
+    }
+    let name = self.stylesheet.document(module).node_name(element);
+    let message = format!(
+      "{name} is an extension element, and this implements none; \
+       give it an xsl:fallback, or ask element-available() before relying on it"
+    );
     Err(Error::new(ErrorKind::Xslt, message))
   }
 

@@ -829,9 +829,16 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - `tokenize` の第 2 引数は**各文字がそれぞれ区切り**、`split` は**全体で 1 つの区切り**。EXSLT の定義どおりで、取り違えると `'a--b'` の分割結果が変わる
 - `align` の幅は**数値ではなく文字列**で与える（`str:align('x', '.....')` は 5 文字幅）。溢れた場合は「揃えた側を残す」ように切る
 - `decode-uri` は**復号できない `%` をそのまま残す**。EXSLT は「不正な URI なら空文字列」と言うが、往復して戻る文字列の方が有用で、黙って失うより良い
-- **残っていること**: `functions` / `dates-and-times` / `regular-expressions`、および拡張**要素**の機構（`exsl:document`、`extension-element-prefixes`）
+- **残っていること**: `functions` / `dates-and-times` / `regular-expressions` の各モジュール（6.5d で `extension-element-prefixes` 自体は入った）
 - **成果物**: `strings` モジュール、`register_with`（統合テスト 11 + ユニット 8 + doctest 1）
-- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（上記 3 モジュールと拡張要素が残る）
+
+**6.5d. 拡張要素の識別**（§14、§15）✅ 完了
+- **バグ修正**: 拡張名前空間の要素が**リテラル結果要素として結果に複製されていた**。`<exsl:document>` を書くとそれが出力に現れる — スタイルシートが意図した出力に見えてしまう、静かに間違った振る舞い
+- **`extension-element-prefixes`**（§14.1）を実装。書かれた要素とその配下に及ぶので、要素から祖先へ遡って「この要素の名前空間を指す接頭辞が宣言されているか」を問う。XSLT 要素上では無接頭辞、リテラル結果要素上では **XSLT 名前空間付き**（無接頭辞だと結果の一部になってしまうため）。`#default` も解決する
+- 拡張要素は §15 の経路を通る: **`xsl:fallback` があればそれを走らせ、無ければエラー**。本実装は拡張要素を 1 つも持たないので必ずどちらか。`element-available()` は false を返し続ける（スタイルシートが事前に別経路を選べる）
+- **`exsl:document` は実装しない**。拡張要素を 1 つ実装するには「エンジンの外から結果木を組み立てる」インタフェースが要り、それは関数レジストリよりずっと広い面になる。**利用者が出揃ってから設計する**というこれまでの方針をここでも適用し、識別だけを先に正した
+- **成果物**: `Stylesheet::is_extension_element`、`Engine::extension_element`（統合テスト 5）
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` / `dates-and-times` / `regular-expressions` が残る）
 
 **6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト

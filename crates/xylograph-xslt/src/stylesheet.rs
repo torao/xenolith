@@ -386,6 +386,44 @@ impl Stylesheet {
     self.modules[module].forwards_compatible
   }
 
+  /// Whether an element is an extension element rather than a literal result element (§14.1).
+  ///
+  /// `extension-element-prefixes` names prefixes, and applies to the element it is written on
+  /// and everything below it — so the question is answered by walking up from the element until
+  /// one of the declarations names the prefix this element's namespace is bound to. An XSLT
+  /// element writes the attribute without a prefix; a literal result element writes it in the
+  /// XSLT namespace, since on it an unprefixed attribute would be part of the result.
+  pub(crate) fn is_extension_element(&self, module: usize, element: NodeId) -> bool {
+    let document = &self.modules[module].document;
+    let Some(namespace) = document.namespace_uri(element).map(ToOwned::to_owned) else {
+      // An element in no namespace can be named by no prefix, so it is never an extension one.
+      return false;
+    };
+
+    let mut current = Some(element);
+    while let Some(node) = current {
+      let declared = document
+        .attribute(node, "extension-element-prefixes")
+        .or_else(|| document.attribute_ns(node, Some(XSLT_NAMESPACE), "extension-element-prefixes"));
+      if let Some(declared) = declared {
+        let namespaces = in_scope_namespaces(document, node);
+        for prefix in declared.split_whitespace() {
+          // `#default` names the default namespace, which a literal result element may be in.
+          let named = if prefix == "#default" {
+            default_namespace(document, node)
+          } else {
+            namespaces.get(prefix).map(ToOwned::to_owned)
+          };
+          if named.as_deref() == Some(namespace.as_str()) {
+            return true;
+          }
+        }
+      }
+      current = document.parent(node);
+    }
+    false
+  }
+
   /// The base URI of a stylesheet element: its `xml:base` if it has one, else its module's own.
   pub(crate) fn base_uri(&self, module: usize, element: NodeId) -> String {
     let module = &self.modules[module];

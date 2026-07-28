@@ -252,6 +252,86 @@ fn a_version_that_is_not_a_number_is_read_as_one_point_zero() {
   assert!(transform(&stylesheet, &model, model.root_node()).is_err());
 }
 
+// --- Extension elements (§14) --------------------------------------------------------------------
+
+/// A stylesheet declaring `ext` as an extension-element prefix.
+fn with_extensions(body: &str) -> String {
+  format!(
+    "<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform' \
+     xmlns:ext='urn:ext' extension-element-prefixes='ext'>{body}</xsl:stylesheet>"
+  )
+}
+
+/// Transforms with the extension prefix declared, giving the result as markup.
+fn extension_markup(body: &str) -> Result<String, String> {
+  let source = with_extensions(body);
+  let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  match transform(&stylesheet, &model, model.root_node()) {
+    Ok(result) => Ok(Serializer::new().to_string(result.document(), result.root())),
+    Err(error) => Err(error.message().to_owned()),
+  }
+}
+
+#[test]
+fn an_element_of_an_extension_namespace_never_reaches_the_result() {
+  // Before extension elements were told apart from literal ones this was copied into the
+  // output, where it looked like something the stylesheet meant to produce.
+  let body = "<xsl:template match='/'><out><ext:magic/></out></xsl:template>";
+  let error = extension_markup(body).expect_err("no extension element is implemented");
+  assert!(error.contains("extension element"), "{error}");
+  assert!(error.contains("magic"), "{error}");
+}
+
+#[test]
+fn an_extension_element_uses_its_fallback() {
+  let body = "<xsl:template match='/'><out><ext:magic><xsl:fallback>plain</xsl:fallback></ext:magic></out>\
+              </xsl:template>";
+  assert_eq!(extension_markup(body).expect("falls back"), "<out>plain</out>");
+}
+
+#[test]
+fn an_element_of_a_namespace_that_was_not_declared_is_a_literal_result_element() {
+  // Only the prefixes `extension-element-prefixes` names are extension elements; everything
+  // else in a namespace is ordinary output.
+  let source = "<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform' \
+                xmlns:o='urn:o'><xsl:template match='/'><o:thing/></xsl:template></xsl:stylesheet>";
+  let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
+  let written = Serializer::new().to_string(result.document(), result.root());
+  assert!(written.contains("urn:o"), "{written}");
+}
+
+#[test]
+fn the_declaration_reaches_only_the_element_it_is_on_and_below() {
+  // Declared on one literal result element, in the XSLT namespace because an unprefixed
+  // attribute there would be part of the result.
+  let source = "<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform' \
+                xmlns:ext='urn:ext'>\
+                  <xsl:template match='/'>\
+                    <outside><ext:magic/></outside>\
+                    <inside xsl:extension-element-prefixes='ext'><ext:magic/></inside>\
+                  </xsl:template>\
+                </xsl:stylesheet>";
+  let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
+  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  // The one outside the declaration is a literal result element and comes out; the one inside
+  // is an extension element and stops the transformation.
+  let error = transform(&stylesheet, &model, model.root_node()).expect_err("the inner one is an extension element");
+  assert!(error.message().contains("extension element"), "{}", error.message());
+}
+
+#[test]
+fn element_available_is_false_for_an_extension_element() {
+  // Which is the answer that lets a stylesheet choose another route before it commits.
+  let body = "<xsl:template match='/'><xsl:value-of select=\"element-available('ext:magic')\"/></xsl:template>";
+  assert_eq!(extension_markup(body).expect("transforms"), "false");
+}
+
 #[test]
 fn markup_still_comes_out_as_it_did() {
   // A guard that none of the above changed the ordinary case.
