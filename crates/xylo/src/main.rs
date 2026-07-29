@@ -125,10 +125,75 @@ struct Files;
 
 impl Loader for Files {
   fn load(&mut self, uri: &str) -> xylograph::Result<Vec<u8>> {
-    let path = uri.strip_prefix("file:///").unwrap_or(uri);
-    fs::read(path).map_err(|error| {
-      xylograph::Error::new(xylograph::ErrorKind::Xslt, format!("{}: {error}", display(Path::new(path))))
+    let path = path_of(uri);
+    fs::read(&path).map_err(|error| {
+      xylograph::Error::new(xylograph::ErrorKind::Xslt, format!("{}: {error}", display(Path::new(&path))))
     })
+  }
+}
+
+/// The filesystem path a `file:` URI names.
+///
+/// The leading slash after the authority is part of the path on a system with one root, and is
+/// not on a system whose paths begin with a drive letter — `file:///tmp/a.xsl` is `/tmp/a.xsl`,
+/// `file:///C:/tmp/a.xsl` is `C:/tmp/a.xsl`. Getting this wrong turns an absolute path into a
+/// relative one, which then resolves against the working directory and finds nothing, so both
+/// forms are handled here rather than by whichever one the author's machine happens to use.
+///
+/// Anything that is not a `file:` URI is handed back as it stands, and fails when it is opened —
+/// this tool fetches from the filesystem and nowhere else.
+fn path_of(uri: &str) -> String {
+  let rest = uri.strip_prefix("file://").unwrap_or(uri);
+  let rest = match rest.strip_prefix('/') {
+    // `/C:/…`: the slash belongs to the URI, not to the path.
+    Some(after) if is_drive_letter(after) => after,
+    _ => rest,
+  };
+  percent_decode(rest)
+}
+
+/// Whether a path begins with a drive letter and a colon, as `C:/tmp` does.
+fn is_drive_letter(path: &str) -> bool {
+  let mut characters = path.chars();
+  matches!((characters.next(), characters.next()), (Some(letter), Some(':')) if letter.is_ascii_alphabetic())
+}
+
+/// Undoes the percent-escaping a URI puts on the characters a path may legitimately contain.
+fn percent_decode(text: &str) -> String {
+  let bytes = text.as_bytes();
+  let mut decoded = Vec::with_capacity(bytes.len());
+  let mut i = 0;
+  while i < bytes.len() {
+    // A `%` not followed by two hex digits is not an escape, and is kept as it was written.
+    match (bytes[i], bytes.get(i + 1).zip(bytes.get(i + 2))) {
+      (b'%', Some((high, low))) => match (hex(*high), hex(*low)) {
+        (Some(high), Some(low)) => {
+          decoded.push(high * 16 + low);
+          i += 3;
+        }
+        _ => {
+          decoded.push(bytes[i]);
+          i += 1;
+        }
+      },
+      _ => {
+        decoded.push(bytes[i]);
+        i += 1;
+      }
+    }
+  }
+  // An escape naming a byte that is not UTF-8 leaves the name unusable; the original is a better
+  // thing to report than a replacement character.
+  String::from_utf8(decoded).unwrap_or_else(|_| text.to_owned())
+}
+
+/// One hexadecimal digit as its value.
+fn hex(byte: u8) -> Option<u8> {
+  match byte {
+    b'0'..=b'9' => Some(byte - b'0'),
+    b'a'..=b'f' => Some(byte - b'a' + 10),
+    b'A'..=b'F' => Some(byte - b'A' + 10),
+    _ => None,
   }
 }
 
@@ -292,11 +357,77 @@ fn system_id(path: &Path) -> String {
   // URI.
   let written = absolute.display().to_string().replace('\\', "/");
   let written = written.strip_prefix("//?/").unwrap_or(&written);
-  format!("file:///{}", written.trim_start_matches('/'))
+  format!("file:///{}", percent_encode(written.trim_start_matches('/')))
+}
+
+/// Escapes what a path may hold and a URI may not, so that the result survives being resolved
+/// against and read back by [`path_of`].
+fn percent_encode(path: &str) -> String {
+  let mut encoded = String::with_capacity(path.len());
+  for byte in path.bytes() {
+    match byte {
+      b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+        encoded.push(byte as char);
+      }
+      _ => encoded.push_str(&format!("%{byte:02X}")),
+    }
+  }
+  encoded
 }
 
 /// An error, said with the name of what it was reading.
 fn where_it_was(input: Option<&Path>, error: &xylograph::Error) -> String {
   let name = input.map_or_else(|| "<stdin>".to_owned(), display);
   format!("{name}: {}", error.message())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{path_of, percent_encode};
+
+  #[test]
+  fn a_rooted_path_keeps_its_leading_slash() {
+    // The bug this exists for: dropping it makes the path relative, and it then resolves
+    // against the working directory instead of naming the file the stylesheet meant.
+    assert_eq!(path_of("file:///tmp/styles/base.xsl"), "/tmp/styles/base.xsl");
+  }
+
+  #[test]
+  fn a_drive_letter_loses_the_slash_the_uri_added() {
+    assert_eq!(path_of("file:///C:/styles/base.xsl"), "C:/styles/base.xsl");
+    assert_eq!(path_of("file:///c:/styles/base.xsl"), "c:/styles/base.xsl");
+  }
+
+  #[test]
+  fn what_is_not_a_file_uri_is_left_alone() {
+    // It fails when opened, saying what it was — better than being silently mangled first.
+    assert_eq!(path_of("https://example.com/base.xsl"), "https://example.com/base.xsl");
+    assert_eq!(path_of("base.xsl"), "base.xsl");
+  }
+
+  #[test]
+  fn an_escape_becomes_the_character_it_names() {
+    assert_eq!(path_of("file:///tmp/my%20styles/base.xsl"), "/tmp/my styles/base.xsl");
+    assert_eq!(path_of("file:///tmp/%E6%97%A5%E6%9C%AC/base.xsl"), "/tmp/日本/base.xsl");
+  }
+
+  #[test]
+  fn a_percent_that_is_not_an_escape_stays_as_written() {
+    assert_eq!(path_of("file:///tmp/100%/base.xsl"), "/tmp/100%/base.xsl");
+    assert_eq!(path_of("file:///tmp/%zz/base.xsl"), "/tmp/%zz/base.xsl");
+  }
+
+  #[test]
+  fn a_path_survives_being_written_as_a_uri_and_read_back() {
+    for path in ["/tmp/styles/base.xsl", "/tmp/my styles/base.xsl", "/tmp/日本/base.xsl", "/tmp/100%/base.xsl"] {
+      let uri = format!("file:///{}", percent_encode(path.trim_start_matches('/')));
+      assert_eq!(path_of(&uri), path, "{uri}");
+    }
+  }
+
+  #[test]
+  fn a_separator_and_a_drive_letter_are_not_escaped() {
+    // Escaping either would make the URI name one long segment rather than a path.
+    assert_eq!(percent_encode("C:/styles/base.xsl"), "C:/styles/base.xsl");
+  }
 }
