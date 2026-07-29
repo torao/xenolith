@@ -886,7 +886,12 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **DOCTYPE の無い文書は「valid」と呼ばない** — 照合対象が無いのは合格でも違反でもない、という区別を出力にも終了ステータスにも残す
 - **成果物**: `xylo`（`transform` / `xpath` / `validate` / `format`、統合テスト 18）
 
-**7c. ドキュメントと Java からの移行ガイド**
+**7c. ドキュメントと Java からの移行ガイド** ✅ 完了
+- `crates/xylograph/MIGRATING-FROM-JAVA.md`: JAXP の各 API がどこに来たかの対応表、同じ処理の Java / Rust 併記（DOM 構築、プル解析、SAX ハンドラ、XPath、XSLT、検証、直列化）、そして**意図的に違えた点**（ファクトリ廃止、setter ではなくビルダ、例外ではなく `Result`、`ErrorListener` 無し、既定では外部実体を取りに行かない、オブジェクト網ではなくアリーナ）
+- **ガイドをファサードの doc に `include_str!` で取り込んだ** — 中の Rust 例が全て `cargo test --doc` でコンパイル・実行される。API から乖離した移行ガイドは無いより悪いので、乖離したらビルドが落ちる形にした。実際に**初回実行で 2 件の誤りを捕まえた**（`NodeRef` と `NodeId` の取り違え、検証エラー件数の思い込み）
+- ガイドは `parse` feature がある時だけ doc に入る（例が DOM を組むため）。それを指す本文も `cfg_attr` で同じ条件にし、リンクが宙に浮かないようにした
+- **古くなっていた記述の一掃**: README の「Status: Phase 0、まだ XML を解析できない」、空行でクレート表が 7 行分壊れていた箇所、仕様表の EXSLT / XML Schema Part 2 欠落、ファサードの「XSLT と EXSLT は後のフェーズ」と feature 一覧の `parse` / `exslt` / `icu` / `xinclude` 欠落、`-xpath` の「評価は後のフェーズ」、`-xslt` の「EXSLT が最初の利用者になる予定」、`-exslt` の「`node-set()` は後で来る」
+- **成果物**: `MIGRATING-FROM-JAVA.md`（doctest 10）、README とクレート doc の更新
 
 ### Phase 8 — 品質と性能
 

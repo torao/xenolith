@@ -46,7 +46,7 @@
 //!
 //! | Feature | Namespace | What it adds |
 //! |---|---|---|
-//! | `common` | `http://exslt.org/common` | [`object-type()`](common); `node-set()` needs the engine to adopt a fragment, and arrives with it |
+//! | `common` | `http://exslt.org/common` | [`object-type()` and `node-set()`](common) — the engine lifts the fragment, so what arrives here is already a node-set |
 //! | `math` | `http://exslt.org/math` | [minimum, maximum, powers, logarithms and trigonometry](math) |
 //! | `sets` | `http://exslt.org/sets` | [difference, intersection, and the rest](sets) |
 //! | `strings` | `http://exslt.org/str` | [splitting, padding, aligning and URI escaping](strings) |
@@ -62,7 +62,8 @@
 //! versions. The pages below are what each module is implemented from:
 //!
 //! - [EXSLT] — the index of the modules
-//! - [`exslt:common`], [`exslt:math`], [`exslt:sets`]
+//! - [`exslt:common`], [`exslt:math`], [`exslt:sets`], [`exslt:strings`], [`exslt:dates`],
+//!   [`exslt:regexp`]
 //!
 //! Where a page is silent or self-contradictory, what this implementation does is written down at
 //! the function, and the `xylograph` crate's behaviour report prints it.
@@ -71,6 +72,9 @@
 //! [`exslt:common`]: http://exslt.org/exsl/index.html
 //! [`exslt:math`]: http://exslt.org/math/index.html
 //! [`exslt:sets`]: http://exslt.org/set/index.html
+//! [`exslt:strings`]: http://exslt.org/str/index.html
+//! [`exslt:dates`]: http://exslt.org/date/index.html
+//! [`exslt:regexp`]: http://exslt.org/regexp/index.html
 
 #[cfg(feature = "common")]
 pub mod common;

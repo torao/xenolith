@@ -30,7 +30,7 @@
 //! force; XSLT 1.0 §10 leaves the collating sequence to the processor, so neither is wrong.
 //!
 //! Extension functions are registered with [`Functions`](xylograph_xpath::Functions) and handed
-//! to [`Transform::run_with`]; EXSLT will be the first thing built on that. XSLT's own functions
+//! to [`Transform::run_with`]; `xylograph-exslt` is built on nothing else. XSLT's own functions
 //! — `current()`, `generate-id()`, `system-property()` and the two above — are added to that
 //! same set, in the empty namespace that XPath leaves to a host language.
 //!

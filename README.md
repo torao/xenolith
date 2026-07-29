@@ -4,8 +4,13 @@
 
 A native Rust implementation of XML processing and XSLT 1.0, aiming for parity with Java's XML APIs (DOM, XPath, XSLT).
 
-**Status: Phase 0.** The workspace and its shared primitives exist; nothing parses XML yet.
-See [ROADMAP.md](ROADMAP.md) for the feature inventory, design decisions and phase plan.
+**Status: Phase 7.** The parser, DOM, serializer, XInclude, XPath 1.0, XSLT 1.0 and EXSLT are in
+place, behind a `javax.xml.transform`-shaped facade and a command-line tool. What is measured,
+what is deliberately left out and what is still to come are in [ROADMAP.md](ROADMAP.md), along
+with the feature inventory and the design decisions.
+
+Coming from Java? [MIGRATING-FROM-JAVA.md](crates/xylograph/MIGRATING-FROM-JAVA.md) maps each
+JAXP API onto its counterpart here, and says where it deliberately differs.
 
 ## Crates
 
@@ -25,22 +30,16 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-parser`](crates/xylograph-parser) | Phase 3e | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, a SAX-style push adapter, and a sans-I/O core |
 | [`xylograph-validate`](crates/xylograph-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
 | [`xylograph-dom`](crates/xylograph-dom) | Phase 4a | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
-
 | [`xylograph-serialize`](crates/xylograph-serialize) | Phase 3e | a serializer from a DOM subtree to well-formed XML text (escaping, optional XML declaration and indentation, namespace repair) and a StAX-style streaming `XmlWriter`; UTF-8 output |
-
 | [`xylograph-xinclude`](crates/xylograph-xinclude) | Phase 3.5c | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, XPointer subresource selection (shorthand and `element()`), `xi:fallback`, recursion with loop detection and limits, and base URI / language fixup; resources are fetched through a caller-supplied `Loader` |
-
 | [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4d | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
-
 | [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
-
-| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 6d | XSLT 1.0, in progress: match patterns, stylesheet compilation (`xsl:import` / `xsl:include`, import precedence, conflict resolution), and an engine that runs `apply-templates`, `call-template`, `for-each`, `if`, `choose`, `value-of`, variables and parameters, the built-in rules, literal result elements and attribute value templates, plus the result-tree instructions `element`, `attribute`, `comment`, `processing-instruction`, `copy`, `copy-of` and `message` with attribute sets, `xsl:key` with `key()`, `xsl:sort` with language-aware collation, `xsl:number`, `xsl:decimal-format` with `format-number()`, `document()` over a multi-document node space, result tree fragments as trees, and XSLT's own functions `current()`, `generate-id()`, `system-property()`, `element-available()` and `function-available()`, and `xsl:output` carried out for the XML, HTML and text methods with `disable-output-escaping` |
-
+| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 6e | XSLT 1.0, all but extension elements and `func:function`: match patterns, stylesheet compilation (`xsl:import` / `xsl:include`, import precedence, conflict resolution), and an engine that runs `apply-templates`, `call-template`, `for-each`, `if`, `choose`, `value-of`, variables and parameters, the built-in rules, literal result elements and attribute value templates, plus the result-tree instructions `element`, `attribute`, `comment`, `processing-instruction`, `copy`, `copy-of` and `message` with attribute sets, `xsl:key` with `key()`, `xsl:sort` with language-aware collation, `xsl:number`, `xsl:decimal-format` with `format-number()`, `document()` over a multi-document node space, result tree fragments as trees, and XSLT's own functions `current()`, `generate-id()`, `system-property()`, `element-available()` and `function-available()`, and `xsl:output` carried out for the XML, HTML and text methods with `disable-output-escaping` |
 | [`xylograph-exslt`](crates/xylograph-exslt) | Phase 6.5f | EXSLT extension functions, one feature per module: `math`, `sets`, `strings`, `dates` (reading an ISO 8601 date or time apart), `regexp` (a linear-time matcher: no backreferences, and no pattern that can be made to run for ever) and `common` (`object-type()`, `node-set()`). Nothing is built into the engine — these are registered the way any caller's functions are. `functions`, where a stylesheet declares a function of its own, is still to come |
-
 | [`xylo`](crates/xylo) | Phase 7b | the command-line tool: `transform`, `xpath`, `validate` and `format`. A binary, not a library — nothing you depend on pulls in an argument parser |
 
-Each crate is re-exported through the facade as it lands. See the roadmap.
+Every library crate is re-exported through the facade; `xylo` is a binary and is installed rather
+than depended on.
 
 ## The command line
 
@@ -85,6 +84,10 @@ with `-D warnings`. Anything that is part of ordinary use additionally carries a
 cargo test --workspace --all-features --doc
 ```
 
+The Java migration guide is included into the facade's documentation rather than only linked, so
+its examples are compiled and run by that same command. A guide that had drifted from the API
+fails the build instead of misleading a reader.
+
 ### Feature flags
 
 Optional capabilities are compiled in by default and are switched on or off at run time. A
@@ -122,11 +125,12 @@ was written against — `/TR/xml/` moves, `/TR/2008/REC-xml-20081126/` does not.
 | [XML Base (Second Edition)](https://www.w3.org/TR/2009/REC-xmlbase-20090128/) | REC 2009-01-28 | `-parser`, `-dom`, `-xinclude` |
 | [xml:id 1.0](https://www.w3.org/TR/2005/REC-xml-id-20050909/) | REC 2005-09-09 | `-parser`, `-validate` |
 | [XSLT 1.0](https://www.w3.org/TR/1999/REC-xslt-19991116) | REC 1999-11-16 | `-xslt` |
+| [EXSLT](http://exslt.org/) | community spec, undated | `-exslt` |
+| [XML Schema Part 2: Datatypes](https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/) | REC 2004-10-28 | `-exslt` (`dates`, for the lexical forms and the calendar) |
 | [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | STD 66, 2005-01 | `-core` |
 
 Section numbers appear in the code beside the rules they implement, so a claim like "§4.4 says a
-half rounds towards positive infinity" can be checked against the paragraph it cites. EXSLT
-arrives in a later phase; see the roadmap.
+half rounds towards positive infinity" can be checked against the paragraph it cites.
 
 ## Conformance
 
@@ -182,8 +186,13 @@ pin down never appears there; it belongs in a test that asserts it.
 
 ## Coming from Java
 
-The APIs follow their Java counterparts where the names carry meaning, so what you know there
-transfers: `org.w3c.dom` in [`xylograph-dom`](crates/xylograph-dom), `javax.xml.xpath` in
+**[MIGRATING-FROM-JAVA.md](crates/xylograph/MIGRATING-FROM-JAVA.md)** is the guide: which crate
+each JAXP API landed in, the same task written both ways, and what is deliberately different.
+Every Rust example in it is compiled and run by `cargo test --doc`, so a guide that had drifted
+from the API would fail the build rather than mislead a reader.
+
+In short: the APIs follow their Java counterparts where the names carry meaning, so what you know
+transfers. `org.w3c.dom` is in [`xylograph-dom`](crates/xylograph-dom), `javax.xml.xpath` in
 [`xylograph-xpath`](crates/xylograph-xpath) — `XPath` is the environment, `XPathExpression` the
 compiled expression, `Namespaces` the `NamespaceContext`, `Variables` the
 `XPathVariableResolver` — and `javax.xml.transform` in `xylograph::transform`:
@@ -198,10 +207,11 @@ println!("{}", result.text());
 # Ok::<(), xylograph::Error>(())
 ```
 
-Each crate's documentation carries the mapping in full, including where it deliberately differs —
-a builder instead of setters, a `Result` instead of an exception, and no `ErrorListener` to
-install, since what `xsl:message` said comes back beside the result and anything fatal is the
-error of the call.
+Each crate's documentation carries its own share of the mapping too. The differences are the ones
+worth reading first: a builder instead of setters, a `Result` instead of an exception, no
+`ErrorListener` to install — what `xsl:message` said comes back beside the result and anything
+fatal is the error of the call — and nothing fetched from outside unless you say how, so XXE is
+not a setting you have to remember to turn off.
 
 ## License
 

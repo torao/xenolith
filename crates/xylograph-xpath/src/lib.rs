@@ -1,8 +1,8 @@
 //! XPath 1.0 for xylograph: reading an expression into a tree.
 //!
-//! [`parse`] turns the text of an expression into an [`Expr`], the tree the evaluator will walk.
-//! Parsing is the whole of this crate for now; evaluation arrives in a later phase (see
-//! `ROADMAP.md`, Phase 4).
+//! [`parse`] turns the text of an expression into an [`Expr`], the tree the evaluator walks, and
+//! [`XPath`] compiles and runs one against a document. The two halves are separate because the
+//! tree is what XSLT needs to hold on to; ordinary use goes through [`XPath`].
 //!
 //! # What the tree looks like
 //!

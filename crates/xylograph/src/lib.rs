@@ -20,7 +20,15 @@
 //! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
 //!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
 //!
-//! The DOM, XPath, serializer and XSLT layers appear here as they land; see `ROADMAP.md`.
+// The guide's examples build a DOM from XML, so it is documented only where `parse` is; the
+// sentence pointing at it is written with the same condition rather than left to dangle.
+#![cfg_attr(
+  feature = "parse",
+  doc = "Coming from Java, start at [`migrating_from_java`]: it maps each JAXP API onto its",
+  doc = "counterpart here and says where it deliberately differs."
+)]
+//!
+//! What is still to come is in `ROADMAP.md`.
 //!
 //! # Examples
 //!
@@ -40,11 +48,19 @@
 //!
 //! # Feature flags
 //!
-//! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
+//! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1. Without it, an
+//!   `xsl:output` naming another encoding is an error saying so, never bytes in one encoding
+//!   under a declaration naming another.
+//! - `parse` (default): [`dom::build`], which turns parsed XML into a tree.
+//! - `exslt` (default): the `exslt` module, with every EXSLT module this crate knows of.
+//! - `icu` (default): language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without
+//!   it a text sort compares by Unicode code point. XSLT 1.0 §10 leaves the collating sequence to
+//!   the processor, so this changes the *answer*, not just the speed.
+//! - `xinclude`: the `xinclude` module. Off by default, because it fetches resources.
 //! - `tokio`: the asynchronous reader, [`parser::AsyncReader`], over `tokio`'s `AsyncRead`.
 //! - `xml-base`: per-node base URI computation from `xml:base` (XML Base).
 //! - `xml-id`: `xml:id` as an ID-typed attribute, checked for NCName validity and uniqueness.
-
+//!
 //! # Specifications
 //!
 //! Every layer names the documents it was written from, at dated URLs so that the text read
@@ -60,9 +76,10 @@
 //! | [XPointer Framework] / [`element()`][xptr-element] / [`xmlns()`][xptr-xmlns] | REC 2003-03-25 | `xinclude` |
 //! | [XML Base (Second Edition)] | REC 2009-01-28 | [`parser`], [`dom`], `xinclude` |
 //! | [xml:id 1.0] | REC 2005-09-09 | [`parser`], [`validate`] |
+//! | [XSLT 1.0] | REC 1999-11-16 | [`xslt`], [`transform`] |
+//! | [EXSLT] | community spec, undated | `exslt` |
+//! | [XML Schema Part 2: Datatypes] | REC 2004-10-28 | `exslt` (`dates`) |
 //! | [RFC 3986] | STD 66, 2005-01 | [`core`](xylograph_core) |
-//!
-//! XSLT 1.0 and EXSLT arrive in later phases; see `ROADMAP.md`.
 //!
 //! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
 //! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
@@ -74,6 +91,9 @@
 //! [xptr-xmlns]: https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/
 //! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
 //! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
+//! [XSLT 1.0]: https://www.w3.org/TR/1999/REC-xslt-19991116
+//! [EXSLT]: http://exslt.org/
+//! [XML Schema Part 2: Datatypes]: https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
@@ -106,6 +126,15 @@ pub use xylograph_exslt as exslt;
 pub use xylograph_xinclude as xinclude;
 
 pub mod transform;
+
+/// Coming from Java: where each JAXP API landed, and where it deliberately did not.
+///
+/// The guide is `MIGRATING-FROM-JAVA.md` beside this crate. It is included here rather than only
+/// linked so that every Rust example in it is compiled and run by `cargo test --doc` — a
+/// migration guide that has drifted from the API is worse than none.
+#[cfg(all(doc, feature = "parse"))]
+#[doc = include_str!("../MIGRATING-FROM-JAVA.md")]
+pub mod migrating_from_java {}
 
 pub use xylograph_core::{Error, ErrorKind, Location, Result, Severity};
 pub use xylograph_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};
