@@ -25,6 +25,9 @@ xylograph-xdm = { version = "0.0.0", path = "crates/xylograph-xdm", default-feat
 xylograph-xpath = { version = "0.0.0", path = "crates/xylograph-xpath", default-features = false }
 xylograph-xslt = { version = "0.0.0", path = "crates/xylograph-xslt", default-features = false }
 xylograph-exslt = { version = "0.0.0", path = "crates/xylograph-exslt", default-features = false }
+xylograph = { version = "0.0.0", path = "crates/xylograph", default-features = false }
+# Argument parsing for the `xylo` binary. No library crate depends on it.
+clap = { version = "4", features = ["derive", "wrap_help"] }
 encoding_rs = "0.8"
 # The collation `xsl:sort` needs for a language other than code-point order (ROADMAP decision 2).
 # EXSLT's regular-expressions module. A linear-time matcher: no backreferences or lookaround,

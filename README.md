@@ -38,8 +38,31 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 
 | [`xylograph-exslt`](crates/xylograph-exslt) | Phase 6.5f | EXSLT extension functions, one feature per module: `math`, `sets`, `strings`, `dates` (reading an ISO 8601 date or time apart), `regexp` (a linear-time matcher: no backreferences, and no pattern that can be made to run for ever) and `common` (`object-type()`, `node-set()`). Nothing is built into the engine — these are registered the way any caller's functions are. `functions`, where a stylesheet declares a function of its own, is still to come |
 
-The CLI arrives in a later phase; each crate is re-exported through the facade as it lands. See
-the roadmap.
+| [`xylo`](crates/xylo) | Phase 7b | the command-line tool: `transform`, `xpath`, `validate` and `format`. A binary, not a library — nothing you depend on pulls in an argument parser |
+
+Each crate is re-exported through the facade as it lands. See the roadmap.
+
+## The command line
+
+```bash
+cargo install --path crates/xylo
+```
+
+Every subcommand reads a named file or, with none, standard input, and writes to standard output
+unless told otherwise — so they compose with the rest of a pipeline:
+
+```bash
+xylo transform --param year=2026 report.xsl data.xml
+xylo xpath --namespace h=http://www.w3.org/1999/xhtml '//h:a/@href' page.xhtml
+xylo validate data.xml
+xylo format --indent 4 data.xml
+```
+
+It exits `0` when it did what was asked, `1` when the document answered no — invalid, or nothing
+selected under `--fail-on-empty` — and `2` when the request could not be carried out at all: a
+file that is not there, XML that is not well-formed, a stylesheet that is not one. A script can
+tell "the answer is no" from "I could not ask". Diagnostics and what `xsl:message` said go to
+standard error, leaving the result alone on standard output.
 
 ## Building
 

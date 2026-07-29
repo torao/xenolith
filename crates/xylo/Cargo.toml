@@ -1,0 +1,26 @@
+[package]
+name = "xylo"
+description = "Command-line XML tools: transform, xpath, validate and format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities", "text-processing"]
+
+[[bin]]
+name = "xylo"
+path = "src/main.rs"
+
+[dependencies]
+# The whole library, with everything on: a command-line tool has no reason to leave a capability
+# out, and someone reaching for it wants it to just work.
+xylograph = { workspace = true, features = ["encodings", "parse", "icu", "exslt", "xinclude", "xml-base", "xml-id"] }
+xylograph-validate = { workspace = true, features = ["encodings", "xml-id"] }
+# Argument parsing. Only this binary depends on it, so nobody using the library pays for it.
+clap = { workspace = true }
+
+[lints]
+workspace = true
