@@ -124,11 +124,20 @@ pub(crate) struct Writer<'a> {
   /// The text nodes written with `disable-output-escaping`, which go out as they stand.
   raw: &'a HashSet<NodeId>,
   written: String,
+  /// The prefix bindings in scope, innermost last, with `None` for the default namespace.
+  ///
+  /// A result tree carries names — a namespace URI and a local part — and not the declarations
+  /// that would let those names be written down (see `engine.rs`, where a copy keeps its name
+  /// and drops the declarations). Writing them is this writer's job, and this is what it needs
+  /// to know which are already said.
+  in_scope: Vec<(Option<String>, String)>,
+  /// How many prefixes have had to be invented, so that each gets a name of its own.
+  invented: usize,
 }
 
 impl<'a> Writer<'a> {
   pub(crate) fn new(document: &'a Document, output: &'a Output, raw: &'a HashSet<NodeId>) -> Self {
-    Self { document, output, raw, written: String::new() }
+    Self { document, output, raw, written: String::new(), in_scope: Vec::new(), invented: 0 }
   }
 
   /// Writes everything below `root`.
@@ -223,9 +232,96 @@ impl<'a> Writer<'a> {
     }
   }
 
+  /// What a prefix stands for here, or `None` if nothing in scope binds it.
+  ///
+  /// An empty URI is a binding: it is how a default namespace is cancelled.
+  fn bound(&self, prefix: Option<&str>) -> Option<&str> {
+    self.in_scope.iter().rev().find(|(bound, _)| bound.as_deref() == prefix).map(|(_, namespace)| namespace.as_str())
+  }
+
+  /// A prefix for a namespace that has to have one: whichever is already bound to it, or a new
+  /// one that nothing else is using.
+  fn prefix_for(&mut self, namespace: &str) -> String {
+    if let Some((Some(prefix), _)) =
+      self.in_scope.iter().rev().find(|(prefix, bound)| prefix.is_some() && bound == namespace)
+    {
+      return prefix.clone();
+    }
+    loop {
+      self.invented += 1;
+      let prefix = format!("ns{}", self.invented);
+      if self.bound(Some(&prefix)).is_none() {
+        return prefix;
+      }
+    }
+  }
+
+  /// The name to write for an element or attribute, declaring the prefix it needs.
+  ///
+  /// The result tree holds expanded names; XML can only write a name through a prefix that is
+  /// declared. So anything whose namespace is not already said here is said here — which is what
+  /// makes a result carrying namespaces well-formed rather than merely nearly so.
+  fn qualified(&mut self, node: NodeId, is_element: bool, declarations: &mut Vec<(String, String)>) -> String {
+    let local = self.document.local_name(node).unwrap_or_default().to_owned();
+    let prefix = self.document.prefix(node).map(ToOwned::to_owned);
+    let Some(namespace) = self.document.namespace_uri(node).map(ToOwned::to_owned) else {
+      // A name in no namespace. An unprefixed *element* would otherwise be read as being in
+      // whatever default namespace is in scope, so that declaration is cancelled here;
+      // an unprefixed attribute is in no namespace whatever is declared, so it needs nothing.
+      if is_element && prefix.is_none() && self.bound(None).is_some_and(|namespace| !namespace.is_empty()) {
+        declarations.push(("xmlns".to_owned(), String::new()));
+        self.in_scope.push((None, String::new()));
+      }
+      return local;
+    };
+    // Namespaces §6.2: an unprefixed attribute name is in no namespace, whatever is declared. So
+    // an attribute that is in one must be written through a prefix, invented if it has none.
+    let prefix = match prefix {
+      Some(prefix) => Some(prefix),
+      None if is_element => None,
+      None => Some(self.prefix_for(&namespace)),
+    };
+    if self.bound(prefix.as_deref()) != Some(namespace.as_str()) {
+      let declaration = prefix.as_ref().map_or_else(|| "xmlns".to_owned(), |prefix| format!("xmlns:{prefix}"));
+      declarations.push((declaration, namespace.clone()));
+      self.in_scope.push((prefix.clone(), namespace));
+    }
+    prefix.map_or(local.clone(), |prefix| format!("{prefix}:{local}"))
+  }
+
+  /// Whether an attribute of the tree is itself a namespace declaration.
+  fn is_declaration(name: &str) -> bool {
+    name == "xmlns" || name.starts_with("xmlns:")
+  }
+
   fn element(&mut self, node: NodeId, depth: usize) {
-    let name = self.document.node_name(node);
     let children: Vec<NodeId> = self.document.children(node).collect();
+    let attributes: Vec<NodeId> = self.document.attributes(node).iter().collect();
+    let outer = self.in_scope.len();
+
+    // A declaration the tree already carries stays as it is, and is in scope for the names
+    // below — so nothing is declared twice.
+    let mut written: Vec<(String, String)> = Vec::new();
+    for &attribute in &attributes {
+      let name = self.document.node_name(attribute);
+      if Self::is_declaration(&name) {
+        let value = self.document.node_value(attribute).unwrap_or_default().to_owned();
+        self.in_scope.push((name.strip_prefix("xmlns:").map(ToOwned::to_owned), value.clone()));
+        written.push((name, value));
+      }
+    }
+
+    let mut declarations: Vec<(String, String)> = Vec::new();
+    let name = self.qualified(node, true, &mut declarations);
+    for &attribute in &attributes {
+      if Self::is_declaration(&self.document.node_name(attribute)) {
+        continue;
+      }
+      let attribute_name = self.qualified(attribute, false, &mut declarations);
+      let value = self.document.node_value(attribute).unwrap_or_default().to_owned();
+      written.push((attribute_name, value));
+    }
+    let attributes = declarations.into_iter().chain(written).collect::<Vec<_>>();
 
     // Nothing is written before the very first thing, and nothing after a newline already put
     // there, so the result never begins with blank space it was not asked for.
@@ -242,9 +338,7 @@ impl<'a> Writer<'a> {
 
     self.written.push('<');
     self.written.push_str(&name);
-    for attribute in self.document.attributes(node).iter() {
-      let attribute_name = self.document.node_name(attribute);
-      let value = self.document.node_value(attribute).unwrap_or_default().to_owned();
+    for (attribute_name, value) in attributes {
       self.written.push(' ');
       self.written.push_str(&attribute_name);
       self.written.push_str("=\"");
@@ -258,10 +352,12 @@ impl<'a> Writer<'a> {
       // §16.2: such an element is written with no end tag and no self-closing slash, which is
       // what an HTML parser expects.
       self.written.push('>');
+      self.in_scope.truncate(outer);
       return;
     }
     if children.is_empty() && !html {
       self.written.push_str("/>");
+      self.in_scope.truncate(outer);
       return;
     }
     self.written.push('>');
@@ -294,6 +390,8 @@ impl<'a> Writer<'a> {
     self.written.push_str("</");
     self.written.push_str(&name);
     self.written.push('>');
+    // What this element declared goes out of scope with it.
+    self.in_scope.truncate(outer);
   }
 
   /// Whether an element's children are all elements, so whitespace may go among them.
