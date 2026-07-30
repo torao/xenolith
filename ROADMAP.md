@@ -908,9 +908,27 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 ### Phase 8 — 品質と性能
 
-- ファジング（`cargo-fuzz`）、パーサとXPathに対する差分テスト（libxml2 / Xalan と比較）
-- ベンチマーク（XSLTMark 相当）、パターンインデックスとキーのチューニング
-- メモリ使用量の削減
+**8a. ファジング**（`cargo-fuzz`）✅ 完了
+- ターゲット 5 種: `parse_document`（パーサ。スライスと**1 バイトずつ読むリーダ**の両方 — トークンが読み込み境界をまたぐ経路はスライスでは通らない）、`build_and_serialize`、`validate_document`、`compile_expression`、`transform`
+- **性質はターゲットの中に書かない**。`crates/xylograph-fuzz` に置き、ターゲットはバイトを渡すだけ。**ファザーの発見は、検査していた性質の質を超えない**ため、性質そのものを通常のテストで検証できる場所に置く
+  - 同クレートはワークスペースメンバなので、`cargo test` が**種コーパスを同じ性質に通す**（stable・全プラットフォーム）。nightly が要る libFuzzer 実行と違い、**性質が腐ったらビルドが落ちる**
+- 「panic もハングもしない」だけでなく、3 つは**より強い性質**を主張する: シリアライザが書いたものは読み戻せて同じ木になる／式を印字したものは同じ木に解析される／コンパイルできたスタイルシートは走るか失敗するかで、出た結果は必ず書き出せる
+- **`fuzz/short-run.sh` を CI とローカルで共用**。「CI で走るスクリプト」と「手元で走らせるスクリプト」を別物にしない
+- **Windows では libFuzzer ランタイムがロードできない**（ASan ランタイムの初期化に失敗、`0xc0000142`）。WSL / Linux で実行する。この制約はスクリプトと README に明記
+- **実行結果**: 5 ターゲット各 45 秒、クラッシュ 0（`parse_document` は 76,027 回実行 / 1,650 新規入力）
+- **成果物**: `crates/xylograph-fuzz`（性質 6 + コーパステスト 5）、`fuzz/`（ターゲット 5、ワークスペース外）、種コーパス 25 件、CI ジョブ
+
+**8b. 差分テスト**（Java と比較）✅ XPath 完了
+- Phase 4e で組んだ corpus（82 式 / 2 文書）と `tests/differential.rs` を、予定どおり **Java** に接続。照合先は `javax.xml.xpath`（JDK 同梱のエンジン）
+- **ビルド不要**: `tests/java/XPathReference.java` を JDK の single-file source mode（`java Foo.java`）で実行。式は標準入力から 1 行 1 式、答えは `ok<TAB>値` / `error<TAB>理由` の 1 行。値はエスケープして「1 答え = 1 行」を保証し、Rust 側は同じ規則で戻す
+- **JVM は 1 ケース 1 プロセス**。式ごとに起動すると 1 式あたり約 1 秒かかり、誰も走らせないテストになる
+- libxml2 との比較は暫定だったので**撤去**（当初から「Java が本命、libxml2 は繋ぎ」と記録していた）
+- **初回実行で JDK の不具合を 1 件検出**: `name(//processing-instruction())` が**文書要素の名前**を返す。§4.1（引数ノード集合の文書順先頭の展開名）と §5.7（PI の展開名のローカル部は target）から答えは `process`。**JDK は自己矛盾している** — 同じノード集合に対する `count()` は 1、`string()` は PI のデータを返し、`name()` も `/library/processing-instruction()` / `descendant::processing-instruction()` / `//processing-instruction('process')` では正しく答える。壊れるのは `//` + 引数無し `processing-instruction()` の場合の `name()` と `local-name()` のみ
+  - `KNOWN_DIFFERENCES` に**根拠付きで記録**し、比較からは除外するがレポートには必ず出す。かつ**両側で評価し続け**、一致するようになったら（JDK が直った / こちらが壊れた）テストが落ちる
+- **CI ジョブを追加**（`actions/setup-java`）。「Java 互換が目標」と言う以上、その検証は毎プッシュ走らせる
+- **残り**: XSLT の差分テスト（`javax.xml.transform`）。結果木の比較には Phase 6e で作った正準形が要るので、それを共有できる形に切り出すのが次の作業
+
+**8c. ベンチマーク**（XSLTMark 相当）、パターンインデックスとキーのチューニング、メモリ使用量の削減 — 未着手
 
 ### Phase 9 — 拡張（スコープ外。需要が高い順）
 

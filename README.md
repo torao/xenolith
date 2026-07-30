@@ -173,13 +173,54 @@ and nothing else; tests pin down both directions. Setting `XSLTCONF_MAX_FAILURES
 fail above a budget. The harness itself is checked on every run against a small suite built by
 the test, so a harness that had stopped finding cases would not look like a clean skip.
 
-A differential comparison against **Java**, whose behaviour this library sets out to match, is
-built on the same expression corpus once the library is complete.
+## Differential testing against Java
+
+The tests in this repository were written alongside the code they test, so they can only assert
+what their author understood the specification to say. This one asks a second implementation the
+same questions and requires the same answers — **Java**, whose behaviour this library sets out to
+match:
+
+```bash
+XYLO_JAVA=java cargo test -p xylograph-xpath --test differential -- --nocapture
+```
+
+82 expressions over two documents, evaluated by `javax.xml.xpath` and by this crate, compared as
+strings. It runs on every push. Nothing has to be built first: the reference program is run in
+the JDK's single-file source mode.
+
+It found a JDK defect on its first run. `name(//processing-instruction())` answers with the
+document element's name there, where §4.1 and §5.7 make it the processing instruction's target —
+and the JDK contradicts itself, since `count()` and `string()` over that same node-set are right,
+as is `name()` by any other route to it. That is recorded as a known difference with the
+reasoning, and the test still evaluates it: an entry that stopped being a difference would fail,
+rather than quietly protecting a new bug.
 
 Property-based tests (`cargo test -p xylograph-xpath --test properties`) cover what a
 hand-written case cannot: that the lexer never panics on arbitrary text, that number formatting
 and parsing are inverses, and that printing an expression tree yields something that parses back
 to the same tree.
+
+## Fuzzing
+
+Five libFuzzer targets, over the parser, the DOM builder and serializer, the validator, XPath and
+XSLT. A short run of each happens on every push; a longer one is a matter of giving a target more
+time:
+
+```bash
+./fuzz/short-run.sh 60
+```
+
+The properties they check live in [`crates/xylograph-fuzz`](crates/xylograph-fuzz) rather than
+inside the targets, because a fuzzer's finding is only as good as the property it was checking.
+That crate is an ordinary workspace member, so `cargo test` replays the seed corpus through the
+same properties on stable Rust and on every platform — a property that had rotted fails the build
+instead of quietly finding nothing.
+
+Most are "arbitrary bytes must not make it panic or hang", but three say more: what the serializer
+writes must parse back to a tree that writes the same text; printing a parsed expression must
+yield text that parses to the same tree; and a stylesheet that compiles must either run or fail,
+with whatever it produces writable. `cargo fuzz` needs a nightly toolchain, and its runtime does
+not load on Windows — run it under WSL or on Linux.
 
 ## Where the specifications do not say
 

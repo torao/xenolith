@@ -4,17 +4,21 @@
 //! what their author understood the specification to say. This one asks a second, independent
 //! implementation the same questions and requires the same answers.
 //!
-//! # Which implementation, and when
+//! # Which implementation
 //!
-//! The reference that matters for this project is **Java** — `javax.xml.xpath` on the JDK's
-//! Xerces — since matching Java's XML behaviour is the goal, not merely being defensible against
-//! some other engine. That harness is wired up once the library is complete, so that the whole
-//! surface can be compared at once rather than a moving target.
+//! **Java** — `javax.xml.xpath`, on whatever engine the JDK ships — since matching Java's XML
+//! behaviour is this project's goal, not merely being defensible against some other engine.
 //!
-//! Until then the comparison here goes to libxml2 through `xmllint`, as a stand-in, and is
-//! **not** run in CI: set `XYLO_XMLLINT` to the `xmllint` binary to run it by hand. What does
-//! run everywhere is [`the_corpus_is_evaluable`], which keeps the expression corpus from rotting
-//! while it waits — the corpus is the reusable part, and the Java harness will take it over.
+//! Point `XYLO_JAVA` at a `java` of version 11 or later to run it:
+//!
+//! ```text
+//! XYLO_JAVA=java cargo test -p xylograph-xpath --test differential -- --nocapture
+//! ```
+//!
+//! Nothing has to be built first: `tests/java/XPathReference.java` is run in the JDK's
+//! single-file source mode, and reads expressions from its standard input. Without `XYLO_JAVA`
+//! the comparison is skipped and says so, while [`the_corpus_is_evaluable`] still runs — so a
+//! corpus that had rotted is caught wherever the tests run, not only where a JDK is installed.
 //!
 //! # What is compared, and what is not
 //!
@@ -25,14 +29,14 @@
 //!
 //! The corpus deliberately leaves out numbers whose decimal form is not exact — `1 div 3`, or
 //! `0.1 + 0.2`. XPath 1.0 §4.2 does not fix how many digits such a number is written with, so
-//! libxml2 (fifteen significant digits) and this crate (the shortest form that reads back
-//! exactly) disagree without either being wrong. A differential test that reports differences
-//! the specification permits is a test people learn to ignore, so those cases are excluded on
-//! purpose. Numbers that *are* pinned down — exact binary fractions, integers, and the special
-//! values — are compared.
+//! two engines can disagree without either being wrong. A differential test that reports
+//! differences the specification permits is a test people learn to ignore, so those cases are
+//! excluded on purpose. Numbers that *are* pinned down — exact binary fractions, integers, and
+//! the special values — are compared.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use xylograph_dom::build;
 use xylograph_xdm::DomModel;
@@ -164,13 +168,104 @@ fn ours(xml: &str, expression: &str) -> Result<String, String> {
   Ok(value.string(&model))
 }
 
-/// libxml2's answer, or `None` if it declined to evaluate the expression.
-fn reference(xmllint: &Path, document: &Path, expression: &str) -> Option<String> {
-  let output = Command::new(xmllint).arg("--xpath").arg(expression).arg(document).output().ok()?;
-  if !output.status.success() {
-    return None;
+/// Where Java's answer is wrong and this crate's is right, with the evidence.
+///
+/// A differential test is only useful if a difference means something, so a difference that has
+/// been looked into and settled is recorded here rather than left to be re-diagnosed every run —
+/// and it is reported by name, never quietly skipped.
+///
+/// Nothing goes in this list because the answers merely differ. Each entry says which paragraph
+/// decides it, and why the reference is the one that is wrong.
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[(
+  "name(//processing-instruction())",
+  "the JDK answers with the document element's name. §4.1 says name() is the expanded-name of \
+   the node first in document order in its argument, and §5.7 gives a processing instruction an \
+   expanded-name whose local part is its target — so the answer is the target. The JDK \
+   contradicts itself here: count() and string() over that same node-set give 1 and the PI's \
+   data, and name() answers correctly for `/library/processing-instruction()`, for \
+   `descendant::processing-instruction()` and for `//processing-instruction('process')`. Only \
+   `//` with a bare processing-instruction() node test goes wrong, and local-name() with it.",
+)];
+
+/// What Java said about one expression.
+#[derive(Debug, PartialEq, Eq)]
+enum Answer {
+  /// The value, as `string()` gives it.
+  Value(String),
+  /// Java refused the expression, and what it said about it.
+  Refused(String),
+}
+
+/// Asks Java every expression of one case, in one run of the JVM.
+///
+/// One process for the whole case rather than one per expression: starting a JVM and compiling
+/// the reference costs about a second, and doing that ninety times would make this a test nobody
+/// runs.
+fn java_answers(java: &PathBuf, xml: &str, expressions: &[String]) -> Result<Vec<Answer>, String> {
+  let directory = std::env::temp_dir().join(format!("xylograph-differential-{}", std::process::id()));
+  std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+  let document = directory.join("case.xml");
+  std::fs::write(&document, xml).map_err(|error| error.to_string())?;
+
+  let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/java/XPathReference.java");
+  let mut child = Command::new(java)
+    .arg(&source)
+    .arg(&document)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|error| format!("{}: {error}", java.display()))?;
+  {
+    let stdin = child.stdin.as_mut().ok_or("no pipe to java")?;
+    for expression in expressions {
+      writeln!(stdin, "{expression}").map_err(|error| error.to_string())?;
+    }
   }
-  Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+  let output = child.wait_with_output().map_err(|error| error.to_string())?;
+  let _ = std::fs::remove_dir_all(&directory);
+  if !output.status.success() {
+    return Err(format!("java failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+  }
+
+  let text = String::from_utf8_lossy(&output.stdout);
+  let answers: Vec<Answer> = text
+    .lines()
+    .filter_map(|line| match line.split_once('\t') {
+      Some(("ok", value)) => Some(Answer::Value(unescape(value))),
+      Some(("error", why)) => Some(Answer::Refused(unescape(why))),
+      _ => None,
+    })
+    .collect();
+  if answers.len() != expressions.len() {
+    return Err(format!("java answered {} of {} expressions", answers.len(), expressions.len()));
+  }
+  Ok(answers)
+}
+
+/// Undoes the escaping `XPathReference.java` applies, so that one answer can be one line.
+fn unescape(text: &str) -> String {
+  let mut written = String::with_capacity(text.len());
+  let mut characters = text.chars();
+  while let Some(character) = characters.next() {
+    if character != '\\' {
+      written.push(character);
+      continue;
+    }
+    match characters.next() {
+      Some('n') => written.push('\n'),
+      Some('r') => written.push('\r'),
+      Some('t') => written.push('\t'),
+      Some('\\') => written.push('\\'),
+      // Not an escape this side writes; keep it as it stands rather than lose it.
+      Some(other) => {
+        written.push('\\');
+        written.push(other);
+      }
+      None => written.push('\\'),
+    }
+  }
+  written
 }
 
 /// Every expression in the corpus is one this crate can evaluate.
@@ -196,40 +291,61 @@ fn the_corpus_is_evaluable() {
 }
 
 #[test]
-fn the_same_expressions_give_the_same_answers_as_libxml2() {
-  let Some(xmllint) = std::env::var_os("XYLO_XMLLINT").map(PathBuf::from) else {
-    eprintln!("skipped: set XYLO_XMLLINT to an xmllint binary to compare against libxml2");
+fn the_same_expressions_give_the_same_answers_as_java() {
+  let Some(java) = std::env::var_os("XYLO_JAVA").map(PathBuf::from) else {
+    eprintln!("skipped: set XYLO_JAVA to a java of version 11 or later to compare against the JDK");
     return;
   };
 
-  let directory = std::env::temp_dir().join(format!("xylograph-differential-{}", std::process::id()));
-  std::fs::create_dir_all(&directory).expect("a temporary directory");
-
-  let (mut checked, mut declined) = (0, 0);
+  let mut checked = 0;
   let mut differences = Vec::new();
+  let mut known = Vec::new();
 
-  for (index, case) in CASES.iter().enumerate() {
-    let document = directory.join(format!("case{index}.xml"));
-    std::fs::write(&document, case.xml).expect("writing the document");
+  for case in CASES {
+    // The brackets keep the value's own whitespace while letting a trailing newline go.
+    let wrapped: Vec<String> =
+      case.expressions.iter().map(|expression| format!("concat('[', string({expression}), ']')")).collect();
+    let answers = java_answers(&java, case.xml, &wrapped).unwrap_or_else(|error| panic!("{error}"));
 
-    for expression in case.expressions {
-      // The brackets keep the value's own whitespace while letting a trailing newline go.
-      let wrapped = format!("concat('[', string({expression}), ']')");
-      let Some(theirs) = reference(&xmllint, &document, &wrapped) else {
-        declined += 1;
-        continue;
-      };
+    for ((expression, wrapped), theirs) in case.expressions.iter().zip(&wrapped).zip(answers) {
       checked += 1;
-      match ours(case.xml, &wrapped) {
-        Ok(mine) if mine == theirs => {}
-        Ok(mine) => differences.push(format!("{expression}\n  libxml2: {theirs}\n  ours:    {mine}")),
-        Err(error) => differences.push(format!("{expression}\n  libxml2: {theirs}\n  ours:    failed: {error}")),
+      let mine = ours(case.xml, wrapped);
+      if let Some((_, why)) = KNOWN_DIFFERENCES.iter().find(|(known, _)| known == expression) {
+        // Still evaluated on both sides — an entry that had become wrong, because the reference
+        // was fixed or this crate changed, should be noticed rather than protect a new bug.
+        let agree = matches!((&theirs, &mine), (Answer::Value(theirs), Ok(mine)) if theirs == mine);
+        assert!(!agree, "{expression} is recorded as a known difference, but the two now agree");
+        known.push(format!("{expression}\n  java: {theirs:?}\n  ours: {mine:?}\n  why:  {why}"));
+        continue;
+      }
+      match (&theirs, &mine) {
+        (Answer::Value(theirs), Ok(mine)) if theirs == mine => {}
+        (Answer::Value(theirs), Ok(mine)) => {
+          differences.push(format!("{expression}\n  java: {theirs}\n  ours: {mine}"));
+        }
+        (Answer::Value(theirs), Err(error)) => {
+          differences.push(format!("{expression}\n  java: {theirs}\n  ours: failed: {error}"));
+        }
+        // The corpus is plain XPath 1.0, so a refusal from either side is itself a difference:
+        // one of the two is refusing something it should evaluate.
+        (Answer::Refused(why), Ok(mine)) => {
+          differences.push(format!("{expression}\n  java: refused: {why}\n  ours: {mine}"));
+        }
+        (Answer::Refused(why), Err(error)) => {
+          differences.push(format!("{expression}\n  java: refused: {why}\n  ours: failed: {error}"));
+        }
       }
     }
   }
 
-  let _ = std::fs::remove_dir_all(&directory);
-  eprintln!("differential: {checked} compared, {declined} declined by libxml2, {} differed", differences.len());
-  assert!(checked > 0, "libxml2 evaluated nothing; is {} an xmllint binary?", xmllint.display());
+  eprintln!(
+    "differential against Java: {checked} compared, {} differed, {} known differences",
+    differences.len(),
+    known.len()
+  );
+  for entry in &known {
+    eprintln!("\n{entry}");
+  }
+  assert!(checked > 0, "the corpus is empty");
   assert!(differences.is_empty(), "\n{}", differences.join("\n"));
 }
