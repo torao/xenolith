@@ -23,3 +23,6 @@ target
 # W3C XML Conformance Test Suite, fetched on demand (see tests/conformance.rs)
 /xmlconf/
 /xmlts*.tar.gz
+
+# The OASIS/Xalan XSLT 1.0 suite, cloned on demand (see xylograph-xslt/tests/conformance.rs)
+/xslt-conformance/
