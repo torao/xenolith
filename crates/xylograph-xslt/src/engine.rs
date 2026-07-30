@@ -1106,14 +1106,44 @@ impl<M: Model> Engine<'_, M> {
 
   // --- Instructions that build result nodes -------------------------------------------------
 
+  /// The namespace an instruction builds a name in, when it did or did not say which.
+  ///
+  /// §7.1.2 and §7.1.3: with a `namespace` attribute, that is the namespace, and an empty one
+  /// means no namespace at all. Without it, a prefixed name means what that prefix means *in the
+  /// stylesheet*, where the instruction was written — the result tree has no declarations of its
+  /// own to look in.
+  fn namespace_of(
+    &mut self,
+    said: Option<String>,
+    name: &str,
+    module: usize,
+    element: NodeId,
+    what: &str,
+  ) -> Result<Option<String>> {
+    if let Some(namespace) = said {
+      return Ok((!namespace.is_empty()).then_some(namespace));
+    }
+    let Some((prefix, _)) = name.split_once(':') else { return Ok(None) };
+    match self.namespaces_at(module, element).get(prefix) {
+      Some(namespace) => Ok(Some(namespace.to_owned())),
+      // A prefix the stylesheet never bound names nothing, and building the name anyway would
+      // put a prefix in the result that means nothing there either.
+      None => {
+        let message = format!("{what} names {name:?}, and the prefix {prefix:?} is not bound in the stylesheet");
+        Err(Error::new(ErrorKind::Xslt, message))
+      }
+    }
+  }
+
   /// `xsl:element`: an element whose name is worked out while running.
   fn element_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let name = self.required(module, element, "name", "xsl:element")?;
     let name = self.attribute_value(&name, module, element, focus)?;
-    let namespace = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
+    let said = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
       Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
       None => None,
     };
+    let namespace = self.namespace_of(said, &name, module, element, "xsl:element")?;
     let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
     self.append(created)?;
     self.use_attribute_sets(module, element, created, focus)?;
@@ -1127,10 +1157,11 @@ impl<M: Model> Engine<'_, M> {
   fn attribute_instruction(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let name = self.required(module, element, "name", "xsl:attribute")?;
     let name = self.attribute_value(&name, module, element, focus)?;
-    let namespace = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
+    let said = match self.stylesheet.document(module).attribute(element, "namespace").map(ToOwned::to_owned) {
       Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
       None => None,
     };
+    let namespace = self.namespace_of(said, &name, module, element, "xsl:attribute")?;
     let value = self.captured_text(module, element, focus)?;
     let target = *self.insertion.last().expect("there is always somewhere to put the result");
     // An attribute added where no element is open has nowhere to go; XSLT calls that an error.

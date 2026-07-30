@@ -53,6 +53,33 @@ fn element_may_be_put_in_a_namespace() {
 }
 
 #[test]
+fn a_prefix_with_no_namespace_attribute_means_what_the_stylesheet_says() {
+  // §7.1.2: with no `namespace`, the prefix of the name means what it means where the
+  // instruction was written. The result tree has no declarations of its own to look in.
+  let body = "<xsl:template match=\"/\" xmlns:p=\"urn:p\"><xsl:element name=\"p:out\"/></xsl:template>";
+  assert_eq!(run(body, "<a/>"), "<p:out xmlns:p=\"urn:p\"/>");
+
+  // §7.1.3 says the same of an attribute.
+  let attribute = "<xsl:template match=\"/\" xmlns:p=\"urn:p\"><out><xsl:attribute name=\"p:k\">v</xsl:attribute>\
+                   </out></xsl:template>";
+  assert_eq!(run(attribute, "<a/>"), "<out p:k=\"v\" xmlns:p=\"urn:p\"/>");
+}
+
+#[test]
+fn an_empty_namespace_means_no_namespace() {
+  // Not "the namespace whose URI is the empty string": §7.1.2 says the name is in none.
+  let body = "<xsl:template match=\"/\" xmlns:p=\"urn:p\"><xsl:element name=\"out\" namespace=\"\"/></xsl:template>";
+  assert_eq!(run(body, "<a/>"), "<out/>");
+}
+
+#[test]
+fn a_prefix_the_stylesheet_never_bound_is_refused() {
+  // Building the name anyway would put a prefix into the result that means nothing there.
+  let body = "<xsl:template match=\"/\"><xsl:element name=\"nowhere:out\"/></xsl:template>";
+  assert!(error(body, "<a/>").contains("nowhere"), "{}", error(body, "<a/>"));
+}
+
+#[test]
 fn attribute_is_added_to_the_element_being_built() {
   let body = "<xsl:template match=\"/\"><out><xsl:attribute name=\"k\">v</xsl:attribute></out></xsl:template>";
   assert_eq!(run(body, "<a/>"), "<out k=\"v\"/>");
