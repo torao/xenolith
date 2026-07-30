@@ -66,6 +66,19 @@ fn a_prefix_with_no_namespace_attribute_means_what_the_stylesheet_says() {
 }
 
 #[test]
+fn an_unprefixed_name_takes_the_default_namespace_for_an_element_only() {
+  // §7.1.2 expands an xsl:element name "including any default namespace declaration"; §7.1.3
+  // says of xsl:attribute "not including" it. The difference is Namespaces' own rule that an
+  // unprefixed attribute is in no namespace whatever is declared.
+  let element = "<xsl:template match=\"/\"><xsl:element name=\"out\" xmlns=\"urn:d\"/></xsl:template>";
+  assert_eq!(run(element, "<a/>"), "<out xmlns=\"urn:d\"/>");
+
+  let attribute = "<xsl:template match=\"/\" xmlns=\"urn:d\"><xsl:element name=\"out\">\
+                   <xsl:attribute name=\"k\">v</xsl:attribute></xsl:element></xsl:template>";
+  assert_eq!(run(attribute, "<a/>"), "<out k=\"v\" xmlns=\"urn:d\"/>");
+}
+
+#[test]
 fn an_empty_namespace_means_no_namespace() {
   // Not "the namespace whose URI is the empty string": §7.1.2 says the name is in none.
   let body = "<xsl:template match=\"/\" xmlns:p=\"urn:p\"><xsl:element name=\"out\" namespace=\"\"/></xsl:template>";

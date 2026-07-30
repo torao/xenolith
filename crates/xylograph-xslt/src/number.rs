@@ -85,7 +85,16 @@ impl Format {
   }
 
   /// Writes a list of numbers, outermost first.
+  ///
+  /// An empty list writes nothing at all, not the punctuation around a number that is not there.
+  /// §7.7.1 describes formatting *a list of numbers* and does not say what an empty one comes to;
+  /// `level="multiple"` gives one whenever nothing the `count` pattern matches is an ancestor.
+  /// Writing the prefix and suffix alone would put `. ` in the result and claim a number had been
+  /// worked out.
   pub(crate) fn format(&self, numbers: &[f64], grouping: Grouping<'_>) -> String {
+    if numbers.is_empty() {
+      return String::new();
+    }
     let mut written = self.prefix.clone();
     for (position, number) in numbers.iter().enumerate() {
       // More numbers than tokens: §7.7.1 repeats the last token, and the separator before it, so

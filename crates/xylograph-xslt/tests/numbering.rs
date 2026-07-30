@@ -42,6 +42,18 @@ fn value_says_the_number_outright() {
 }
 
 #[test]
+fn a_number_that_comes_to_nothing_writes_nothing() {
+  // level="multiple" with nothing the count pattern matches among the ancestors: there is no
+  // number, so the format's punctuation must not be written either. A stray ". " in the result
+  // would say a number had been worked out.
+  let body = "<xsl:template match='title'><xsl:number level='multiple' count='chapter' format='1.1. '/>\
+              <xsl:value-of select='.'/></xsl:template>";
+  assert_eq!(run(body, "<doc><title>Preface</title></doc>"), "Preface");
+  // With one, both the number and the punctuation around it are written.
+  assert_eq!(run(body, "<doc><chapter><title>First</title></chapter></doc>"), "1. First");
+}
+
+#[test]
 fn a_format_says_how_the_number_is_written() {
   let numbered = |format: &str| {
     run(&format!("<xsl:template match='/'><xsl:number value='4' format='{format}'/></xsl:template>"), "<a/>")

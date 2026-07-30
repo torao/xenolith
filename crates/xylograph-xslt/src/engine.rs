@@ -62,7 +62,7 @@ use crate::loader::{DocumentSource, NoDocuments};
 use crate::number::{Format, Grouping, LetterValue};
 use crate::output::{self, Output, Writer};
 use crate::pattern::Pattern;
-use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, in_scope_namespaces};
+use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, default_namespace, in_scope_namespaces};
 
 /// How deep `xsl:apply-templates` and `xsl:call-template` may go before the transformation is
 /// refused.
@@ -1109,21 +1109,29 @@ impl<M: Model> Engine<'_, M> {
   /// The namespace an instruction builds a name in, when it did or did not say which.
   ///
   /// §7.1.2 and §7.1.3: with a `namespace` attribute, that is the namespace, and an empty one
-  /// means no namespace at all. Without it, a prefixed name means what that prefix means *in the
-  /// stylesheet*, where the instruction was written — the result tree has no declarations of its
-  /// own to look in.
+  /// means no namespace at all. Without it, the name is expanded with the declarations in effect
+  /// *in the stylesheet*, where the instruction was written — the result tree has no declarations
+  /// of its own to look in.
+  ///
+  /// The two sections differ in one place, and it is not an oversight: an unprefixed name takes
+  /// the default namespace for `xsl:element` and does not for `xsl:attribute`. That is what
+  /// Namespaces says of names generally — an unprefixed attribute is in no namespace, whatever is
+  /// declared — so `for_element` says which rule applies.
   fn namespace_of(
     &mut self,
     said: Option<String>,
     name: &str,
     module: usize,
     element: NodeId,
+    for_element: bool,
     what: &str,
   ) -> Result<Option<String>> {
     if let Some(namespace) = said {
       return Ok((!namespace.is_empty()).then_some(namespace));
     }
-    let Some((prefix, _)) = name.split_once(':') else { return Ok(None) };
+    let Some((prefix, _)) = name.split_once(':') else {
+      return Ok(for_element.then(|| default_namespace(self.stylesheet.document(module), element)).flatten());
+    };
     match self.namespaces_at(module, element).get(prefix) {
       Some(namespace) => Ok(Some(namespace.to_owned())),
       // A prefix the stylesheet never bound names nothing, and building the name anyway would
@@ -1143,7 +1151,7 @@ impl<M: Model> Engine<'_, M> {
       Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
       None => None,
     };
-    let namespace = self.namespace_of(said, &name, module, element, "xsl:element")?;
+    let namespace = self.namespace_of(said, &name, module, element, true, "xsl:element")?;
     let created = self.output.create_element_ns(namespace.as_deref(), &name).map_err(dom_error)?;
     self.append(created)?;
     self.use_attribute_sets(module, element, created, focus)?;
@@ -1161,7 +1169,7 @@ impl<M: Model> Engine<'_, M> {
       Some(namespace) => Some(self.attribute_value(&namespace, module, element, focus)?),
       None => None,
     };
-    let namespace = self.namespace_of(said, &name, module, element, "xsl:attribute")?;
+    let namespace = self.namespace_of(said, &name, module, element, false, "xsl:attribute")?;
     let value = self.captured_text(module, element, focus)?;
     let target = *self.insertion.last().expect("there is always somewhere to put the result");
     // An attribute added where no element is open has nowhere to go; XSLT calls that an error.

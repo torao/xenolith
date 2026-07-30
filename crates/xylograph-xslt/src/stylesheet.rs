@@ -1220,7 +1220,7 @@ pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Names
 /// [`in_scope_namespaces`] leaves this out on purpose: an XPath prefix can never stand for the
 /// default namespace, so an expression has no use for it. `xsl:namespace-alias` does, through
 /// `#default`, which is why it is looked up separately rather than by widening that.
-fn default_namespace(document: &Document, element: NodeId) -> Option<String> {
+pub(crate) fn default_namespace(document: &Document, element: NodeId) -> Option<String> {
   let mut current = Some(element);
   while let Some(node) = current {
     if document.node_type(node) == NodeType::Element {
