@@ -934,6 +934,7 @@ dependencies = [
  "icu_locale_core",
  "xylograph-core",
  "xylograph-dom",
+ "xylograph-parser",
  "xylograph-serialize",
  "xylograph-xdm",
  "xylograph-xpath",

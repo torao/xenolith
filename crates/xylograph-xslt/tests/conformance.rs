@@ -51,10 +51,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use xylograph_dom::build;
-use xylograph_xdm::DomModel;
-use xylograph_xslt::{Loader, OutputMethod, Stylesheet, Transform};
+use xylograph_parser::Reader;
+use xylograph_parser::resolve::{EntityRequest, UriResolver};
+use xylograph_xdm::{Documents, DomModel};
+use xylograph_xpath::Functions;
+use xylograph_xslt::{LoadedDocuments, Loader, OutputMethod, Stylesheet, Transform};
 
 /// How a case's result is to be compared with what it expected.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -282,6 +286,19 @@ impl Loader for Files {
   }
 }
 
+impl UriResolver for Files {
+  /// Fetches an external entity or DTD from the filesystem.
+  ///
+  /// The parser resolves nothing unless it is told how — that is the XXE decision, and it is the
+  /// right default. But several cases of the suite declare a DTD that sits beside the data file,
+  /// and refusing to fetch it would make them fail for a reason that has nothing to do with
+  /// XSLT. Here, where the files are the ones the suite shipped, they are read.
+  fn resolve(&mut self, request: &EntityRequest) -> xylograph_core::error::Result<Option<Vec<u8>>> {
+    let Some(uri) = request.resolved_uri() else { return Ok(None) };
+    Ok(std::fs::read(path_of(&uri)).ok())
+  }
+}
+
 /// The system identifier a path has, as the loader above expects to see it.
 ///
 /// A path that is already rooted keeps its root — `file:///` plus `/tmp/a.xsl` would name
@@ -318,10 +335,18 @@ fn transform_case(case: &Case) -> Result<Written, String> {
     Some(path) => std::fs::read(path).map_err(|error| error.to_string())?,
     None => b"<empty/>".to_vec(),
   };
-  let document = build::parse(data.as_slice()).map_err(|error| format!("the data: {}", error.message()))?;
-  let model = DomModel::new(&document);
+  // The system identifier is what a declared DTD beside the data file is resolved against.
+  let system_id = case.data.as_deref().map_or_else(|| "urn:empty".to_owned(), system_id);
+  let reader = Reader::with_system_id(data.as_slice(), &system_id).with_resolver(Files);
+  let document = build::parse_reader(reader).map_err(|error| format!("the data: {}", error.message()))?;
+
+  // `document()` names files beside the case's own, so the trees it fetches share the node space
+  // the source document is read through.
+  let space = Documents::new();
+  let model = DomModel::with_documents(&document, &space);
+  let available = Rc::new(LoadedDocuments::new(&space, Files));
   let result = Transform::new()
-    .run(&stylesheet, &model, model.root_node())
+    .run_with_documents(&stylesheet, &model, model.root_node(), Functions::new(), available)
     .map_err(|error| format!("running: {}", error.message()))?;
   Ok(Written { text: result.serialize(), method: result.output().method() })
 }
@@ -350,6 +375,12 @@ fn normalize(xml: &str) -> Option<String> {
   let document = parse_loosely(xml)?;
   let mut written = String::new();
   for child in document.children(document.root()) {
+    // Whitespace outside the document element is layout rather than content — XML allows it
+    // there and gives it no meaning — so a blank line between the declaration and the root is
+    // not a difference of any kind.
+    if document.node_type(child) == xylograph_dom::NodeType::Text {
+      continue;
+    }
     canonical(&document, child, &mut written);
   }
   Some(written)

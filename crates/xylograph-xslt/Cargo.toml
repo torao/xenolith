@@ -29,6 +29,9 @@ encoding_rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 xylograph-serialize = { workspace = true }
+# The conformance harness drives the parser itself, to give it a resolver for the DTDs that sit
+# beside the suite's data files.
+xylograph-parser = { workspace = true }
 
 [lints]
 workspace = true
