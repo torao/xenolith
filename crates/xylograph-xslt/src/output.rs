@@ -42,6 +42,8 @@ const HTML_UNESCAPED: &[&str] = &["script", "style"];
 #[derive(Clone, Debug, Default)]
 pub struct Output {
   pub(crate) method: OutputMethod,
+  /// Whether an `xsl:output` said which method, or the default of §16 is still to be worked out.
+  pub(crate) method_stated: bool,
   pub(crate) version: Option<String>,
   pub(crate) encoding: Option<String>,
   pub(crate) omit_xml_declaration: bool,

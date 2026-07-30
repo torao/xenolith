@@ -31,6 +31,29 @@ fn settings(body: &str) -> xylograph_xslt::Output {
 // --- The XML method (§16.1) ----------------------------------------------------------------------
 
 #[test]
+fn a_result_whose_root_is_html_is_written_as_html_without_being_told() {
+  // §16: with no method stated, a result whose document element is `html` in no namespace is
+  // written by the HTML method. It cannot be settled until the tree exists, which is the point —
+  // a stylesheet that writes HTML without saying so still gets `<br>` rather than `<br/>`.
+  let body = "<xsl:template match='/'><html><br/></html></xsl:template>";
+  assert_eq!(written(body), "<html><br></html>");
+
+  // "In any combination of upper and lower case", and no XML declaration either way.
+  let shouted = "<xsl:template match='/'><HTML><BR/></HTML></xsl:template>";
+  assert_eq!(written(shouted), "<HTML><BR></HTML>");
+
+  // In a namespace it is not that `html`, so the default stays XML — declaration and all.
+  let namespaced = "<xsl:template match='/'><html xmlns='urn:x'><br/></html></xsl:template>";
+  let written_namespaced = written(namespaced);
+  assert!(written_namespaced.starts_with("<?xml"), "{written_namespaced}");
+  assert!(written_namespaced.contains("<br/>"), "{written_namespaced}");
+
+  // And what the stylesheet did say is never second-guessed.
+  let stated = "<xsl:output method='xml'/><xsl:template match='/'><html><br/></html></xsl:template>";
+  assert_eq!(written(stated), "<?xml version=\"1.0\" encoding=\"UTF-8\"?><html><br/></html>");
+}
+
+#[test]
 fn the_xml_method_writes_a_declaration_by_default() {
   let body = "<xsl:template match='/'><out/></xsl:template>";
   assert_eq!(written(body), "<?xml version=\"1.0\" encoding=\"UTF-8\"?><out/>");

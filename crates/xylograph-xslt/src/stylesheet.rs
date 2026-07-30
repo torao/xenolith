@@ -798,6 +798,7 @@ impl Stylesheet {
           // unknown one may be reported.
           other => return Err(xslt_error(format!("xsl:output method {other:?} is not one this can write"))),
         };
+        self.output.method_stated = true;
       }
     }
     for (attribute, slot, set) in [

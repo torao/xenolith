@@ -34,7 +34,7 @@ use xylograph::{Error, QName}; // shared primitives are at the crate root
 | [`xylograph-xinclude`](crates/xylograph-xinclude) | Phase 3.5c | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, XPointer subresource selection (shorthand and `element()`), `xi:fallback`, recursion with loop detection and limits, and base URI / language fixup; resources are fetched through a caller-supplied `Loader` |
 | [`xylograph-xdm`](crates/xylograph-xdm) | Phase 4d | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
 | [`xylograph-xpath`](crates/xylograph-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
-| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 6e | XSLT 1.0, all but extension elements and `func:function`: match patterns, stylesheet compilation (`xsl:import` / `xsl:include`, import precedence, conflict resolution), and an engine that runs `apply-templates`, `call-template`, `for-each`, `if`, `choose`, `value-of`, variables and parameters, the built-in rules, literal result elements and attribute value templates, plus the result-tree instructions `element`, `attribute`, `comment`, `processing-instruction`, `copy`, `copy-of` and `message` with attribute sets, `xsl:key` with `key()`, `xsl:sort` with language-aware collation, `xsl:number`, `xsl:decimal-format` with `format-number()`, `document()` over a multi-document node space, result tree fragments as trees, and XSLT's own functions `current()`, `generate-id()`, `system-property()`, `element-available()` and `function-available()`, and `xsl:output` carried out for the XML, HTML and text methods with `disable-output-escaping` |
+| [`xylograph-xslt`](crates/xylograph-xslt) | Phase 6e | XSLT 1.0 at 93.4% of the conformance suite, all but extension elements and `func:function`: match patterns, stylesheet compilation (`xsl:import` / `xsl:include`, import precedence, conflict resolution), and an engine that runs `apply-templates`, `call-template`, `for-each`, `if`, `choose`, `value-of`, variables and parameters, the built-in rules, literal result elements and attribute value templates, plus the result-tree instructions `element`, `attribute`, `comment`, `processing-instruction`, `copy`, `copy-of` and `message` with attribute sets, `xsl:key` with `key()`, `xsl:sort` with language-aware collation, `xsl:number`, `xsl:decimal-format` with `format-number()`, `document()` over a multi-document node space, result tree fragments as trees, `xsl:apply-imports`, and XSLT's own functions `current()`, `generate-id()`, `system-property()`, `element-available()` and `function-available()`, and `xsl:output` carried out for the XML, HTML and text methods with `disable-output-escaping`, namespace declarations written for the names a result carries, and §16's default method for a result whose root is `html` |
 | [`xylograph-exslt`](crates/xylograph-exslt) | Phase 6.5f | EXSLT extension functions, one feature per module: `math`, `sets`, `strings`, `dates` (reading an ISO 8601 date or time apart), `regexp` (a linear-time matcher: no backreferences, and no pattern that can be made to run for ever) and `common` (`object-type()`, `node-set()`). Nothing is built into the engine — these are registered the way any caller's functions are. `functions`, where a stylesheet declares a function of its own, is still to come |
 | [`xylo`](crates/xylo) | Phase 7b | the command-line tool: `transform`, `xpath`, `validate` and `format`. A binary, not a library — nothing you depend on pulls in an argument parser |
 
@@ -146,19 +146,32 @@ as documented deviations). CI fetches the suite on every push. Cases needing mac
 does not yet have are counted as skipped and reported, never silently passed.
 
 XPath has no official W3C suite of its own — the XML Query Test Suite covers 2.0, and the corpus
-that exercises XPath 1.0 thoroughly is the OASIS/Xalan XSLT suite. The harness for that is in
-place and takes the suite the same way:
+that exercises XPath 1.0 thoroughly is the OASIS/Xalan XSLT suite. OASIS no longer distributes
+it; the copy that is maintained is Apache's, which imported the cases into
+[`apache/xalan-test`](https://github.com/apache/xalan-test):
 
 ```bash
+git clone --depth 1 https://github.com/apache/xalan-test.git xslt-conformance
 XSLTCONF=xslt-conformance cargo test -p xylograph-xslt --test conformance -- --nocapture
 ```
 
-It prints how many cases were judged, passed, failed and skipped, and groups the failures by
-kind. **The pass rate has not been measured yet** — the suite is not vendored and has not been
-run here, so no figure is claimed. Setting `XSLTCONF_MAX_FAILURES` makes the run fail above a
-budget; until someone has looked at the report there is no honest number to put there. The
-harness itself is checked on every run against a small suite built by the test, so a harness that
-had stopped finding cases would not look like a clean skip.
+**1542 of 1651 runnable cases pass: 93.4%** (measured 31 July 2026). A further 39 are not judged
+— their expected result is HTML, which is neither XML to compare as a tree nor exact text to
+compare as a string, so counting them either way would be dishonest. The suite's 315
+error-expecting cases are reported separately, at 61.9%: what is missing there is detecting
+static errors, not carrying out XSLT.
+
+The remaining 109 failures are listed by kind in the report and grouped in
+[ROADMAP.md](ROADMAP.md) §6e, along with the six real bugs the first measurement found — the
+largest of which was that a result tree's namespace declarations were never written, so any
+result carrying a namespace was not well-formed XML. Measuring moved the figure from 77.9% to
+93.4%.
+
+The comparison erases what the specifications say carries no meaning — the order of an element's
+attributes, which prefix stands for a namespace, and how much an indenting processor indents by —
+and nothing else; tests pin down both directions. Setting `XSLTCONF_MAX_FAILURES` makes the run
+fail above a budget. The harness itself is checked on every run against a small suite built by
+the test, so a harness that had stopped finding cases would not look like a clean skip.
 
 A differential comparison against **Java**, whose behaviour this library sets out to match, is
 built on the same expression corpus once the library is complete.

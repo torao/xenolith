@@ -62,7 +62,7 @@ use crate::loader::{DocumentSource, NoDocuments};
 use crate::number::{Format, Grouping, LetterValue};
 use crate::output::{self, Output, Writer};
 use crate::pattern::Pattern;
-use crate::stylesheet::{Stylesheet, Template, XSLT_NAMESPACE, default_namespace, in_scope_namespaces};
+use crate::stylesheet::{OutputMethod, Stylesheet, Template, XSLT_NAMESPACE, default_namespace, in_scope_namespaces};
 
 /// How deep `xsl:apply-templates` and `xsl:call-template` may go before the transformation is
 /// refused.
@@ -459,13 +459,29 @@ impl Transform {
     // read a global variable, so the variables go first and then the tables.
     engine.build_keys(node)?;
     engine.apply(Focus { node, position: 1, size: 1 }, None)?;
-    Ok(ResultTree {
-      document: engine.output,
-      root,
-      messages: engine.messages,
-      output: stylesheet.output().clone(),
-      raw: engine.raw,
-    })
+    let mut output = stylesheet.output().clone();
+    settle_method(&mut output, &engine.output, root);
+    Ok(ResultTree { document: engine.output, root, messages: engine.messages, output, raw: engine.raw })
+  }
+}
+
+/// Works out the output method §16 leaves to the result itself.
+///
+/// "If ... the expanded-name of the document element of the result tree has local part `html` (in
+/// any combination of upper and lower case) and a null namespace URI, then the default output
+/// method is html; otherwise the default output method is xml." So it cannot be known until the
+/// tree has been built — a stylesheet that writes HTML without saying so still gets `<br>` rather
+/// than `<br/>`, which is the whole point of the rule.
+fn settle_method(output: &mut Output, document: &Document, root: NodeId) {
+  if output.method_stated {
+    return;
+  }
+  let first = document.children(root).find(|&child| document.node_type(child) == NodeType::Element);
+  let Some(element) = first else { return };
+  let is_html = document.namespace_uri(element).is_none()
+    && document.local_name(element).is_some_and(|local| local.eq_ignore_ascii_case("html"));
+  if is_html {
+    output.method = OutputMethod::Html;
   }
 }
 

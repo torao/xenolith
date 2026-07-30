@@ -102,6 +102,17 @@ fn attribute_and_namespace_axes_reach_what_is_not_a_child() {
 }
 
 #[test]
+fn the_xml_prefix_needs_no_binding() {
+  // Namespaces in XML §3 binds `xml` by definition and forbids binding it to anything else, so
+  // an expression may use it without the caller having said anything. Nothing here binds it.
+  let xml = "<r xml:lang='en'><a xml:space='preserve'/></r>";
+  assert_eq!(value(xml, "/r/@xml:lang"), "en");
+  assert_eq!(value(xml, "count(//@xml:space)"), "1");
+  // It is the XML namespace it stands for, not merely a prefix that happens to match.
+  assert_eq!(value(xml, "count(//@*[namespace-uri() = 'http://www.w3.org/XML/1998/namespace'])"), "2");
+}
+
+#[test]
 fn node_tests_select_by_kind_and_by_name() {
   let xml = "<r>t1<a/><!--c--><?pi d?>t2</r>";
   assert_eq!(names(xml, "/r/node()"), "'t1',a,<!---->,?pi,'t2'");

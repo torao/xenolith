@@ -27,6 +27,10 @@ use crate::value::Value;
 /// document, which may bind the same namespace to a different prefix or none. An expression that
 /// uses an unbound prefix is an error, which is why there is nothing to fall back to.
 ///
+/// One prefix needs no binding: `xml` is bound to the XML namespace by definition and may not be
+/// declared otherwise (Namespaces in XML §3), so `@xml:lang` means what it says in any set of
+/// bindings, including an empty one.
+///
 /// # Examples
 ///
 /// ```
@@ -35,6 +39,8 @@ use crate::value::Value;
 /// let namespaces = Namespaces::new().with("h", "http://www.w3.org/1999/xhtml");
 /// assert_eq!(namespaces.get("h"), Some("http://www.w3.org/1999/xhtml"));
 /// assert_eq!(namespaces.get("nosuch"), None);
+/// // Bound without anyone binding it.
+/// assert_eq!(namespaces.get("xml"), Some("http://www.w3.org/XML/1998/namespace"));
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct Namespaces {
@@ -56,9 +62,17 @@ impl Namespaces {
   }
 
   /// The namespace a prefix is bound to, if it is bound.
+  ///
+  /// `xml` is bound whether or not anyone bound it: Namespaces in XML §3 binds it by definition
+  /// and forbids binding it to anything else, so an expression may use `xml:lang` and the like
+  /// wherever it likes.
   #[must_use]
   pub fn get(&self, prefix: &str) -> Option<&str> {
-    self.bindings.get(prefix).map(String::as_str)
+    match self.bindings.get(prefix) {
+      Some(namespace) => Some(namespace.as_str()),
+      None if prefix == "xml" => Some(xylograph_core::XML_NS_URI),
+      None => None,
+    }
   }
 }
 
