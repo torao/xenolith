@@ -48,10 +48,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # `xylo` is left out of these two: it names the library's features outright, so building it
-      # alongside would unify them back on and the minimal configuration would never be built.
-      - run: cargo test --workspace --exclude xylo --no-default-features
-      - run: cargo test --workspace --exclude xylo --no-default-features --features encodings
+      # `xylo` and `xylograph-fuzz` are left out of these two: both name the library's features
+      # outright, so building them alongside would unify the features back on and the minimal
+      # configuration — the thing this job exists to build — would never be built at all.
+      - run: cargo test --workspace --exclude xylo --exclude xylograph-fuzz --no-default-features
+      - run: cargo test --workspace --exclude xylo --exclude xylograph-fuzz --no-default-features --features encodings
       - run: cargo test -p xylograph-parser --no-default-features --features tokio
       # Each optional layer built on its own, so a feature that only compiles alongside another
       # does not slip through the all-features and no-features runs.
@@ -106,6 +107,50 @@ jobs:
       # answers, is on the record beside the conformance figures rather than only in prose.
       - name: Report the behaviour the specifications leave open
         run: cargo test -p xylograph --all-features --test behaviour -- --nocapture
+
+  differential:
+    # Java is the implementation this library sets out to agree with, so the comparison against
+    # it runs on every push rather than when someone remembers. The JDK ships its own XPath
+    # engine, so nothing but a JDK is needed.
+    name: differential against Java
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      # Printed, so that the count compared and any recorded divergence are on the record beside
+      # the conformance figures rather than only in prose.
+      - run: cargo test -p xylograph-xpath --test differential -- --nocapture
+        env:
+          XYLO_JAVA: java
+
+  fuzz:
+    # A short run on every push. It will not exhaust anything in a minute a target; what it is
+    # for is that the targets still build and that an obvious crash cannot land unnoticed. The
+    # properties themselves are checked on every platform by `crates/xylograph-fuzz`'s corpus
+    # test, which needs no nightly.
+    name: fuzzing (short run)
+    runs-on: ubuntu-latest
+    env:
+      # cargo-fuzz supplies its own flags; -D warnings here would fight them for no gain.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      # The same script one runs locally, so the two cannot drift apart.
+      - run: ./fuzz/short-run.sh 60
+      - name: Keep what it found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
 
   msrv:
     name: MSRV

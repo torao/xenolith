@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
+# rather than by every `cargo build --workspace`. The properties they check are in
+# `crates/xylograph-fuzz`, which is a member and is tested like everything else.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"

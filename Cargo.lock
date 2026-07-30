@@ -874,6 +874,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "xylograph-fuzz"
+version = "0.0.0"
+dependencies = [
+ "xylograph-core",
+ "xylograph-dom",
+ "xylograph-parser",
+ "xylograph-serialize",
+ "xylograph-validate",
+ "xylograph-xdm",
+ "xylograph-xpath",
+ "xylograph-xslt",
+]
+
+[[package]]
 name = "xylograph-parser"
 version = "0.0.0"
 dependencies = [

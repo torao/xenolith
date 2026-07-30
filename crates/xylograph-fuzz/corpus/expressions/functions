@@ -1,0 +1,1 @@
+concat(substring-before("a,b", ","), string-length(normalize-space("  x  ")))

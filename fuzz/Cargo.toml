@@ -1,0 +1,49 @@
+[package]
+name = "xylograph-fuzz-targets"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The properties live in the workspace so that `cargo test` checks them too; these targets only
+# feed them bytes. See that crate's documentation for what each one asserts.
+xylograph-fuzz = { path = "../crates/xylograph-fuzz" }
+
+[[bin]]
+name = "parse_document"
+path = "fuzz_targets/parse_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "build_and_serialize"
+path = "fuzz_targets/build_and_serialize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_document"
+path = "fuzz_targets/validate_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compile_expression"
+path = "fuzz_targets/compile_expression.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transform"
+path = "fuzz_targets/transform.rs"
+test = false
+doc = false
+bench = false

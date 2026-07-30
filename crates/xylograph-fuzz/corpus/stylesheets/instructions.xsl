@@ -1,0 +1,1 @@
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:output method="text"/><xsl:template match="/"><xsl:for-each select="//a"><xsl:sort select="@id"/><xsl:value-of select="."/><xsl:number level="any"/></xsl:for-each><xsl:if test="true()"><xsl:text>t</xsl:text></xsl:if></xsl:template></xsl:stylesheet>

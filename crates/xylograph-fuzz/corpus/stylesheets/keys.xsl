@@ -1,0 +1,1 @@
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:key name="k" match="a" use="@id"/><xsl:template match="/"><out><xsl:value-of select="key(&apos;k&apos;, &apos;1&apos;)"/></out></xsl:template></xsl:stylesheet>

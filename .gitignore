@@ -26,3 +26,10 @@ target
 
 # The OASIS/Xalan XSLT 1.0 suite, cloned on demand (see xylograph-xslt/tests/conformance.rs)
 /xslt-conformance/
+
+# What a fuzzing run produces. The seed corpus is in crates/xylograph-fuzz/corpus and is kept;
+# what libFuzzer collects on top of it is a working set, and a crash is copied into the seeds.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
