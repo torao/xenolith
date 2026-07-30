@@ -86,6 +86,7 @@ pub const DEFAULT_MAX_DEPTH: usize = 200;
 /// [`Engine::instruction`] dispatches, minus the top-level declarations that are read at compile
 /// time and are not instructions at all.
 const INSTRUCTIONS: &[&str] = &[
+  "apply-imports",
   "apply-templates",
   "attribute",
   "call-template",
@@ -449,6 +450,7 @@ impl Transform {
       messages: Vec::new(),
       raw: HashSet::new(),
       attribute_set_chain: Vec::new(),
+      current_rule: None,
       depth: 0,
       max_depth: self.max_depth,
     };
@@ -550,8 +552,24 @@ struct Engine<'a, M: Model> {
   raw: HashSet<NodeId>,
   /// The attribute sets being applied, outermost first, so one that uses itself is caught.
   attribute_set_chain: Vec<String>,
+  /// The template rule being instantiated, which `xsl:apply-imports` reaches past (§5.6).
+  current_rule: Option<CurrentRule>,
   depth: usize,
   max_depth: usize,
+}
+
+/// The template rule a body belongs to, as §5.6's "current template rule".
+///
+/// A rule becomes current by *matching* — `xsl:apply-templates` and `xsl:apply-imports` set it.
+/// `xsl:call-template` does not: §5.6 is explicit that calling a template by name leaves the
+/// current rule where it was, so an `xsl:apply-imports` inside a called template still means the
+/// rule that was matched.
+#[derive(Clone, Debug)]
+struct CurrentRule {
+  /// Its import precedence: `xsl:apply-imports` looks only below this.
+  precedence: i32,
+  /// The mode it was matched in, which does not change.
+  mode: Option<String>,
 }
 
 impl<M: Model> Engine<'_, M> {
@@ -567,11 +585,61 @@ impl<M: Model> Engine<'_, M> {
     let Some(template) = matched else {
       return self.built_in(focus, mode);
     };
-    let (module, element) = (template.module(), template.element());
+    let rule = (template.module(), template.element(), template.precedence());
+    self.run_rule(rule, mode, focus, Vec::new())
+  }
+
+  /// Runs a template rule that was reached by matching, as the current rule while it runs.
+  ///
+  /// What makes this different from [`run_template`](Self::run_template) is only the bookkeeping
+  /// §5.6 needs: which rule is current, so that an `xsl:apply-imports` in its body knows what to
+  /// reach past. The previous rule is put back afterwards, since a rule may apply templates and
+  /// so nest inside another.
+  fn run_rule(
+    &mut self,
+    rule: (usize, NodeId, i32),
+    mode: Option<&str>,
+    focus: Focus<M::Node>,
+    parameters: Vec<Binding<M::Node>>,
+  ) -> Result<()> {
+    let (module, element, precedence) = rule;
+    let previous = self.current_rule.replace(CurrentRule { precedence, mode: mode.map(ToOwned::to_owned) });
     self.depth += 1;
-    let outcome = self.run_template(module, element, focus, Vec::new());
+    let outcome = self.run_template(module, element, focus, parameters);
     self.depth -= 1;
+    self.current_rule = previous;
     outcome
+  }
+
+  /// `xsl:apply-imports`: the rule this one overrode (§5.6).
+  ///
+  /// The node and the mode do not change — only which rules are eligible, which is what lets a
+  /// rule add to an imported one rather than replace it. With no rule of lower precedence to
+  /// reach, the built-in rule applies, exactly as it would to a node no rule matches.
+  fn apply_imports(&mut self, focus: Focus<M::Node>) -> Result<()> {
+    let Some(rule) = self.current_rule.clone() else {
+      // §5.6: there has to *be* a current template rule. In the content of a top-level variable,
+      // which runs before any rule has matched, there is none — and nothing this could mean.
+      let message = "xsl:apply-imports was used where no template rule is current".to_owned();
+      return Err(Error::new(ErrorKind::Xslt, message));
+    };
+    if self.depth >= self.max_depth {
+      let message = format!("the transformation is more than {} templates deep", self.max_depth);
+      return Err(Error::new(ErrorKind::Xslt, message));
+    }
+    let mode = rule.mode.clone();
+    let matched = self.stylesheet.imported_template_for(
+      self.model,
+      focus.node,
+      mode.as_deref(),
+      self.running.as_ref(),
+      rule.precedence,
+    )?;
+    let Some(template) = matched else {
+      return self.built_in(focus, mode.as_deref());
+    };
+    let imported = (template.module(), template.element(), template.precedence());
+    self.run_rule(imported, mode.as_deref(), focus, Vec::new())
   }
 
   /// The rule that applies when the stylesheet declares none (XSLT 1.0 §5.8).
@@ -679,6 +747,7 @@ impl<M: Model> Engine<'_, M> {
       "choose" => self.choose(module, element, focus),
       "for-each" => self.for_each(module, element, focus),
       "apply-templates" => self.apply_templates(module, element, focus),
+      "apply-imports" => self.apply_imports(focus),
       "call-template" => self.call_template(module, element, focus),
       "variable" | "param" => self.declare(module, element, local, focus),
       // These are read by the instruction they belong to, not run on their own.
@@ -938,20 +1007,17 @@ impl<M: Model> Engine<'_, M> {
     // With parameters the rule has to be found here, so that they can be handed to it.
     for (index, node) in nodes.iter().enumerate() {
       let inner = Focus { node: *node, position: index + 1, size: nodes.len() };
-      let matched: Option<(usize, NodeId)> = self
+      let matched: Option<(usize, NodeId, i32)> = self
         .stylesheet
         .template_for_using(self.model, inner.node, mode.as_deref(), self.running.as_ref())?
-        .map(|template: &Template| (template.module(), template.element()));
+        .map(|template: &Template| (template.module(), template.element(), template.precedence()));
       match matched {
-        Some((template_module, template_element)) => {
+        Some(rule) => {
           let copies = parameters
             .iter()
             .map(|p| Binding { name: p.name.clone(), value: p.value.clone(), fragment: p.fragment })
             .collect();
-          self.depth += 1;
-          let outcome = self.run_template(template_module, template_element, inner, copies);
-          self.depth -= 1;
-          outcome?;
+          self.run_rule(rule, mode.as_deref(), inner, copies)?;
         }
         // A built-in rule takes no parameters.
         None => self.built_in(inner, mode.as_deref())?,

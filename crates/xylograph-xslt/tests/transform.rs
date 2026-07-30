@@ -1,10 +1,10 @@
 //! Running a stylesheet: the instructions, the built-in rules, and what they build.
 
-use xylograph_core::ErrorKind;
+use xylograph_core::{Error, ErrorKind};
 use xylograph_dom::build;
 use xylograph_serialize::Serializer;
 use xylograph_xdm::DomModel;
-use xylograph_xslt::{Stylesheet, transform};
+use xylograph_xslt::{Loader, Stylesheet, transform};
 
 /// Wraps template bodies in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -28,6 +28,76 @@ fn error(body: &str, xml: &str) -> String {
   let error = transform(&stylesheet, &model, model.root_node()).expect_err("fails");
   assert_eq!(error.kind(), ErrorKind::Xslt, "{}", error.message());
   error.message().to_owned()
+}
+
+/// Serves one imported module, so a two-module stylesheet can be built here.
+struct Imported(String);
+
+impl Loader for Imported {
+  fn load(&mut self, uri: &str) -> Result<Vec<u8>, Error> {
+    assert_eq!(uri, "file:///base.xsl", "the import is resolved against the importing module");
+    Ok(self.0.as_bytes().to_vec())
+  }
+}
+
+/// Transforms `xml` with a stylesheet that imports `base`, and serializes what comes out.
+fn run_importing(base: &str, body: &str, xml: &str) -> String {
+  let importing = sheet(&format!("<xsl:import href=\"base.xsl\"/>{body}"));
+  let mut loader = Imported(sheet(base));
+  let stylesheet = Stylesheet::compile_with(importing.as_bytes(), "file:///s.xsl", &mut loader).expect("compiles");
+  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let model = DomModel::new(&doc);
+  let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
+  Serializer::new().to_string(result.document(), result.root())
+}
+
+#[test]
+fn apply_imports_runs_the_rule_this_one_overrode() {
+  // §5.6: the importing rule wins, and reaches the imported one through xsl:apply-imports.
+  let base = "<xsl:template match=\"b\">[base]</xsl:template>";
+  let body = "<xsl:template match=\"b\">(<xsl:apply-imports/>)</xsl:template>";
+  assert_eq!(run_importing(base, body, "<a><b/></a>"), "([base])");
+}
+
+#[test]
+fn apply_imports_does_not_reach_the_rule_it_is_in() {
+  // If it considered rules of its own precedence it would find itself, and recur until the
+  // depth guard stopped it. Only lower precedence is eligible, so the built-in rule applies and
+  // the element's text comes through.
+  let base = "<xsl:template match=\"unrelated\"/>";
+  let body = "<xsl:template match=\"b\">(<xsl:apply-imports/>)</xsl:template>";
+  assert_eq!(run_importing(base, body, "<a><b>text</b></a>"), "(text)");
+}
+
+#[test]
+fn apply_imports_keeps_the_node_and_the_mode() {
+  // The current node does not change, and neither does the mode: the imported rule matched here
+  // is the one in mode `m`, not the unnamed one.
+  let base = "<xsl:template match=\"b\" mode=\"m\">[<xsl:value-of select=\"name()\"/>]</xsl:template>\
+              <xsl:template match=\"b\">[unnamed mode]</xsl:template>";
+  let body = "<xsl:template match=\"/\"><xsl:apply-templates select=\"//b\" mode=\"m\"/></xsl:template>\
+              <xsl:template match=\"b\" mode=\"m\">(<xsl:apply-imports/>)</xsl:template>";
+  assert_eq!(run_importing(base, body, "<a><b/></a>"), "([b])");
+}
+
+#[test]
+fn apply_imports_needs_a_current_template_rule() {
+  // §5.6 defines it in terms of the current rule, and a top-level variable's content is run
+  // before any rule has matched — so there is nothing this could mean, and saying so beats
+  // quietly producing nothing.
+  let body = "<xsl:variable name=\"v\"><xsl:apply-imports/></xsl:variable>\
+              <xsl:template match=\"/\"><xsl:value-of select=\"$v\"/></xsl:template>";
+  assert!(error(body, "<a/>").contains("no template rule is current"));
+}
+
+#[test]
+fn calling_a_template_leaves_the_current_rule_where_it_was() {
+  // §5.6: xsl:call-template does not change the current template rule, so an apply-imports
+  // inside the called template still reaches past the rule that matched.
+  let base = "<xsl:template match=\"b\">[base]</xsl:template>";
+  let body = "<xsl:template match=\"b\">(<xsl:call-template name=\"t\"/>)</xsl:template>\
+              <xsl:template name=\"t\"><xsl:apply-imports/></xsl:template>";
+  assert_eq!(run_importing(base, body, "<a><b/></a>"), "([base])");
 }
 
 #[test]

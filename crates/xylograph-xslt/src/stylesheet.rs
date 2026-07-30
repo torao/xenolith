@@ -512,10 +512,46 @@ impl Stylesheet {
     mode: Option<&str>,
     keys: &dyn KeyTable<M::Node>,
   ) -> Result<Option<&Template>> {
+    self.best_template(model, node, mode, keys, None)
+  }
+
+  /// The template rule `xsl:apply-imports` would reach from a rule of import precedence
+  /// `below`: the best of those the stylesheet holding the current rule *imported*.
+  ///
+  /// XSLT 1.0 §5.6 says only rules of lower import precedence are considered, which is what
+  /// makes `xsl:apply-imports` the way a rule extends the one it overrode rather than replacing
+  /// it outright.
+  ///
+  /// # Errors
+  ///
+  /// As [`template_for_using`](Self::template_for_using).
+  pub fn imported_template_for<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    mode: Option<&str>,
+    keys: &dyn KeyTable<M::Node>,
+    below: i32,
+  ) -> Result<Option<&Template>> {
+    self.best_template(model, node, mode, keys, Some(below))
+  }
+
+  /// The best rule for a node, optionally only among those below an import precedence.
+  fn best_template<M: Model>(
+    &self,
+    model: &M,
+    node: M::Node,
+    mode: Option<&str>,
+    keys: &dyn KeyTable<M::Node>,
+    below: Option<i32>,
+  ) -> Result<Option<&Template>> {
     let variables = Variables::new();
     let mut best: Option<&Template> = None;
     for template in &self.templates {
       if template.mode.as_deref() != mode {
+        continue;
+      }
+      if below.is_some_and(|below| template.precedence >= below) {
         continue;
       }
       let Some(pattern) = &template.pattern else { continue };

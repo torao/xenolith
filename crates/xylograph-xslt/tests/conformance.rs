@@ -322,6 +322,8 @@ fn path_of(uri: &str) -> String {
 struct Written {
   text: String,
   method: OutputMethod,
+  /// Whether `xsl:output` asked for indentation, which is whitespace the processor chose.
+  indented: bool,
 }
 
 /// Runs one case, giving what it wrote or why it could not.
@@ -348,7 +350,7 @@ fn transform_case(case: &Case) -> Result<Written, String> {
   let result = Transform::new()
     .run_with_documents(&stylesheet, &model, model.root_node(), Functions::new(), available)
     .map_err(|error| format!("running: {}", error.message()))?;
-  Ok(Written { text: result.serialize(), method: result.output().method() })
+  Ok(Written { text: result.serialize(), method: result.output().method(), indented: result.output().indent() })
 }
 
 /// The tree an XML text denotes, written in a form two conforming processors must agree on.
@@ -372,6 +374,18 @@ fn transform_case(case: &Case) -> Result<Written, String> {
 /// parse as a document is wrapped and tried again. Both sides go through this, so the wrapper
 /// cancels out.
 fn normalize(xml: &str) -> Option<String> {
+  normalize_indented(xml, false)
+}
+
+/// As [`normalize`], and when `indented` also erases the whitespace an indenting processor puts
+/// between elements.
+///
+/// §16.1 lets the XML method "add whitespace" when `indent="yes"` and says nothing about how
+/// much: this writes a newline and two spaces a level, Xalan — which produced the suite's
+/// expected results — writes a newline and none. Both are conforming, so a case whose output is
+/// indented cannot be judged on the whitespace between its elements. It is judged on everything
+/// else, and a case that did not ask to be indented is still judged on all of it.
+fn normalize_indented(xml: &str, indented: bool) -> Option<String> {
   let document = parse_loosely(xml)?;
   let mut written = String::new();
   for child in document.children(document.root()) {
@@ -381,7 +395,7 @@ fn normalize(xml: &str) -> Option<String> {
     if document.node_type(child) == xylograph_dom::NodeType::Text {
       continue;
     }
-    canonical(&document, child, &mut written);
+    canonical(&document, child, indented, &mut written);
   }
   Some(written)
 }
@@ -402,7 +416,7 @@ fn parse_loosely(xml: &str) -> Option<xylograph_dom::Document> {
 }
 
 /// Writes one node in the canonical form described on [`normalize`].
-fn canonical(document: &xylograph_dom::Document, node: xylograph_dom::NodeId, into: &mut String) {
+fn canonical(document: &xylograph_dom::Document, node: xylograph_dom::NodeId, indented: bool, into: &mut String) {
   use std::fmt::Write as _;
   match document.node_type(node) {
     xylograph_dom::NodeType::Element => {
@@ -420,8 +434,15 @@ fn canonical(document: &xylograph_dom::Document, node: xylograph_dom::NodeId, in
       attributes.sort();
       into.push_str(&attributes.concat());
       into.push('>');
+      // Where an indenting processor may have put whitespace: between an element's children,
+      // when they are elements. Text of its own is never touched, here or in the writer.
+      let among_elements =
+        indented && document.children(node).any(|child| document.node_type(child) == xylograph_dom::NodeType::Element);
       for child in document.children(node) {
-        canonical(document, child, into);
+        if among_elements && is_only_whitespace(document, child) {
+          continue;
+        }
+        canonical(document, child, indented, into);
       }
       let _ = write!(into, "</{}>", expanded(document, node));
     }
@@ -437,6 +458,12 @@ fn canonical(document: &xylograph_dom::Document, node: xylograph_dom::NodeId, in
     }
     _ => {}
   }
+}
+
+/// Whether a node is a text node holding nothing but whitespace.
+fn is_only_whitespace(document: &xylograph_dom::Document, node: xylograph_dom::NodeId) -> bool {
+  document.node_type(node) == xylograph_dom::NodeType::Text
+    && document.node_value(node).unwrap_or_default().trim().is_empty()
 }
 
 /// A name as the data model has it: the namespace URI and the local part, with no prefix.
@@ -469,8 +496,14 @@ fn comparison(case: &Case, method: OutputMethod) -> Compare {
 
 /// Whether what was written matches what the case expected.
 fn matches(case: &Case, written: &str, how: &Compare) -> Result<(), String> {
+  matches_indented(case, written, how, false)
+}
+
+/// As [`matches`], saying whether the result was indented — see [`normalize_indented`].
+fn matches_indented(case: &Case, written: &str, how: &Compare, indented: bool) -> Result<(), String> {
   let Some(path) = &case.expected else { return Ok(()) };
   let expected = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+  let normalize = |xml: &str| normalize_indented(xml, indented);
   match how {
     Compare::Text => {
       if written.trim_end() == expected.trim_end() {
@@ -583,7 +616,7 @@ fn the_conformance_suite_is_run_and_reported() {
             *runs.unjudged.entry(why.clone()).or_default() += 1;
             continue;
           }
-          runs.note(case, matches(case, &written.text, &how));
+          runs.note(case, matches_indented(case, &written.text, &how, written.indented));
         }
         Err(why) => runs.note(case, Err(why)),
       },
@@ -772,6 +805,20 @@ fn what_xml_says_is_significant_still_counts_as_a_difference() {
   assert_ne!(normalize("<r><a/><b/></r>"), normalize("<r><b/><a/></r>"), "the order of children");
   assert_ne!(normalize("<a> x </a>"), normalize("<a>x</a>"), "the whitespace in text");
   assert_ne!(normalize("<a><!--c--></a>"), normalize("<a></a>"), "a comment");
+}
+
+#[test]
+fn how_much_a_processor_indents_by_is_not_a_difference() {
+  // §16.1 lets an indenting processor add whitespace between elements and does not say how much.
+  let ours = "<r>\n  <a/>\n  <b>x</b>\n</r>";
+  let theirs = "<r>\n<a/>\n<b>x</b>\n</r>";
+  assert_ne!(normalize_indented(ours, false), normalize_indented(theirs, false), "not asked for");
+  assert_eq!(normalize_indented(ours, true), normalize_indented(theirs, true), "asked for");
+
+  // Even then, only whitespace *between elements* is the processor's. Text of the result's own
+  // is what the stylesheet wrote, and a case that differs there differs.
+  assert_ne!(normalize_indented("<r> x </r>", true), normalize_indented("<r>x</r>", true), "text of its own");
+  assert_ne!(normalize_indented("<r>a<b/></r>", true), normalize_indented("<r><b/></r>", true), "mixed content");
 }
 
 #[test]
