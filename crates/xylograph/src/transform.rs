@@ -13,6 +13,7 @@
 //! | `TransformerFactory.newTransformer()` | [`Transformer::identity`] |
 //! | `Transformer.setParameter(name, value)` | [`Transformer::with_parameter`] |
 //! | `Transformer.setURIResolver(r)` | [`Transformer::with_resolver`] |
+//! | — (XSLT 2.0's `xsl:result-document`) | [`Transformer::with_results`], for `exsl:document` |
 //! | `Transformer.transform(source, result)` | [`Transformer::transform`] |
 //! | `StreamSource` / `DOMSource` | [`Source::bytes`] / [`Source::document`] |
 //! | `StreamResult` | [`Transformed::write`] and [`Transformed::text`] |
@@ -44,6 +45,7 @@
 //! # Ok::<(), xylograph::Error>(())
 //! ```
 
+use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
@@ -51,7 +53,7 @@ use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_dom::{Document, build};
 use xylograph_xdm::{Documents, DomModel, DomNode};
 use xylograph_xpath::Functions;
-use xylograph_xslt::{DocumentSource, LoadedDocuments, Loader, NoLoader, Stylesheet, Transform, TreeSpace};
+use xylograph_xslt::{DocumentSource, LoadedDocuments, Loader, NoLoader, ResultSink, Stylesheet, Transform, TreeSpace};
 
 /// The method `xsl:output` asked the result to be written by.
 pub use xylograph_xslt::OutputMethod;
@@ -189,6 +191,20 @@ impl Transformer {
   #[must_use]
   pub fn with_resolver(mut self, resolver: impl Fn() -> Box<dyn Loader> + 'static) -> Self {
     self.resolver = Some(Rc::new(resolver));
+    self
+  }
+
+  /// Where a result other than the principal one goes: EXSLT's `exsl:document`.
+  ///
+  /// JAXP has no counterpart — secondary results arrived with XSLT 2.0's `xsl:result-document`,
+  /// and in 1.0 they are this extension. Without a sink, a stylesheet that uses it is refused by
+  /// name rather than writing to a path of its own choosing; see [`ResultSink`].
+  ///
+  /// The sink is shared rather than given away, so the caller still has it when the
+  /// transformation is done.
+  #[must_use]
+  pub fn with_results(mut self, sink: Rc<RefCell<dyn ResultSink>>) -> Self {
+    self.transform = self.transform.with_results(sink);
     self
   }
 

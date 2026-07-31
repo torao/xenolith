@@ -34,6 +34,7 @@ use xylograph_xdm::Model;
 use xylograph_xpath::{Context, Functions, Value, is_core_function};
 
 use crate::decimal::{Formats, Pattern as DecimalPattern};
+use crate::engine::EXSLT_COMMON;
 use crate::loader::{DocumentSource, NoDocuments};
 use crate::pattern::KeyTable;
 use crate::stylesheet::XSLT_NAMESPACE;
@@ -294,9 +295,14 @@ pub(crate) fn register<M: Model>(
       arity("element-available", &arguments, 1, Some(1))?;
       let name = arguments[0].string(context.model);
       let (namespace, local) = expand(&name, context)?;
-      // Only the XSLT namespace has instructions this implementation knows; an extension
-      // element belongs to whoever supplied it, and none are supplied yet.
-      let available = namespace.as_deref() == Some(XSLT_NAMESPACE) && instructions.contains(&local.as_str());
+      // The XSLT namespace has the instructions this implementation knows. Beyond it, one
+      // extension element is implemented — EXSLT's exsl:document — and a stylesheet must be
+      // able to ask about that before relying on it, which is what §15 is for.
+      let available = match namespace.as_deref() {
+        Some(XSLT_NAMESPACE) => instructions.contains(&local.as_str()),
+        Some(EXSLT_COMMON) => local == "document",
+        _ => false,
+      };
       Ok(Value::Boolean(available))
     })
     .with("", "function-available", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {

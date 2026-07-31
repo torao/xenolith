@@ -872,13 +872,20 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - `regexp:match` は `g` の有無で**答えの意味が変わる**（EXSLT の設計）: 有れば「全体の一致ごとに 1 つ」、無ければ「最初の一致と各捕獲群」
 - **成果物**: `regexp` モジュール（統合テスト 13 + ユニット 3）
 
-**6.5g. `functions`**（`func:function` / `func:result`）— 未着手
-- スタイルシート自身が関数を宣言する仕組み。**エンジンへの再入**が要る: 関数本体を実行するのはエンジンだが、その関数が呼ばれるのは既にエンジンが式を評価している最中で、登録された関数はエンジンを借用できない（6.5b と同じ壁の、より強い形）
-- `exsl:document` と同じく「エンジンの外から結果木を組み立てる」面が要るので、**両者は同時に設計する**のが筋
-- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions`、`exsl:document`、日時の duration 演算が残る）
+**6.5g. `exsl:document`** ✅ 完了
+- **当初「`func:function` と同時に設計する」と書いたが、それは誤りだった**。`exsl:document` は拡張**要素**で、実行するのはエンジン自身（`extension_element` の経路）。「エンジンの外から結果木を組み立てる」必要はなく、**再入の壁は無い**。同時設計を待つ理由が無かったので単独で入れた
+- **`ResultSink` トレイト**（`Loader` / `DocumentSource` と同じ発想）。**sink を渡さなければエラー** — スタイルシートはデータであり、データが自分の選んだパスへ書き込むと決めてよいはずがない。黙って無視するのも「書けたように見える」ので不可
+- 本体は**主結果とは別の木**へ実行する。主出力には何も現れない
+- `href` は要素の基底 URI で解決してから sink に渡す。プロセスの作業ディレクトリ依存にしない
+- 属性は `xsl:output` と同じもの（AVT）。スタイルシートの `xsl:output` を土台に**この要素のぶんを上書き**するので、encoding や indent は繰り返さなくてよい。値の意味は `Output::set` の 1 箇所に集約
+- `element-available('exsl:document')` が **true** を返す（§15。実装しているものについて正しく答える）。`extension-element-prefixes` で宣言されていなければ従来どおり**リテラル結果要素**
+- **成果物**: `ResultSink` / `NoResults` / `Transform::with_results` / `Transformer::with_results`（統合テスト 8）
 
-**6.5c. `strings` / `functions` / `dates-and-times` / `regular-expressions`**
-- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト
+**6.5h. `functions`**（`func:function` / `func:result`）— 未着手
+- スタイルシート自身が関数を宣言する仕組み。**エンジンへの再入**が要る: 関数本体を実行するのはエンジンだが、その関数が呼ばれるのは既にエンジンが式を評価している最中で、登録された関数はエンジンを借用できない（6.5b と同じ壁の、より強い形）
+- **設計上の障害を特定した**: `Functions::with` が `impl Function<M> + 'static` を要求するため、`&Stylesheet` や `&M` を捕らえたクロージャを登録できない。取りうる道は 2 つ — (a) `Functions<'f, M>` にライフタイムを持たせる（`Functions` は 26 ファイル 86 箇所に現れるので波及が大きい）、(b) `Context` に host 用のトレイトオブジェクトを持たせ、エンジンの可変状態を `RefCell` 化して `&self` で再入できるようにする（xylograph-xslt 内に閉じるが 2000 行のファイルの構造変更で、RefCell の二重借用という実行時ハザードを持ち込む）
+- **どちらを取るかは測ってから決めるべき性質のものではなく、設計判断**。着手前に方針を決める
+- **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` と日時の duration 演算が残る）
 
 ### Phase 7 — 統合 API とツール
 

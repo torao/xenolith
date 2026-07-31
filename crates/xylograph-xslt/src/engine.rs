@@ -25,9 +25,10 @@
 //!
 //! `xsl:strip-space` decides which source whitespace reaches a template rule, and
 //! `xsl:namespace-alias` which namespace a literal result element lands in. An element whose
-//! namespace `extension-element-prefixes` names is an extension element (§14): this engine
-//! implements none, so such an element defers to its `xsl:fallback` or is reported — never
-//! copied into the result, where it would look like output the stylesheet meant.
+//! namespace `extension-element-prefixes` names is an extension element (§14): one is
+//! implemented — EXSLT's `exsl:document`, which writes a result of its own through a
+//! [`ResultSink`] the caller supplies — and every other defers to its `xsl:fallback` or is
+//! reported, never copied into the result, where it would look like output the stylesheet meant.
 //!
 //! What is still missing is what `xsl:output` asks for beyond its method — indentation, the
 //! declaration, a doctype, `disable-output-escaping`; see `ROADMAP.md`. An instruction that is
@@ -46,8 +47,10 @@
 //! instead would need a wrapping [`Model`] whose node type is the same, which the
 //! [`Functions`] registry, fixed to one model type, cannot be given.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::rc::Rc;
 
 use xylograph_core::error::{Error, ErrorKind, Result};
@@ -58,9 +61,9 @@ use xylograph_xpath::{Context, Expr, Functions, Namespaces, PathStart, Value, Va
 use crate::avt::{self, Piece};
 use crate::collate::{CaseOrder, Collator};
 use crate::functions::Running;
-use crate::loader::{DocumentSource, NoDocuments};
+use crate::loader::{DocumentSource, NoDocuments, NoResults, ResultSink};
 use crate::number::{Format, Grouping, LetterValue};
-use crate::output::{self, Output, Writer};
+use crate::output::{self, Output, Setting, Writer};
 use crate::pattern::Pattern;
 use crate::stylesheet::{OutputMethod, Stylesheet, Template, XSLT_NAMESPACE, default_namespace, in_scope_namespaces};
 
@@ -244,11 +247,24 @@ pub fn transform<M: Model>(stylesheet: &Stylesheet, model: &M, node: M::Node) ->
 /// A transformation, with the limits it is run under.
 ///
 /// [`transform`] is this with the defaults; build one of these to change them.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Transform {
   max_depth: usize,
   /// Values for the stylesheet's top-level `xsl:param`s, as the caller supplied them.
   parameters: Vec<(String, String)>,
+  /// Where a secondary result — `exsl:document` — is written, if the caller said anywhere.
+  results: Option<Rc<RefCell<dyn ResultSink>>>,
+}
+
+// Written by hand: a sink cannot be printed, but whether there is one can.
+impl fmt::Debug for Transform {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("Transform")
+      .field("max_depth", &self.max_depth)
+      .field("parameters", &self.parameters)
+      .field("results", &self.results.is_some())
+      .finish()
+  }
 }
 
 impl Default for Transform {
@@ -261,7 +277,18 @@ impl Transform {
   /// A transformation with the default limits.
   #[must_use]
   pub const fn new() -> Self {
-    Self { max_depth: DEFAULT_MAX_DEPTH, parameters: Vec::new() }
+    Self { max_depth: DEFAULT_MAX_DEPTH, parameters: Vec::new(), results: None }
+  }
+
+  /// Where `exsl:document` may write a result other than the principal one.
+  ///
+  /// Without one, an `exsl:document` is an error naming the file it wanted — see [`NoResults`].
+  /// The sink is shared rather than given away, so the caller still has it afterwards and can
+  /// read what was written.
+  #[must_use]
+  pub fn with_results(mut self, sink: Rc<RefCell<dyn ResultSink>>) -> Self {
+    self.results = Some(sink);
+    self
   }
 
   /// How deep template application may go before the transformation is refused.
@@ -451,6 +478,7 @@ impl Transform {
       raw: HashSet::new(),
       attribute_set_chain: Vec::new(),
       current_rule: None,
+      results: self.results.clone(),
       depth: 0,
       max_depth: self.max_depth,
     };
@@ -570,6 +598,8 @@ struct Engine<'a, M: Model> {
   attribute_set_chain: Vec<String>,
   /// The template rule being instantiated, which `xsl:apply-imports` reaches past (§5.6).
   current_rule: Option<CurrentRule>,
+  /// Where `exsl:document` writes, if the caller said anywhere.
+  results: Option<Rc<RefCell<dyn ResultSink>>>,
   depth: usize,
   max_depth: usize,
 }
@@ -946,11 +976,15 @@ impl<M: Model> Engine<'_, M> {
 
   /// An extension element (XSLT 1.0 §14).
   ///
-  /// This engine implements none, so every one of them takes §15's route: run the
+  /// One is implemented — EXSLT's `exsl:document`, below. Every other takes §15's route: run the
   /// `xsl:fallback` children if there are any, and report otherwise. What must not happen — and
   /// did, before extension elements were told apart from literal ones — is the element being
   /// copied into the result, where it would look like output the stylesheet meant to produce.
   fn extension_element(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let document = self.stylesheet.document(module);
+    if document.namespace_uri(element) == Some(EXSLT_COMMON) && document.local_name(element) == Some("document") {
+      return self.exsl_document(module, element, focus);
+    }
     let fallbacks = self.fallback_children(module, element);
     if !fallbacks.is_empty() {
       for fallback in fallbacks {
@@ -964,6 +998,62 @@ impl<M: Model> Engine<'_, M> {
        give it an xsl:fallback, or ask element-available() before relying on it"
     );
     Err(Error::new(ErrorKind::Xslt, message))
+  }
+
+  /// EXSLT's `exsl:document`: a result of its own, written where the caller says.
+  ///
+  /// The content is run into a tree apart from the principal result — nothing it builds appears
+  /// in the main output — and that tree is written out as this element's own attributes ask.
+  /// They are `xsl:output`'s attributes, layered over what the stylesheet's `xsl:output` set, so
+  /// a secondary result inherits the encoding and the indentation unless it says otherwise.
+  ///
+  /// `href` is resolved against the base URI of this element, as every other relative reference
+  /// in a stylesheet is, so a sink is handed something absolute rather than something whose
+  /// meaning depends on where the process happens to be running.
+  fn exsl_document(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<()> {
+    let href = self.required(module, element, "href", "exsl:document")?;
+    let href = self.attribute_value(&href, module, element, focus)?;
+    let base = self.stylesheet.base_uri(module, element);
+    let href = xylograph_core::uri::resolve(&base, &href)?;
+
+    // Refused before the work is done: a stylesheet that cannot write should be told so rather
+    // than after the engine has built a tree nobody will take.
+    let Some(sink) = self.results.clone() else {
+      return NoResults.write(&href, &[]);
+    };
+
+    let output = self.output_for(module, element, focus)?;
+    let fragment = self.output.create_document_fragment();
+    self.insertion.push(fragment);
+    let outcome = self.run_body(module, element, focus);
+    self.insertion.pop();
+    outcome?;
+
+    let written = Writer::new(&self.output, &output, &self.raw).write(fragment);
+    let bytes = output::encode(&written, output.encoding())?;
+    sink.borrow_mut().write(&href, &bytes)
+  }
+
+  /// The output settings for an `exsl:document`: the stylesheet's, with this element's on top.
+  fn output_for(&mut self, module: usize, element: NodeId, focus: Focus<M::Node>) -> Result<Output> {
+    let mut output = self.stylesheet.output().clone();
+    // EXSLT gives exsl:document the attributes of xsl:output, and they are attribute value
+    // templates here as they are on every other extension element's attributes.
+    for (name, setting) in [
+      ("method", Setting::Method),
+      ("encoding", Setting::Encoding),
+      ("omit-xml-declaration", Setting::OmitXmlDeclaration),
+      ("standalone", Setting::Standalone),
+      ("doctype-public", Setting::DoctypePublic),
+      ("doctype-system", Setting::DoctypeSystem),
+      ("indent", Setting::Indent),
+      ("media-type", Setting::MediaType),
+      ("version", Setting::Version),
+    ] {
+      let Some(written) = self.optional_attribute(module, element, name, focus)? else { continue };
+      output.set(setting, &written)?;
+    }
+    Ok(output)
   }
 
   /// The `xsl:fallback` children of an element.
@@ -2131,8 +2221,9 @@ impl<M: Model> Engine<'_, M> {
   }
 }
 
-/// The namespace of EXSLT's common module, whose `node-set()` lifts §11.1's restriction.
-const EXSLT_COMMON: &str = "http://exslt.org/common";
+/// The namespace of EXSLT's common module, whose `node-set()` lifts §11.1's restriction and
+/// whose `document` element writes a result of its own.
+pub(crate) const EXSLT_COMMON: &str = "http://exslt.org/common";
 
 /// Collects the variable names an expression passes to `exsl:node-set()`.
 ///

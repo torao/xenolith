@@ -87,6 +87,67 @@ pub trait DocumentSource<N> {
   }
 }
 
+/// Where a result other than the principal one goes: EXSLT's `exsl:document`.
+///
+/// A stylesheet using it writes several files from one transformation — a chapter per page, an
+/// index beside them. The engine builds each result and writes it out as that element's own
+/// output settings ask; where the bytes then go is the caller's business, exactly as fetching is.
+///
+/// Nothing is written unless a caller supplies one of these, for the same reason nothing is
+/// fetched unless a [`Loader`] is supplied: a stylesheet is data, and data must not decide on its
+/// own to write to a path of its choosing.
+///
+/// # Examples
+///
+/// ```
+/// use std::cell::RefCell;
+/// use std::collections::HashMap;
+/// use std::rc::Rc;
+/// use xylograph_xslt::ResultSink;
+///
+/// /// A sink that keeps what was written, which is what a test wants.
+/// #[derive(Default)]
+/// struct Collected(HashMap<String, Vec<u8>>);
+///
+/// impl ResultSink for Collected {
+///   fn write(&mut self, href: &str, bytes: &[u8]) -> xylograph_core::Result<()> {
+///     self.0.insert(href.to_owned(), bytes.to_vec());
+///     Ok(())
+///   }
+/// }
+///
+/// let sink = Rc::new(RefCell::new(Collected::default()));
+/// // `Transform::with_results(Rc::clone(&sink))`, and afterwards `sink.borrow()` has the files.
+/// ```
+pub trait ResultSink {
+  /// Takes one secondary result: the `href` the stylesheet asked for, and the bytes.
+  ///
+  /// `href` is resolved against the base URI of the `exsl:document` element, so what arrives is
+  /// absolute. A sink that will not write somewhere should say so rather than ignore it.
+  ///
+  /// # Errors
+  ///
+  /// Whatever writing it failed with, which stops the transformation.
+  fn write(&mut self, href: &str, bytes: &[u8]) -> Result<()>;
+}
+
+/// A sink that writes nowhere, and says so.
+///
+/// The default. Refusing by name beats writing to the working directory because a stylesheet
+/// said to — and beats silence, which would look like the file had been written.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoResults;
+
+impl ResultSink for NoResults {
+  fn write(&mut self, href: &str, _bytes: &[u8]) -> Result<()> {
+    let message = format!(
+      "exsl:document asked to write {href:?}, and no result sink was given; \
+       supply one with Transform::with_results to say where a secondary result may go"
+    );
+    Err(Error::new(ErrorKind::Xslt, message))
+  }
+}
+
 /// A source that has nothing, so `document()` always finds nothing.
 ///
 /// The default, because fetching a document a stylesheet names is I/O on the caller's behalf —

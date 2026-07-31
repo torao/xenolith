@@ -34,6 +34,20 @@ const HTML_EMPTY: &[&str] =
 /// The elements whose text the HTML method must not escape (§16.2).
 const HTML_UNESCAPED: &[&str] = &["script", "style"];
 
+/// One of the things `xsl:output` and `exsl:document` can say, for [`Output::set`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Setting {
+  Method,
+  Version,
+  Encoding,
+  OmitXmlDeclaration,
+  Standalone,
+  DoctypePublic,
+  DoctypeSystem,
+  Indent,
+  MediaType,
+}
+
 /// What `xsl:output` asked for, with every declaration merged (XSLT 1.0 §16).
 ///
 /// §16 merges the `xsl:output` declarations of a stylesheet attribute by attribute rather than
@@ -108,6 +122,43 @@ impl Output {
   #[must_use]
   pub fn media_type(&self) -> Option<&str> {
     self.media_type.as_deref()
+  }
+
+  /// Sets one attribute of these settings from the text an element carried.
+  ///
+  /// `xsl:output` reads its own attributes while compiling, where import precedence decides
+  /// which declaration wins. `exsl:document` carries the same attributes on one element, with
+  /// nothing to arbitrate — so it layers them over a copy of the stylesheet's, through here, and
+  /// what a value means stays written down in one place.
+  ///
+  /// # Errors
+  ///
+  /// If the value is not one this can write — a `method` naming something other than the three.
+  pub(crate) fn set(&mut self, setting: Setting, value: &str) -> Result<()> {
+    match setting {
+      Setting::Method => {
+        self.method = match value {
+          "xml" => OutputMethod::Xml,
+          "html" => OutputMethod::Html,
+          "text" => OutputMethod::Text,
+          other => {
+            let message = format!("exsl:document method {other:?} is not one this can write");
+            return Err(Error::new(ErrorKind::Xslt, message));
+          }
+        };
+        // Said outright, so §16's "work it out from the document element" does not apply.
+        self.method_stated = true;
+      }
+      Setting::Version => self.version = Some(value.to_owned()),
+      Setting::Encoding => self.encoding = Some(value.to_owned()),
+      Setting::DoctypePublic => self.doctype_public = Some(value.to_owned()),
+      Setting::DoctypeSystem => self.doctype_system = Some(value.to_owned()),
+      Setting::MediaType => self.media_type = Some(value.to_owned()),
+      Setting::OmitXmlDeclaration => self.omit_xml_declaration = value == "yes",
+      Setting::Indent => self.indent = value == "yes",
+      Setting::Standalone => self.standalone = Some(value == "yes"),
+    }
+    Ok(())
   }
 
   /// Whether an element's text is to be written in a CDATA section.
