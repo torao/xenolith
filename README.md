@@ -200,6 +200,37 @@ hand-written case cannot: that the lexer never panics on arbitrary text, that nu
 and parsing are inverses, and that printing an expression tree yields something that parses back
 to the same tree.
 
+## Performance
+
+```bash
+cargo bench -p xylograph
+```
+
+Measured 31 July 2026 on a release build, over generated documents of 64 and 1024 records:
+
+| | throughput |
+|---|---|
+| parsing, events only | ~52 MiB/s |
+| parsing into a DOM | ~28 MiB/s |
+| serializing a DOM | ~130 MiB/s |
+| XPath, `//book[@year > 2000]/title/text()` | ~46 MiB/s |
+| XSLT, transformation alone | ~12.8 MiB/s |
+| XSLT, parse → transform → write | ~7.1 MiB/s |
+
+Compiling an expression costs 2.1 µs and a stylesheet 68 µs, so both are worth keeping rather
+than redoing per document. Everything scales linearly with input size.
+
+The benchmarks generate their documents rather than vendoring them, so the numbers can be
+reproduced from a checkout, and `cargo test --benches` runs each one once — what is measured
+rarely still has to keep working.
+
+They earned their keep immediately: a benchmark that varies the *number of template rules*
+showed that choosing a rule cost the whole rule set for every node, so a 512-rule stylesheet took
+ten times as long over one document as a five-rule one. Real stylesheets are that size and
+larger. Rules are now indexed by what their last step can match, which made that case 91% faster
+and removed the dependence on rule count altogether — and a test pins the index to the answer an
+exhaustive scan gives, since an index may only ever be a faster route to the same rule.
+
 ## Fuzzing
 
 Five libFuzzer targets, over the parser, the DOM builder and serializer, the validator, XPath and

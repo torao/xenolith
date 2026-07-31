@@ -59,5 +59,14 @@ xylograph-xslt = { workspace = true }
 xylograph-xinclude = { workspace = true, optional = true }
 xylograph-exslt = { workspace = true, optional = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+# The end-to-end benchmarks: the facade is where every layer is reachable at once, which is what
+# a caller's own numbers look like. `cargo test --benches` runs each once, so they cannot rot.
+[[bench]]
+name = "pipeline"
+harness = false
+
 [lints]
 workspace = true

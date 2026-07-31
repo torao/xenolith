@@ -181,11 +181,93 @@ struct PatternStep {
   after_any_ancestor: bool,
 }
 
+/// What kind of node an alternative's last step can possibly match.
+///
+/// Choosing a template rule means finding the best of those that match, and a stylesheet's rules
+/// are mostly about elements of one name each. Knowing what a rule *cannot* match, before
+/// testing it, is what lets a thousand-rule stylesheet cost what a five-rule one does — see
+/// [`Stylesheet::template_for_using`](crate::Stylesheet::template_for_using).
+///
+/// It is a necessary condition, never a sufficient one: a rule whose reach says `Element(name)`
+/// still has to be tested, because the steps to its left and its predicates may refuse the node.
+/// What matters is that a rule whose reach *excludes* a node need not be tested at all.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Reach {
+  /// An element of this expanded name — the common case, `match="title"`.
+  Element {
+    /// The namespace URI, once the pattern's prefix has been resolved.
+    namespace: Option<String>,
+    /// The local part.
+    local: String,
+  },
+  /// An attribute of this expanded name.
+  Attribute {
+    /// The namespace URI, once the pattern's prefix has been resolved.
+    namespace: Option<String>,
+    /// The local part.
+    local: String,
+  },
+  /// Any element: `*`, or `prefix:*`, whose namespace is checked when the rule is tested.
+  AnyElement,
+  /// Any attribute: `@*`.
+  AnyAttribute,
+  /// Text nodes.
+  Text,
+  /// Comments.
+  Comment,
+  /// Processing instructions.
+  ProcessingInstruction,
+  /// The root, for the pattern `/`.
+  Root,
+  /// Anything at all: `node()`, or a pattern anchored by `id()` or `key()`, whose reach is not
+  /// known from its text. Such a rule is tested for every node.
+  Anything,
+}
+
 impl Alternative {
   /// The priority XSLT 1.0 §5.5 gives this alternative when the template does not set one.
   #[must_use]
   pub const fn default_priority(&self) -> f64 {
     self.priority
+  }
+
+  /// What kind of node this alternative can match, for the index described on [`Reach`].
+  ///
+  /// `namespaces` resolves the prefix a name test was written with; a prefix that is not bound
+  /// there gives [`Reach::Anything`], so an unresolvable rule is tested rather than skipped.
+  pub(crate) fn reach(&self, namespaces: &Namespaces) -> Reach {
+    let Some(last) = self.steps.last() else {
+      // No steps: `/`, or an `id()`/`key()` anchor, which matches the anchor itself.
+      return if self.anchor == Anchor::Root { Reach::Root } else { Reach::Anything };
+    };
+    let attribute = last.axis == Axis::Attribute;
+    match &last.node_test {
+      NodeTest::Name(NameTest::Name { prefix, local }) => {
+        let namespace = match prefix {
+          Some(prefix) => match namespaces.get(prefix) {
+            Some(namespace) => Some(namespace.to_owned()),
+            // A prefix the stylesheet never bound: the rule cannot be placed, so it is tested
+            // for everything rather than silently never tried.
+            None => return Reach::Anything,
+          },
+          None => None,
+        };
+        let (namespace, local) = (namespace, local.clone());
+        if attribute { Reach::Attribute { namespace, local } } else { Reach::Element { namespace, local } }
+      }
+      // `*` and `prefix:*` still narrow the node *kind*, which is most of the benefit.
+      NodeTest::Name(_) => {
+        if attribute {
+          Reach::AnyAttribute
+        } else {
+          Reach::AnyElement
+        }
+      }
+      NodeTest::Text => Reach::Text,
+      NodeTest::Comment => Reach::Comment,
+      NodeTest::ProcessingInstruction(_) => Reach::ProcessingInstruction,
+      NodeTest::Node => Reach::Anything,
+    }
   }
 
   /// Whether `node` matches this alternative alone.

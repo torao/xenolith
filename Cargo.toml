@@ -41,6 +41,9 @@ icu_collator = "2"
 icu_locale_core = "2"
 # Only `AsyncRead` is needed; the runtime is the caller's business.
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+# Benchmarking. Default features off: the plotting and the parallel sampler pull in a great deal
+# for a number this does not need prettier.
+criterion = { version = "0.5", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -9,16 +9,18 @@
 //! owns. Executing them is the engine's business (Phase 5c); this phase settles *which* body
 //! runs.
 
+use std::collections::HashMap;
+
 use xylograph_core::error::{Error, ErrorKind, Result};
 use xylograph_core::uri;
 use xylograph_dom::{Document, NodeId, NodeType, build};
-use xylograph_xdm::{ExpandedName, Model};
+use xylograph_xdm::{ExpandedName, Model, NodeKind};
 use xylograph_xpath::{Namespaces, Variables};
 
 use crate::decimal::{Formats, Symbols};
 use crate::loader::{Loader, NoLoader};
 use crate::output::Output;
-use crate::pattern::{KeyTable, NoKeys, Pattern};
+use crate::pattern::{KeyTable, NoKeys, Pattern, Reach};
 
 /// The namespace that marks an element as an XSLT instruction rather than a result element.
 pub const XSLT_NAMESPACE: &str = "http://www.w3.org/1999/XSL/Transform";
@@ -65,6 +67,94 @@ pub struct Stylesheet {
   output: Output,
   /// The import precedence that set each `xsl:output` attribute, so a lower one cannot undo it.
   output_set: OutputPrecedence,
+  /// Which rules could possibly match a node, by what the node is. Built once, when compiling
+  /// has finished; see [`RuleIndex`].
+  index: RuleIndex,
+}
+
+/// The template rules grouped by what they can match, so that choosing one need not test them
+/// all.
+///
+/// Choosing a rule is the innermost loop of a transformation: it happens for every node the walk
+/// reaches. Testing every rule against every node makes the cost the product of the two, and a
+/// stylesheet's rules are mostly about elements of one name each — so nearly all of that work is
+/// spent proving that `match="footnote"` does not match a `<title>`. Measured before this
+/// existed, a 512-rule stylesheet took ten times as long over the same document as a five-rule
+/// one; the shape of a real stylesheet (DocBook's has thousands) makes that the difference
+/// between usable and not.
+///
+/// Each bucket holds indices into `templates`. A node is looked up in at most three of them —
+/// its own name, the kind-wide bucket, and the ones that match anything — and the rules found
+/// are then tested exactly as before. The index only rules candidates *out*; every answer it
+/// leads to is one the exhaustive scan would have given, which is what
+/// `the_index_chooses_what_the_exhaustive_scan_would` checks.
+#[derive(Debug, Default)]
+struct RuleIndex {
+  /// By the expanded name of the element a rule requires.
+  elements: HashMap<(Option<String>, String), Vec<usize>>,
+  /// By the expanded name of the attribute a rule requires.
+  attributes: HashMap<(Option<String>, String), Vec<usize>>,
+  /// Rules that take any element, however named.
+  any_element: Vec<usize>,
+  /// Rules that take any attribute.
+  any_attribute: Vec<usize>,
+  text: Vec<usize>,
+  comment: Vec<usize>,
+  processing_instruction: Vec<usize>,
+  root: Vec<usize>,
+  /// Rules whose reach the text does not settle — `node()`, or an `id()`/`key()` anchor — which
+  /// are tested for every node.
+  anything: Vec<usize>,
+}
+
+impl RuleIndex {
+  /// Files every rule under what it can match.
+  fn build(templates: &[Template]) -> Self {
+    let mut index = Self::default();
+    for (position, template) in templates.iter().enumerate() {
+      let Some(pattern) = &template.pattern else { continue };
+      let alternative = &pattern.alternatives()[template.alternative];
+      match alternative.reach(&template.namespaces) {
+        Reach::Element { namespace, local } => index.elements.entry((namespace, local)).or_default().push(position),
+        Reach::Attribute { namespace, local } => {
+          index.attributes.entry((namespace, local)).or_default().push(position);
+        }
+        Reach::AnyElement => index.any_element.push(position),
+        Reach::AnyAttribute => index.any_attribute.push(position),
+        Reach::Text => index.text.push(position),
+        Reach::Comment => index.comment.push(position),
+        Reach::ProcessingInstruction => index.processing_instruction.push(position),
+        Reach::Root => index.root.push(position),
+        Reach::Anything => index.anything.push(position),
+      }
+    }
+    index
+  }
+
+  /// The rules worth testing against a node: those whose reach includes what it is.
+  fn candidates<M: Model>(&self, model: &M, node: M::Node) -> [&[usize]; 3] {
+    let name = model.expanded_name(node).map(|name| (name.namespace, name.local));
+    let (specific, kind): (&[usize], &[usize]) = match model.kind(node) {
+      NodeKind::Element => (by_name(&self.elements, name.as_ref()), &self.any_element),
+      NodeKind::Attribute => (by_name(&self.attributes, name.as_ref()), &self.any_attribute),
+      NodeKind::Text => (&[], &self.text),
+      NodeKind::Comment => (&[], &self.comment),
+      NodeKind::ProcessingInstruction => (&[], &self.processing_instruction),
+      NodeKind::Root => (&[], &self.root),
+      // No pattern can match a namespace node — XSLT 1.0 §5.2 leaves them out of the patterns
+      // it defines — but a `node()` rule still has to be asked, which the last group does.
+      NodeKind::Namespace => (&[], &[]),
+    };
+    [specific, kind, &self.anything]
+  }
+}
+
+/// The rules filed under an expanded name, or none when the node has no name.
+fn by_name<'a>(
+  table: &'a HashMap<(Option<String>, String), Vec<usize>>,
+  name: Option<&(Option<String>, String)>,
+) -> &'a [usize] {
+  name.and_then(|name| table.get(name)).map_or(&[], Vec::as_slice)
 }
 
 /// Which import precedence set each attribute of [`Output`], for §16's merging.
@@ -296,6 +386,7 @@ impl Stylesheet {
       aliases: Vec::new(),
       output: Output::default(),
       output_set: OutputPrecedence::default(),
+      index: RuleIndex::default(),
     };
     let principal = stylesheet.load_module(source, system_id)?;
     let mut counter = 0;
@@ -305,6 +396,9 @@ impl Stylesheet {
     for (order, template) in stylesheet.templates.iter_mut().enumerate() {
       template.order = order;
     }
+    // Once, when every rule is known: a transformation asks which rules could match a node for
+    // every node it reaches, and answering that by scanning them all is the cost this removes.
+    stylesheet.index = RuleIndex::build(&stylesheet.templates);
     Ok(stylesheet)
   }
 
@@ -547,24 +641,30 @@ impl Stylesheet {
   ) -> Result<Option<&Template>> {
     let variables = Variables::new();
     let mut best: Option<&Template> = None;
-    for template in &self.templates {
-      if template.mode.as_deref() != mode {
-        continue;
-      }
-      if below.is_some_and(|below| template.precedence >= below) {
-        continue;
-      }
-      let Some(pattern) = &template.pattern else { continue };
-      let alternative = &pattern.alternatives()[template.alternative];
-      if !alternative.matches_using(model, node, &template.namespaces, &variables, keys)? {
-        continue;
-      }
-      let better = match best {
-        None => true,
-        Some(current) => template.rank() > current.rank(),
-      };
-      if better {
-        best = Some(template);
+    // Only the rules that could match what this node is; see `RuleIndex`. The best is chosen by
+    // rank, which is a total order and does not depend on the order they are seen in, so
+    // visiting them grouped gives the same answer as visiting them all in declaration order.
+    for group in self.index.candidates(model, node) {
+      for &position in group {
+        let template = &self.templates[position];
+        if template.mode.as_deref() != mode {
+          continue;
+        }
+        if below.is_some_and(|below| template.precedence >= below) {
+          continue;
+        }
+        let Some(pattern) = &template.pattern else { continue };
+        let alternative = &pattern.alternatives()[template.alternative];
+        if !alternative.matches_using(model, node, &template.namespaces, &variables, keys)? {
+          continue;
+        }
+        let better = match best {
+          None => true,
+          Some(current) => template.rank() > current.rank(),
+        };
+        if better {
+          best = Some(template);
+        }
       }
     }
     Ok(best)
@@ -1240,4 +1340,117 @@ pub(crate) fn default_namespace(document: &Document, element: NodeId) -> Option<
 
 fn xslt_error(message: impl Into<String>) -> Error {
   Error::new(ErrorKind::Xslt, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use xylograph_xdm::DomModel;
+
+  /// The rule the exhaustive scan would choose: every rule tested, in declaration order.
+  ///
+  /// This is what [`Stylesheet::best_template`] did before the index, kept here so the two can
+  /// be compared. An index is only ever allowed to make the same choice faster.
+  fn exhaustively<'a, M: Model>(
+    stylesheet: &'a Stylesheet,
+    model: &M,
+    node: M::Node,
+    mode: Option<&str>,
+  ) -> Option<&'a Template> {
+    let variables = Variables::new();
+    let mut best: Option<&Template> = None;
+    for template in &stylesheet.templates {
+      if template.mode.as_deref() != mode {
+        continue;
+      }
+      let Some(pattern) = &template.pattern else { continue };
+      let alternative = &pattern.alternatives()[template.alternative];
+      if !alternative.matches_with(model, node, &template.namespaces, &variables).expect("matches") {
+        continue;
+      }
+      if best.is_none_or(|current| template.rank() > current.rank()) {
+        best = Some(template);
+      }
+    }
+    best
+  }
+
+  /// Every node of a tree, in document order.
+  fn every_node<M: Model>(model: &M, node: M::Node, into: &mut Vec<M::Node>) {
+    into.push(node);
+    for attribute in model.attributes(node) {
+      into.push(attribute);
+    }
+    for child in model.children(node) {
+      every_node(model, child, into);
+    }
+  }
+
+  #[test]
+  fn the_index_chooses_what_the_exhaustive_scan_would() {
+    // One rule of every shape the index files differently, so that each bucket is used and each
+    // is checked against the answer the scan gives.
+    let stylesheet = Stylesheet::compile(
+      br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:p="urn:p">
+            <xsl:template match="/"/>
+            <xsl:template match="a"/>
+            <xsl:template match="a/b" priority="3"/>
+            <xsl:template match="b|c"/>
+            <xsl:template match="*"/>
+            <xsl:template match="p:d"/>
+            <xsl:template match="p:*"/>
+            <xsl:template match="@k"/>
+            <xsl:template match="@*"/>
+            <xsl:template match="text()"/>
+            <xsl:template match="comment()"/>
+            <xsl:template match="processing-instruction()"/>
+            <xsl:template match="processing-instruction('pi')"/>
+            <xsl:template match="node()"/>
+            <xsl:template match="a" mode="m"/>
+            <xsl:template match="node()" mode="m"/>
+            <xsl:template match="unbound:x"/>
+          </xsl:stylesheet>"#,
+      "file:///s.xsl",
+    )
+    .expect("compiles");
+
+    let document = build::parse(
+      br#"<r xmlns:p="urn:p" k="v" j="w"><a><b/><c>text</c></a><p:d/><!--c--><?pi data?><?other d?></r>"#.as_slice(),
+    )
+    .expect("well-formed");
+    let model = DomModel::new(&document);
+
+    let mut nodes = Vec::new();
+    every_node(&model, model.root_node(), &mut nodes);
+    assert!(nodes.len() > 10, "the document should reach every bucket");
+
+    for node in nodes {
+      for mode in [None, Some("m")] {
+        let indexed = stylesheet.template_for(&model, node, mode).expect("matches");
+        let scanned = exhaustively(&stylesheet, &model, node, mode);
+        assert_eq!(
+          indexed.map(Template::element),
+          scanned.map(Template::element),
+          "the index and the scan disagree for {:?} in mode {mode:?}",
+          model.expanded_name(node)
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn a_rule_whose_prefix_is_unbound_is_still_tested() {
+    // `match="unbound:x"` cannot be filed under a name, since nothing says what the prefix
+    // means. Filing it nowhere would make it silently unreachable; it goes in the bucket that
+    // is tested for everything, where it fails honestly.
+    let stylesheet = Stylesheet::compile(
+      br#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+            <xsl:template match="unbound:x"/>
+          </xsl:stylesheet>"#,
+      "file:///s.xsl",
+    )
+    .expect("compiles");
+    assert_eq!(stylesheet.index.anything.len(), 1, "an unresolvable rule is tested for every node");
+    assert!(stylesheet.index.elements.is_empty());
+  }
 }
