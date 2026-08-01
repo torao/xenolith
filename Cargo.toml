@@ -13,7 +13,12 @@ rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/torao/xylogue"
 authors = ["TAKAMI Torao"]
-keywords = ["xml", "xpath", "xslt", "dom"]
+# crates.io allows five keywords, and its search already reads the description — so these are
+# spent on the terms that earn a listing page of their own rather than on repeating the blurb.
+# `dom` is deliberately absent: that page is front-end crates, and "xml dom" finds us anyway.
+keywords = ["xml", "xslt", "xpath", "dtd", "sax"]
+# The default for every crate here. A category is a claim about what a crate *is*, so the two
+# narrower ones are set by the crates they are true of rather than inherited by all thirteen.
 categories = ["parser-implementations", "text-processing"]
 
 [workspace.dependencies]

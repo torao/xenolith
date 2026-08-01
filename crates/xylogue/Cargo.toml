@@ -8,7 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 keywords.workspace = true
-categories.workspace = true
+# The facade is the whole of it, so it is the one crate every category is true of: it decodes
+# character encodings, and XSLT is a template language — a listing of 773 crates where a native
+# Rust XSLT processor is worth being visible.
+categories = ["parser-implementations", "text-processing", "encoding", "template-engine"]
 
 [features]
 default = ["encodings", "parse", "icu", "exslt"]

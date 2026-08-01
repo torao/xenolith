@@ -8,7 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 keywords.workspace = true
-categories.workspace = true
+# Character decoding — sniffing an encoding and turning bytes into characters — lives here.
+categories = ["encoding", "parser-implementations", "text-processing"]
 
 [features]
 default = ["encodings"]

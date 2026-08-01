@@ -8,7 +8,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 keywords.workspace = true
-categories.workspace = true
+# A stylesheet is a template, and this is the engine that runs one.
+categories = ["template-engine", "text-processing", "parser-implementations"]
 
 [features]
 default = ["icu"]
