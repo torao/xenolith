@@ -145,6 +145,16 @@ impl Parser<'_> {
     } else {
       return Ok(filter);
     };
+    // `(P)/Q` walks Q from each node P yields, which is what `P/Q` does — so when the
+    // parenthesised part is itself a location path, its steps are spliced in rather than left
+    // wrapped. Otherwise one expression would have two shapes in the tree, and printing the
+    // wrapped one gives the text that parses to the flat one. A filter (`(P)[1]/Q`) is not
+    // spliced: there the predicate applies to the whole node-set, which is a different question.
+    if let Expr::Path(inner) = filter {
+      let mut spliced = inner.steps;
+      spliced.extend(steps);
+      return Ok(Expr::Path(Path { start: inner.start, steps: spliced }));
+    }
     Ok(Expr::Path(Path { start: PathStart::Expr(Box::new(filter)), steps }))
   }
 

@@ -122,10 +122,16 @@ fn a_filter_expression_may_carry_predicates_and_a_path() {
   assert_eq!(tree("(a | b)[1]"), "(child::a | child::b)[1]");
   assert_eq!(tree("$x/a"), "$x/child::a");
   assert_eq!(tree("id('a')//b"), "id('a')/descendant-or-self::node()/child::b");
-  // A parenthesised root prints as `/`, and the separator that follows would make `//` — the
-  // abbreviation for something else entirely. The parentheses stay so that it does not.
-  assert_eq!(tree("(/)//b"), "(/)/descendant-or-self::node()/child::b");
-  assert_eq!(tree("(/)/b"), "(/)/child::b");
+  // Parentheses around a location path that a path continues from say nothing: `(P)/Q` walks Q
+  // from each node P yields, which is what `P/Q` does. So the steps are spliced in and the two
+  // spellings become one tree, rather than two that print to each other's text.
+  assert_eq!(tree("(/)//b"), "/descendant-or-self::node()/child::b");
+  assert_eq!(tree("(/)/b"), "/child::b");
+  assert_eq!(tree("(/..)/b"), "/parent::node()/child::b");
+  assert_eq!(tree("(a/b)/c"), "child::a/child::b/child::c");
+  // A filter is not spliced: there the predicate applies to the whole node-set, and
+  // `(a)[1]/b` asks something `a[1]/b` does not.
+  assert_eq!(tree("(a)[1]/b"), "(child::a)[1]/child::b");
 }
 
 #[test]
