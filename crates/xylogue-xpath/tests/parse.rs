@@ -118,6 +118,10 @@ fn a_filter_expression_may_carry_predicates_and_a_path() {
   assert_eq!(tree("(a | b)[1]"), "(child::a | child::b)[1]");
   assert_eq!(tree("$x/a"), "$x/child::a");
   assert_eq!(tree("id('a')//b"), "id('a')/descendant-or-self::node()/child::b");
+  // A parenthesised root prints as `/`, and the separator that follows would make `//` — the
+  // abbreviation for something else entirely. The parentheses stay so that it does not.
+  assert_eq!(tree("(/)//b"), "(/)/descendant-or-self::node()/child::b");
+  assert_eq!(tree("(/)/b"), "(/)/child::b");
 }
 
 #[test]

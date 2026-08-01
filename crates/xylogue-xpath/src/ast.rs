@@ -196,7 +196,20 @@ impl fmt::Display for Path {
       PathStart::Root if self.steps.is_empty() => return f.write_str("/"),
       PathStart::Root => {}
       PathStart::Context => {}
-      PathStart::Expr(expr) => write!(f, "{expr}")?,
+      PathStart::Expr(expr) => {
+        // `(/)` prints as `/`, and the separator before the first step would then make `//` —
+        // which reads back as the abbreviation for `/descendant-or-self::node()/`, a different
+        // tree. A printer must not put two tokens together in a way that lexes as a third, so
+        // the parentheses are kept wherever the start's own text would touch the separator.
+        // The test is on the text rather than on which shapes can end in a slash, because that
+        // is the question this got wrong once already.
+        let printed = expr.to_string();
+        if printed.ends_with('/') {
+          write!(f, "({printed})")?;
+        } else {
+          f.write_str(&printed)?;
+        }
+      }
     }
     for (index, step) in self.steps.iter().enumerate() {
       let separator = index > 0 || !matches!(self.start, PathStart::Context);
