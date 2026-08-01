@@ -4,5 +4,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-  xylograph_fuzz::validate_document(data);
+  xylogue_fuzz::validate_document(data);
 });

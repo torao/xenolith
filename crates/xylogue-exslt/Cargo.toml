@@ -1,0 +1,46 @@
+[package]
+name = "xylogue-exslt"
+description = "EXSLT extension functions for xylogue's XSLT 1.0 engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["common", "dates", "math", "regexp", "sets", "strings"]
+# http://exslt.org/common — object-type(), and node-set() when the engine can adopt a fragment.
+common = ["_module"]
+# http://exslt.org/math — the arithmetic XPath 1.0 leaves out.
+math = ["_module"]
+# http://exslt.org/dates-and-times — reading a date or a time apart.
+dates = ["_module"]
+# http://exslt.org/sets — node-set operations beyond union.
+sets = ["_module"]
+# http://exslt.org/strings — string handling beyond substring-before.
+strings = ["_module"]
+# http://exslt.org/regular-expressions — testing, matching and replacing with a pattern.
+regexp = ["_module", "dep:regex"]
+# Internal, turned on by every module above. A build with no module at all is legitimate, and
+# this is what tells the shared helpers whether anything uses them; naming every module in a
+# `cfg(any(…))` instead would need editing in several places each time one is added.
+_module = []
+
+[dependencies]
+xylogue-core = { workspace = true }
+xylogue-dom = { workspace = true }
+xylogue-xdm = { workspace = true }
+xylogue-xpath = { workspace = true }
+# For DocumentSource: str:tokenize and str:split answer with nodes, and nodes have to go
+# somewhere the model can read them.
+xylogue-xslt = { workspace = true }
+regex = { workspace = true, optional = true }
+
+[dev-dependencies]
+xylogue-dom = { workspace = true, features = ["parse"] }
+
+[lints]
+workspace = true

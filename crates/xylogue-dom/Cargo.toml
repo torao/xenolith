@@ -1,0 +1,29 @@
+[package]
+name = "xylogue-dom"
+description = "A DOM tree for xylogue: an arena of nodes with a W3C-shaped, Rust-idiomatic API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Build a DOM from parsed XML: the `build` module and the parser dependency it needs. Turns on
+# the parser's XML Base and xml:id so the tree carries base URIs and marked IDs.
+parse = ["dep:xylogue-parser", "xylogue-parser/xml-base", "xylogue-parser/xml-id"]
+# Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1 in the builder (only with `parse`).
+encodings = ["xylogue-parser?/encodings"]
+
+[dependencies]
+xylogue-core = { workspace = true }
+xylogue-parser = { workspace = true, optional = true }
+
+[dev-dependencies]
+xylogue-parser = { workspace = true, features = ["encodings", "xml-base", "xml-id"] }
+
+[lints]
+workspace = true

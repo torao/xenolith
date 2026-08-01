@@ -91,88 +91,88 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "xylograph-core"
+name = "xylogue-core"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
-name = "xylograph-dom"
+name = "xylogue-dom"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-parser",
+ "xylogue-core",
+ "xylogue-parser",
 ]
 
 [[package]]
-name = "xylograph-fuzz"
+name = "xylogue-fuzz"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
- "xylograph-parser",
- "xylograph-serialize",
- "xylograph-validate",
- "xylograph-xdm",
- "xylograph-xpath",
- "xylograph-xslt",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-parser",
+ "xylogue-serialize",
+ "xylogue-validate",
+ "xylogue-xdm",
+ "xylogue-xpath",
+ "xylogue-xslt",
 ]
 
 [[package]]
-name = "xylograph-fuzz-targets"
+name = "xylogue-fuzz-targets"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "xylograph-fuzz",
+ "xylogue-fuzz",
 ]
 
 [[package]]
-name = "xylograph-parser"
+name = "xylogue-parser"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
+ "xylogue-core",
 ]
 
 [[package]]
-name = "xylograph-serialize"
+name = "xylogue-serialize"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
+ "xylogue-core",
+ "xylogue-dom",
 ]
 
 [[package]]
-name = "xylograph-validate"
+name = "xylogue-validate"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-parser",
+ "xylogue-core",
+ "xylogue-parser",
 ]
 
 [[package]]
-name = "xylograph-xdm"
+name = "xylogue-xdm"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
+ "xylogue-core",
+ "xylogue-dom",
 ]
 
 [[package]]
-name = "xylograph-xpath"
+name = "xylogue-xpath"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-xdm",
+ "xylogue-core",
+ "xylogue-xdm",
 ]
 
 [[package]]
-name = "xylograph-xslt"
+name = "xylogue-xslt"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
- "xylograph-core",
- "xylograph-dom",
- "xylograph-xdm",
- "xylograph-xpath",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-xdm",
+ "xylogue-xpath",
 ]

@@ -1,5 +1,5 @@
 [package]
-name = "xylograph-fuzz-targets"
+name = "xylogue-fuzz-targets"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -11,7 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 # The properties live in the workspace so that `cargo test` checks them too; these targets only
 # feed them bytes. See that crate's documentation for what each one asserts.
-xylograph-fuzz = { path = "../crates/xylograph-fuzz" }
+xylogue-fuzz = { path = "../crates/xylogue-fuzz" }
 
 [[bin]]
 name = "parse_document"

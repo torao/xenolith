@@ -48,38 +48,38 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # `xylo` and `xylograph-fuzz` are left out of these two: both name the library's features
+      # `xylogue-cli` and `xylogue-fuzz` are left out of these two: both name the library's features
       # outright, so building them alongside would unify the features back on and the minimal
       # configuration — the thing this job exists to build — would never be built at all.
-      - run: cargo test --workspace --exclude xylo --exclude xylograph-fuzz --no-default-features
-      - run: cargo test --workspace --exclude xylo --exclude xylograph-fuzz --no-default-features --features encodings
-      - run: cargo test -p xylograph-parser --no-default-features --features tokio
+      - run: cargo test --workspace --exclude xylogue-cli --exclude xylogue-fuzz --no-default-features
+      - run: cargo test --workspace --exclude xylogue-cli --exclude xylogue-fuzz --no-default-features --features encodings
+      - run: cargo test -p xylogue-parser --no-default-features --features tokio
       # Each optional layer built on its own, so a feature that only compiles alongside another
       # does not slip through the all-features and no-features runs.
-      - run: cargo test -p xylograph-parser --no-default-features --features xml-base
-      - run: cargo test -p xylograph-parser --no-default-features --features xml-id
-      - run: cargo test -p xylograph-validate --no-default-features --features xml-id
-      - run: cargo test -p xylograph-dom --no-default-features --features parse
-      - run: cargo test -p xylograph-xinclude --no-default-features --features encodings
+      - run: cargo test -p xylogue-parser --no-default-features --features xml-base
+      - run: cargo test -p xylogue-parser --no-default-features --features xml-id
+      - run: cargo test -p xylogue-validate --no-default-features --features xml-id
+      - run: cargo test -p xylogue-dom --no-default-features --features parse
+      - run: cargo test -p xylogue-xinclude --no-default-features --features encodings
       # `icu` changes what xsl:sort *answers*, not just how fast it is, so the build without it
       # is exercised rather than assumed to behave the same.
-      - run: cargo test -p xylograph-xslt --no-default-features
-      - run: cargo test -p xylograph-xslt --no-default-features --features icu
+      - run: cargo test -p xylogue-xslt --no-default-features
+      - run: cargo test -p xylogue-xslt --no-default-features --features icu
       # Without `encodings`, an xsl:output encoding other than UTF-8 must be refused by name
       # rather than written wrongly, which only this build exercises.
-      - run: cargo test -p xylograph-xslt --no-default-features --features encodings
+      - run: cargo test -p xylogue-xslt --no-default-features --features encodings
       # Each EXSLT module on its own, so that `function-available()` agreeing with the features
       # is checked in the builds where they differ, not only where they are all on.
-      - run: cargo test -p xylograph-exslt --no-default-features
-      - run: cargo test -p xylograph-exslt --no-default-features --features common
-      - run: cargo test -p xylograph-exslt --no-default-features --features math
-      - run: cargo test -p xylograph-exslt --no-default-features --features sets
-      - run: cargo test -p xylograph-exslt --no-default-features --features strings
-      - run: cargo test -p xylograph-exslt --no-default-features --features dates
-      - run: cargo test -p xylograph-exslt --no-default-features --features regexp
+      - run: cargo test -p xylogue-exslt --no-default-features
+      - run: cargo test -p xylogue-exslt --no-default-features --features common
+      - run: cargo test -p xylogue-exslt --no-default-features --features math
+      - run: cargo test -p xylogue-exslt --no-default-features --features sets
+      - run: cargo test -p xylogue-exslt --no-default-features --features strings
+      - run: cargo test -p xylogue-exslt --no-default-features --features dates
+      - run: cargo test -p xylogue-exslt --no-default-features --features regexp
       # The report of what the specifications leave open is worth seeing in the build where the
       # collation answer is the other one.
-      - run: cargo test -p xylograph --no-default-features --features parse --test behaviour -- --nocapture
+      - run: cargo test -p xylogue --no-default-features --features parse --test behaviour -- --nocapture
 
   conformance:
     # The W3C suite is thousands of files and is not vendored; it is fetched here so the
@@ -96,17 +96,17 @@ jobs:
           curl -sSfL -o xmlts.tar.gz https://www.w3.org/XML/Test/xmlts20130923.tar.gz
           tar xf xmlts.tar.gz
       - name: Parser conformance (well-formedness)
-        run: cargo test -p xylograph-parser --test conformance -- --nocapture
+        run: cargo test -p xylogue-parser --test conformance -- --nocapture
         env:
           XMLCONF: ${{ github.workspace }}/xmlconf
       - name: Validator conformance (validity)
-        run: cargo test -p xylograph-validate --all-features --test conformance -- --nocapture
+        run: cargo test -p xylogue-validate --all-features --test conformance -- --nocapture
         env:
           XMLCONF: ${{ github.workspace }}/xmlconf
       # Printed on every run so that what the specifications leave open, and what this build
       # answers, is on the record beside the conformance figures rather than only in prose.
       - name: Report the behaviour the specifications leave open
-        run: cargo test -p xylograph --all-features --test behaviour -- --nocapture
+        run: cargo test -p xylogue --all-features --test behaviour -- --nocapture
 
   differential:
     # Java is the implementation this library sets out to agree with, so the comparison against
@@ -124,14 +124,14 @@ jobs:
           java-version: "21"
       # Printed, so that the count compared and any recorded divergence are on the record beside
       # the conformance figures rather than only in prose.
-      - run: cargo test -p xylograph-xpath --test differential -- --nocapture
+      - run: cargo test -p xylogue-xpath --test differential -- --nocapture
         env:
-          XYLO_JAVA: java
+          XYLOGUE_JAVA: java
 
   fuzz:
     # A short run on every push. It will not exhaust anything in a minute a target; what it is
     # for is that the targets still build and that an obvious crash cannot land unnoticed. The
-    # properties themselves are checked on every platform by `crates/xylograph-fuzz`'s corpus
+    # properties themselves are checked on every platform by `crates/xylogue-fuzz`'s corpus
     # test, which needs no nightly.
     name: fuzzing (short run)
     runs-on: ubuntu-latest

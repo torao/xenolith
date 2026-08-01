@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 # The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
 # rather than by every `cargo build --workspace`. The properties they check are in
-# `crates/xylograph-fuzz`, which is a member and is tested like everything else.
+# `crates/xylogue-fuzz`, which is a member and is tested like everything else.
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -11,7 +11,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/torao/xylograph"
+repository = "https://github.com/torao/xylogue"
 authors = ["TAKAMI Torao"]
 keywords = ["xml", "xpath", "xslt", "dom"]
 categories = ["parser-implementations", "text-processing"]
@@ -19,18 +19,18 @@ categories = ["parser-implementations", "text-processing"]
 [workspace.dependencies]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
-xylograph-core = { version = "0.0.0", path = "crates/xylograph-core", default-features = false }
-xylograph-parser = { version = "0.0.0", path = "crates/xylograph-parser", default-features = false }
-xylograph-validate = { version = "0.0.0", path = "crates/xylograph-validate", default-features = false }
-xylograph-dom = { version = "0.0.0", path = "crates/xylograph-dom", default-features = false }
-xylograph-serialize = { version = "0.0.0", path = "crates/xylograph-serialize", default-features = false }
-xylograph-xinclude = { version = "0.0.0", path = "crates/xylograph-xinclude", default-features = false }
-xylograph-xdm = { version = "0.0.0", path = "crates/xylograph-xdm", default-features = false }
-xylograph-xpath = { version = "0.0.0", path = "crates/xylograph-xpath", default-features = false }
-xylograph-xslt = { version = "0.0.0", path = "crates/xylograph-xslt", default-features = false }
-xylograph-exslt = { version = "0.0.0", path = "crates/xylograph-exslt", default-features = false }
-xylograph = { version = "0.0.0", path = "crates/xylograph", default-features = false }
-# Argument parsing for the `xylo` binary. No library crate depends on it.
+xylogue-core = { version = "0.0.0", path = "crates/xylogue-core", default-features = false }
+xylogue-parser = { version = "0.0.0", path = "crates/xylogue-parser", default-features = false }
+xylogue-validate = { version = "0.0.0", path = "crates/xylogue-validate", default-features = false }
+xylogue-dom = { version = "0.0.0", path = "crates/xylogue-dom", default-features = false }
+xylogue-serialize = { version = "0.0.0", path = "crates/xylogue-serialize", default-features = false }
+xylogue-xinclude = { version = "0.0.0", path = "crates/xylogue-xinclude", default-features = false }
+xylogue-xdm = { version = "0.0.0", path = "crates/xylogue-xdm", default-features = false }
+xylogue-xpath = { version = "0.0.0", path = "crates/xylogue-xpath", default-features = false }
+xylogue-xslt = { version = "0.0.0", path = "crates/xylogue-xslt", default-features = false }
+xylogue-exslt = { version = "0.0.0", path = "crates/xylogue-exslt", default-features = false }
+xylogue = { version = "0.0.0", path = "crates/xylogue", default-features = false }
+# Argument parsing for the `xylogue` binary. No library crate depends on it.
 clap = { version = "4", features = ["derive", "wrap_help"] }
 encoding_rs = "0.8"
 # The collation `xsl:sort` needs for a language other than code-point order (ROADMAP decision 2).

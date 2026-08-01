@@ -1,0 +1,33 @@
+[package]
+name = "xylogue-parser"
+description = "XML 1.0 parser for xylogue: character streams, entities, and the sans-I/O parser core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
+encodings = ["xylogue-core/encodings"]
+# An asynchronous driver, `AsyncReader`, over tokio's AsyncRead.
+tokio = ["dep:tokio"]
+# Per-node base URI computation from xml:base and the entity's system id (XML Base).
+xml-base = []
+# xml:id as an ID-typed attribute: tokenized normalization and the xml:id accessor.
+xml-id = []
+
+[dependencies]
+xylogue-core = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tokio-test = "0.4"
+
+[lints]
+workspace = true

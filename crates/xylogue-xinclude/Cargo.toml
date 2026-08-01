@@ -1,0 +1,26 @@
+[package]
+name = "xylogue-xinclude"
+description = "XInclude 1.0 processing for xylogue: a DOM post-processing pass that expands xi:include"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Decode included text resources in encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
+encodings = ["xylogue-core/encodings", "xylogue-dom/encodings"]
+
+[dependencies]
+xylogue-core = { workspace = true }
+xylogue-dom = { workspace = true, features = ["parse"] }
+
+[dev-dependencies]
+xylogue-serialize = { workspace = true }
+
+[lints]
+workspace = true

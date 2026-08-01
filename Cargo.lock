@@ -1007,137 +1007,137 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
-name = "xylo"
-version = "0.0.0"
-dependencies = [
- "clap",
- "xylograph",
- "xylograph-validate",
-]
-
-[[package]]
-name = "xylograph"
+name = "xylogue"
 version = "0.0.0"
 dependencies = [
  "criterion",
- "xylograph-core",
- "xylograph-dom",
- "xylograph-exslt",
- "xylograph-parser",
- "xylograph-serialize",
- "xylograph-validate",
- "xylograph-xdm",
- "xylograph-xinclude",
- "xylograph-xpath",
- "xylograph-xslt",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-exslt",
+ "xylogue-parser",
+ "xylogue-serialize",
+ "xylogue-validate",
+ "xylogue-xdm",
+ "xylogue-xinclude",
+ "xylogue-xpath",
+ "xylogue-xslt",
 ]
 
 [[package]]
-name = "xylograph-core"
+name = "xylogue-cli"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "xylogue",
+ "xylogue-validate",
+]
+
+[[package]]
+name = "xylogue-core"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
-name = "xylograph-dom"
+name = "xylogue-dom"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-parser",
+ "xylogue-core",
+ "xylogue-parser",
 ]
 
 [[package]]
-name = "xylograph-exslt"
+name = "xylogue-exslt"
 version = "0.0.0"
 dependencies = [
  "regex",
- "xylograph-core",
- "xylograph-dom",
- "xylograph-xdm",
- "xylograph-xpath",
- "xylograph-xslt",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-xdm",
+ "xylogue-xpath",
+ "xylogue-xslt",
 ]
 
 [[package]]
-name = "xylograph-fuzz"
+name = "xylogue-fuzz"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
- "xylograph-parser",
- "xylograph-serialize",
- "xylograph-validate",
- "xylograph-xdm",
- "xylograph-xpath",
- "xylograph-xslt",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-parser",
+ "xylogue-serialize",
+ "xylogue-validate",
+ "xylogue-xdm",
+ "xylogue-xpath",
+ "xylogue-xslt",
 ]
 
 [[package]]
-name = "xylograph-parser"
+name = "xylogue-parser"
 version = "0.0.0"
 dependencies = [
  "tokio",
  "tokio-test",
- "xylograph-core",
+ "xylogue-core",
 ]
 
 [[package]]
-name = "xylograph-serialize"
+name = "xylogue-serialize"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
+ "xylogue-core",
+ "xylogue-dom",
 ]
 
 [[package]]
-name = "xylograph-validate"
+name = "xylogue-validate"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-parser",
+ "xylogue-core",
+ "xylogue-parser",
 ]
 
 [[package]]
-name = "xylograph-xdm"
+name = "xylogue-xdm"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
+ "xylogue-core",
+ "xylogue-dom",
 ]
 
 [[package]]
-name = "xylograph-xinclude"
+name = "xylogue-xinclude"
 version = "0.0.0"
 dependencies = [
- "xylograph-core",
- "xylograph-dom",
- "xylograph-serialize",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-serialize",
 ]
 
 [[package]]
-name = "xylograph-xpath"
+name = "xylogue-xpath"
 version = "0.0.0"
 dependencies = [
  "proptest",
- "xylograph-core",
- "xylograph-dom",
- "xylograph-xdm",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-xdm",
 ]
 
 [[package]]
-name = "xylograph-xslt"
+name = "xylogue-xslt"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
  "icu_collator",
  "icu_locale_core",
- "xylograph-core",
- "xylograph-dom",
- "xylograph-parser",
- "xylograph-serialize",
- "xylograph-xdm",
- "xylograph-xpath",
+ "xylogue-core",
+ "xylogue-dom",
+ "xylogue-parser",
+ "xylogue-serialize",
+ "xylogue-xdm",
+ "xylogue-xpath",
 ]
 
 [[package]]

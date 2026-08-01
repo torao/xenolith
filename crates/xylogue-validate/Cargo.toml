@@ -1,0 +1,27 @@
+[package]
+name = "xylogue-validate"
+description = "Validation for xylogue: a schema-agnostic Validator interface, with a DTD validator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+encodings = ["xylogue-parser/encodings"]
+# Check xml:id attributes: a valid NCName, unique in the document (reuses the ID machinery).
+xml-id = ["xylogue-parser/xml-id"]
+
+[dependencies]
+xylogue-core = { workspace = true }
+xylogue-parser = { workspace = true }
+
+[dev-dependencies]
+xylogue-parser = { workspace = true, features = ["encodings"] }
+
+[lints]
+workspace = true
