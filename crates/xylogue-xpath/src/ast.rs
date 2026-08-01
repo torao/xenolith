@@ -196,20 +196,10 @@ impl fmt::Display for Path {
       PathStart::Root if self.steps.is_empty() => return f.write_str("/"),
       PathStart::Root => {}
       PathStart::Context => {}
-      PathStart::Expr(expr) => {
-        // `(/)` prints as `/`, and the separator before the first step would then make `//` —
-        // which reads back as the abbreviation for `/descendant-or-self::node()/`, a different
-        // tree. A printer must not put two tokens together in a way that lexes as a third, so
-        // the parentheses are kept wherever the start's own text would touch the separator.
-        // The test is on the text rather than on which shapes can end in a slash, because that
-        // is the question this got wrong once already.
-        let printed = expr.to_string();
-        if printed.ends_with('/') {
-          write!(f, "({printed})")?;
-        } else {
-          f.write_str(&printed)?;
-        }
-      }
+      // `(/)` prints as `/`, and the separator before the first step would then make `//` —
+      // which reads back as the abbreviation for `/descendant-or-self::node()/`, a different
+      // tree. See `embedded`, which is the same guard every other embedding site uses.
+      PathStart::Expr(expr) => f.write_str(&embedded(expr))?,
     }
     for (index, step) in self.steps.iter().enumerate() {
       let separator = index > 0 || !matches!(self.start, PathStart::Context);
@@ -329,15 +319,32 @@ pub enum Expr {
   },
 }
 
+/// A subexpression's text, parenthesised where it could run into what is printed beside it.
+///
+/// XPath's lexer decides what `*`, `mod`, `div`, `and` and `or` mean from the token before them:
+/// after an operator they are name tests rather than operators, and `/` counts as an operator
+/// (XPath 1.0 §3.7). So an operand whose text ends with `/` — which only the root path does —
+/// changes the meaning of whatever is printed next to it: `(/) * b` printed as `/ * child::b`
+/// reads back as the path `/child::*` followed by a stray name.
+///
+/// Every place that embeds one expression in another goes through here rather than each judging
+/// for itself. The judgement is on the printed text rather than on which shapes can end in a
+/// slash, because deciding that by eye is what got this wrong twice: once for a path's starting
+/// point, and again for an operand and a filter.
+fn embedded(expr: &Expr) -> String {
+  let printed = expr.to_string();
+  if printed.ends_with('/') { format!("({printed})") } else { printed }
+}
+
 impl fmt::Display for Expr {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       // Parenthesized so the precedence the parser settled on is plain to see.
-      Expr::Binary { op, left, right } => write!(f, "({left} {op} {right})"),
-      Expr::Negate(expr) => write!(f, "-{expr}"),
+      Expr::Binary { op, left, right } => write!(f, "({} {op} {})", embedded(left), embedded(right)),
+      Expr::Negate(expr) => write!(f, "-{}", embedded(expr)),
       Expr::Path(path) => write!(f, "{path}"),
       Expr::Filter { expr, predicates } => {
-        write!(f, "{expr}")?;
+        f.write_str(&embedded(expr))?;
         for predicate in predicates {
           write!(f, "[{predicate}]")?;
         }

@@ -125,6 +125,33 @@ fn a_filter_expression_may_carry_predicates_and_a_path() {
 }
 
 #[test]
+fn the_root_survives_being_printed_beside_anything() {
+  // The root is the one expression whose text ends with an operator, and XPath's lexer reads
+  // `*`, `mod`, `div`, `and` and `or` as name tests when an operator precedes them — so `(/) * b`
+  // printed bare comes back as the path `/child::*` and a stray name. Every operator is tried
+  // rather than the few that were known to break, and both sides of each, so an operator added
+  // later is covered by a test nobody has to remember to extend.
+  let operators = ["*", "mod", "div", "and", "or", "|", "+", "-", "=", "!=", "<", "<=", ">", ">="];
+  let mut shapes: Vec<String> = Vec::new();
+  for operator in operators {
+    shapes.push(format!("(/) {operator} 1"));
+    shapes.push(format!("1 {operator} (/)"));
+    shapes.push(format!("(/) {operator} b"));
+  }
+  // And the other places one expression is printed inside another.
+  for shape in ["(/)[1]", "-(/)", "(/)/b", "(/)//b", "count((/))", "((/))*b"] {
+    shapes.push(shape.to_owned());
+  }
+
+  for shape in shapes {
+    let printed = tree(&shape);
+    let again = parse(&printed)
+      .unwrap_or_else(|error| panic!("{shape:?} printed as {printed:?}, which will not parse: {}", error.message()));
+    assert_eq!(printed, again.to_string(), "{shape:?} printed as {printed:?}, which parses to something else");
+  }
+}
+
+#[test]
 fn operator_names_are_names_where_a_name_belongs() {
   assert_eq!(tree("div"), "child::div", "a bare name, not the operator");
   assert_eq!(tree("child::div"), "child::div");
