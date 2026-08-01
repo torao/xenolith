@@ -59,6 +59,33 @@ fn rejects(xml: &str) -> String {
 }
 
 #[test]
+fn a_doctype_is_reported_before_the_root_element_whatever_precedes_it() {
+  // Whitespace before a `<!DOCTYPE>` used to hold it back — the text before a markup token is
+  // flushed first and the token interpreted on the next turn — and that path forgot to parse
+  // the DTD it had just set up. The DOCTYPE's own event was then left until after the next
+  // token had been scanned, so `Doctype` arrived *after* the root element's start tag.
+  //
+  // A newline between the XML declaration and the DOCTYPE is how most documents are written,
+  // and everything downstream believes the order it is given: the DTD validator, built when the
+  // DOCTYPE arrives, never saw the root element open and unbalanced its stack at the end tag.
+  let doctype = "<!DOCTYPE r [<!ELEMENT r (a)><!ELEMENT a EMPTY>]>";
+  let expected = [
+    EventKind::Doctype,
+    EventKind::StartElement,
+    EventKind::StartElement,
+    EventKind::EndElement,
+    EventKind::EndElement,
+  ];
+
+  for before in ["", "\n", "   ", "\n\n\n", "\t", "<?xml version=\"1.0\"?>\n", "<!--c-->\n", "\n<!--c-->\n"] {
+    let xml = format!("{before}{doctype}<r><a/></r>");
+    let found: Vec<EventKind> =
+      kinds(&xml).into_iter().filter(|kind| !matches!(kind, EventKind::XmlDeclaration | EventKind::Comment)).collect();
+    assert_eq!(found, expected, "for {before:?} before the DOCTYPE");
+  }
+}
+
+#[test]
 fn a_realistic_document() {
   let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!-- an ordinary document -->

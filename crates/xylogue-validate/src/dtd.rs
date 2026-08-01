@@ -177,7 +177,12 @@ impl Validator for DtdValidator {
     at: &Location,
     errors: &mut dyn ErrorListener,
   ) -> ControlFlow<()> {
-    let open = self.open.pop().expect("an element was closed that was never opened");
+    // A well-formed document never closes what it did not open, so this is only reachable from
+    // a caller driving the validator by hand with events of its own — and once, from a parser
+    // that reported the `Doctype` event after the root element's start tag, which built the
+    // validator too late to see it. Whichever it is, there is nothing to check and no reason to
+    // bring the process down over it.
+    let Some(open) = self.open.pop() else { return ControlFlow::Continue(()) };
     self.check_content(open.lexical, &open.children, pool, at, errors)
   }
 

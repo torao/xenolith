@@ -1,0 +1,4 @@
+
+
+
+<!DOCTYPE r [<!ELEMENT r (a)><!ENTITY e "x">]><r><E/></r>

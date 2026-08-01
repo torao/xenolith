@@ -388,6 +388,9 @@ impl Parser {
           self.kind = Some(kind);
           return Ok(Progress::Event(kind));
         }
+        if let Some(progress) = self.outstanding() {
+          return progress;
+        }
         continue;
       }
 
@@ -456,14 +459,29 @@ impl Parser {
         self.kind = Some(kind);
         return Ok(Progress::Event(kind));
       }
-      // A DOCTYPE was just read: parse its DTD, which may pause to fetch entities.
-      if self.dtd_active {
-        return self.drive_dtd();
-      }
-      if self.pending_entity.is_some() {
-        return Ok(Progress::NeedEntity);
+      if let Some(progress) = self.outstanding() {
+        return progress;
       }
     }
+  }
+
+  /// What is left to do once a token has been interpreted and yielded no event of its own: a
+  /// DTD waiting to be parsed, or an entity waiting to be fetched.
+  ///
+  /// Both ways into `interpret` have to ask. A token that arrives with text before it is held
+  /// back while that text is flushed and interpreted on the next turn of the loop, and when that
+  /// path did not ask, a `<!DOCTYPE>` written after so much as a newline had its DTD left
+  /// unparsed — so the next token was scanned first and the `Doctype` event came out *after* the
+  /// root element's start tag. Everything downstream believed it: a validator built when the
+  /// DOCTYPE arrived never saw the root element open, and unbalanced its stack on the way out.
+  fn outstanding(&mut self) -> Option<Result<Progress>> {
+    if self.dtd_active {
+      return Some(self.drive_dtd());
+    }
+    if self.pending_entity.is_some() {
+      return Some(Ok(Progress::NeedEntity));
+    }
+    None
   }
 
   /// Checks that the document is allowed to end here.
