@@ -90,7 +90,11 @@ fn operators_group_by_precedence() {
   assert_eq!(tree("1 = 2 or 3 != 4"), "((1 = 2) or (3 != 4))");
   assert_eq!(tree("1 < 2 = 3"), "((1 < 2) = 3)", "comparison binds tighter than equality");
   assert_eq!(tree("1 div 2 mod 3"), "((1 div 2) mod 3)");
-  assert_eq!(tree("-1 + 2"), "(-1 + 2)");
+  // A negation embedded in anything keeps its parentheses. It only has to where a union is the
+  // operator — unary minus binds looser than `|` and would otherwise swallow it — but this
+  // printer parenthesises every composite so that the parse it settled on is plain to see, and
+  // one rule that always holds is worth more here than a shorter line.
+  assert_eq!(tree("-1 + 2"), "((-1) + 2)");
   assert_eq!(tree("a | b | c"), "((child::a | child::b) | child::c)");
 }
 
@@ -143,11 +147,42 @@ fn the_root_survives_being_printed_beside_anything() {
     shapes.push(shape.to_owned());
   }
 
+  round_trips(&shapes);
+}
+
+#[test]
+fn printing_gives_back_the_same_tree_and_not_merely_the_same_text() {
+  // Where the printed form has to keep parentheses to mean what the tree means. Each of these
+  // was found by the fuzzer, one round after another, because the property being checked was
+  // that printing was *stable* rather than that it was *faithful* — a printer can be perfectly
+  // consistent about printing something that means a different thing.
+  let mut shapes: Vec<String> = Vec::new();
+
+  // Unary minus binds looser than union (§3.5), so `-a | b` is `-(a | b)`: a negation used as
+  // an operand of a union has to keep its parentheses, and a negative number is a negation too.
+  for left in ["-a", "-/a", "-1", "- -a"] {
+    shapes.push(format!("({left}) | b"));
+    shapes.push(format!("b | ({left})"));
+  }
+
+  // A predicate after a path binds to the path's last step. `(//a)[1]` is the first of all the
+  // `a`s and `//a[1]` is the first under each parent — different node-sets, not a nicety.
+  for inner in ["a", "//a", "a/b", "a|b", "$x", "id('a')", "1", "-a", "/"] {
+    shapes.push(format!("({inner})[1]"));
+    shapes.push(format!("({inner})[1][2]"));
+  }
+
+  round_trips(&shapes);
+}
+
+/// Every expression prints to text that parses back to the very same tree.
+fn round_trips(shapes: &[String]) {
   for shape in shapes {
-    let printed = tree(&shape);
+    let expression = parse(shape).unwrap_or_else(|error| panic!("{shape:?} does not parse: {}", error.message()));
+    let printed = expression.to_string();
     let again = parse(&printed)
       .unwrap_or_else(|error| panic!("{shape:?} printed as {printed:?}, which will not parse: {}", error.message()));
-    assert_eq!(printed, again.to_string(), "{shape:?} printed as {printed:?}, which parses to something else");
+    assert_eq!(again, expression, "{shape:?} printed as {printed:?}, which parses to a different tree");
   }
 }
 

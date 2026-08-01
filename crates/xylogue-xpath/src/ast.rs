@@ -319,21 +319,24 @@ pub enum Expr {
   },
 }
 
-/// A subexpression's text, parenthesised where it could run into what is printed beside it.
+/// A subexpression's text, parenthesised where it would not behave as one piece in context.
 ///
-/// XPath's lexer decides what `*`, `mod`, `div`, `and` and `or` mean from the token before them:
-/// after an operator they are name tests rather than operators, and `/` counts as an operator
-/// (XPath 1.0 §3.7). So an operand whose text ends with `/` — which only the root path does —
-/// changes the meaning of whatever is printed next to it: `(/) * b` printed as `/ * child::b`
-/// reads back as the path `/child::*` followed by a stray name.
+/// Two ways a subexpression fails to be an atom, and both are read off its printed text rather
+/// than off the shape it came from — deciding that by eye is what got this wrong three times
+/// running.
 ///
-/// Every place that embeds one expression in another goes through here rather than each judging
-/// for itself. The judgement is on the printed text rather than on which shapes can end in a
-/// slash, because deciding that by eye is what got this wrong twice: once for a path's starting
-/// point, and again for an operand and a filter.
+/// **It ends with `/`.** XPath's lexer decides what `*`, `mod`, `div`, `and` and `or` mean from
+/// the token before them: after an operator they are name tests rather than operators, and `/`
+/// counts as an operator (XPath 1.0 §3.7). Only the root path prints that way, and `(/) * b`
+/// printed bare as `/ * child::b` reads back as the path `/child::*` and a stray name.
+///
+/// **It begins with `-`.** Unary minus binds *looser* than union: §3.5's grammar has
+/// `UnaryExpr ::= UnionExpr | '-' UnaryExpr`, so the operand of a `-` may itself be a union and
+/// `-a | b` means `-(a | b)`. Printing `Union(Negate(a), b)` as `-child::a | child::b` therefore
+/// hands the union to the minus. A negated expression and a negative number both print this way.
 fn embedded(expr: &Expr) -> String {
   let printed = expr.to_string();
-  if printed.ends_with('/') { format!("({printed})") } else { printed }
+  if printed.ends_with('/') || printed.starts_with('-') { format!("({printed})") } else { printed }
 }
 
 impl fmt::Display for Expr {
@@ -344,7 +347,18 @@ impl fmt::Display for Expr {
       Expr::Negate(expr) => write!(f, "-{}", embedded(expr)),
       Expr::Path(path) => write!(f, "{path}"),
       Expr::Filter { expr, predicates } => {
-        f.write_str(&embedded(expr))?;
+        // A predicate written after a path binds to that path's last step, and the two are
+        // different questions: `(//a)[1]` takes the first of all the `a`s, `//a[1]` takes the
+        // first under each parent. So a path keeps its parentheses here even where `embedded`
+        // would let it through — this hazard is grammatical rather than lexical, and pretending
+        // one rule covers both would be tidier than it is true. Everything else that may carry
+        // a predicate — a variable, a call, a literal — already reads back as itself.
+        let path_absorbs_it = matches!(&**expr, Expr::Path(path) if !path.steps.is_empty());
+        if path_absorbs_it {
+          write!(f, "({expr})")?;
+        } else {
+          f.write_str(&embedded(expr))?;
+        }
         for predicate in predicates {
           write!(f, "[{predicate}]")?;
         }

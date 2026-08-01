@@ -281,11 +281,19 @@ impl Parser<'_> {
   // --- Primary expressions ------------------------------------------------------------------
 
   /// A primary expression with any predicates that filter it.
+  ///
+  /// Predicates on a filter apply left to right, each to what the one before it left, so
+  /// `((E)[1])[2]` and `(E)[1][2]` are the same expression — and are folded into one filter here
+  /// so that they are also the same tree. Without that, one expression would have two spellings
+  /// in the syntax tree, and printing either would give text that parses to the other one.
   fn filter(&mut self) -> Result<Expr> {
     let primary = self.primary()?;
     let predicates = self.predicates()?;
     if predicates.is_empty() {
       return Ok(primary);
+    }
+    if let Expr::Filter { expr, predicates: inner } = primary {
+      return Ok(Expr::Filter { expr, predicates: [inner, predicates].concat() });
     }
     Ok(Expr::Filter { expr: Box::new(primary), predicates })
   }

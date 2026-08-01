@@ -136,14 +136,21 @@ pub fn build_and_serialize(data: &[u8]) {
 
 /// Parses an XPath expression, prints it, and parses it again.
 ///
-/// The property: printing a tree gives text that parses to the same tree. The printed form is the
-/// unabbreviated one, so this also says that expanding `//`, `@` and the rest is faithful.
+/// The property: printing a tree gives text that parses back to **the same tree**. The printed
+/// form is the unabbreviated one, so this also says that expanding `//`, `@` and the rest is
+/// faithful.
+///
+/// It compares the trees rather than the printed text. Comparing the text asks only that the
+/// printer be self-consistent, which it can be while printing something that means a different
+/// thing — `(//a)[1]` printed as `//a[1]` is stable and selects a different node-set. Two
+/// findings hid behind the weaker form before it was corrected to the one this documentation had
+/// been claiming all along.
 pub fn compile_expression(text: &str) {
   let Ok(expression) = xylogue_xpath::parse(text) else { return };
   let printed = expression.to_string();
   let reparsed = xylogue_xpath::parse(&printed)
     .unwrap_or_else(|error| panic!("printing {text:?} gave {printed:?}, which will not parse: {}", error.message()));
-  assert_eq!(printed, reparsed.to_string(), "printing {text:?} is not stable");
+  assert_eq!(reparsed, expression, "printing {text:?} gave {printed:?}, which parses to a different tree");
 }
 
 /// Evaluates an expression over a fixed document.
