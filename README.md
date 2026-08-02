@@ -12,6 +12,10 @@ with the feature inventory and the design decisions.
 Coming from Java? [MIGRATING-FROM-JAVA.md](crates/xylogue/MIGRATING-FROM-JAVA.md) maps each
 JAXP API onto its counterpart here, and says where it deliberately differs.
 
+Working on the library itself? [DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md) is the orientation: what
+each crate owns, where to start reading, the invariants a change must not break, and how to run
+every check CI runs.
+
 ## Crates
 
 Depend on [`xylogue`](crates/xylogue) — one dependency that gathers the layers under one
