@@ -18,6 +18,7 @@ encodings = ["dep:encoding_rs"]
 
 [dependencies]
 encoding_rs = { workspace = true, optional = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

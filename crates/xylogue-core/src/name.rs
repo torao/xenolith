@@ -1,24 +1,38 @@
 //! Interned names and qualified names.
 //!
-//! Element names, attribute names, prefixes and namespace URIs repeat constantly in a
-//! document, and they are compared far more often than they are created. Interning them into
-//! [`NameId`]s turns those comparisons into integer equality and keeps tree nodes small.
+//! Identical element names, attribute names, prefixes, and namespace URIs appear repeatedly within a single document
+//! and remain unchanged for the duration of the document. By interning these into [`NameId`], we can reduce the cost
+//! of generating duplicate names, perform integer equality comparison on them, and keep the size of tree nodes small.
+//!
 
 use std::collections::HashMap;
 use std::fmt;
 
 use crate::chars;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Error, Result};
 
-/// The namespace name bound to the `xml` prefix, which is fixed by Namespaces in XML.
+/// The namespace name associated with the `xml` prefix, as defined by the Namespace in XML.
 pub const XML_NS_URI: &str = "http://www.w3.org/XML/1998/namespace";
+
 /// The namespace name of namespace declaration attributes themselves.
 pub const XMLNS_NS_URI: &str = "http://www.w3.org/2000/xmlns/";
 
+/// Reserved names.
+const RESERVED_NAMES: [&str; 5] = [
+  "",           // 0: EMPTY
+  "xml",        // 1: XML
+  "xmlns",      // 2: XMLNS
+  XML_NS_URI,   // 3: XML_NS
+  XMLNS_NS_URI, // 4: XMLNS_NS
+];
+
 /// A handle to a string interned in a [`NamePool`].
 ///
-/// Only meaningful together with the pool that produced it. Mixing ids across pools is a
-/// programming error, and [`NamePool::resolve`] will panic rather than return a wrong name.
+/// Represents the identifier of a string within a specific pool. This value is a temporary ID in memory and is not
+/// persistent. It cannot be mixed IDs from different pools.
+///
+/// This value is a temporary ID in memory and should not be treat as persistent.
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NameId(u32);
 
@@ -43,8 +57,8 @@ impl NameId {
 
 /// An interning table for names.
 ///
-/// Reserved names are pre-interned so that their [`NameId`]s are compile-time constants:
-/// see [`NameId::EMPTY`] and the constants beside it.
+/// Reserved names are pre-interned so that their [`NameId`] becomes a compile-time constant. For details, see
+/// [`NameId::EMPTY`] and the constant beside it.
 ///
 /// # Examples
 ///
@@ -80,7 +94,7 @@ impl NamePool {
   #[must_use]
   pub fn new() -> Self {
     let mut pool = Self { names: Vec::new(), index: HashMap::new() };
-    for reserved in ["", "xml", "xmlns", XML_NS_URI, XMLNS_NS_URI] {
+    for reserved in RESERVED_NAMES {
       pool.intern(reserved);
     }
     debug_assert_eq!(pool.intern(XMLNS_NS_URI), NameId::XMLNS_NS);
@@ -110,6 +124,7 @@ impl NamePool {
   /// # Panics
   ///
   /// If `id` did not come from this pool.
+  ///
   #[must_use]
   pub fn resolve(&self, id: NameId) -> &str {
     &self.names[id.index()]
@@ -120,26 +135,23 @@ impl NamePool {
   /// # Examples
   ///
   /// ```
-  /// use xylogue_core::{ErrorKind, NamePool};
+  /// use xylogue_core::{Error, NamePool};
   ///
   /// let mut pool = NamePool::new();
   /// let local = pool.intern_ncname("template")?;
   /// assert_eq!(pool.resolve(local), "template");
   ///
   /// let err = pool.intern_ncname("xsl:template").unwrap_err();
-  /// assert_eq!(err.kind(), ErrorKind::Name);
+  /// assert!(matches!(err, Error::Name { .. }));
   /// # Ok::<(), xylogue_core::Error>(())
   /// ```
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Name`] if `name` is not an `NCName`.
+  /// Returns [`Error::Name`] if `name` is not an `NCName`.
+  ///
   pub fn intern_ncname(&mut self, name: &str) -> Result<NameId> {
-    if chars::is_ncname(name) {
-      Ok(self.intern(name))
-    } else {
-      Err(Error::new(ErrorKind::Name, format!("not an NCName: {name:?}")))
-    }
+    if chars::is_ncname(name) { Ok(self.intern(name)) } else { Err(Error::name(format!("not an NCName: {name:?}"))) }
   }
 
   /// Number of distinct names interned, including the reserved ones.
@@ -151,17 +163,19 @@ impl NamePool {
   /// True if the pool holds nothing but the reserved names.
   #[must_use]
   pub fn is_empty(&self) -> bool {
-    self.names.len() <= 5
+    self.names.len() <= RESERVED_NAMES.len()
   }
 }
 
-/// An expanded name: a namespace name plus a local part.
+/// An expanded name consists of a namespace and a local part.
 ///
-/// This is the identity XPath and XSLT compare on. The prefix is deliberately absent — two
-/// nodes with different prefixes bound to the same namespace have the same expanded name.
+/// This is the identifier used by namespace-aware XML features, such as XPath and XSLT, to perform their comparisons.
+/// A prefix is intentionally omitted because it is an alias for a namespace. If different prefixes are bound to the
+/// same namespace, they have the same expanded name.
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExpandedName {
-  /// Namespace name, or `None` for a name in no namespace.
+  /// Namespace, or `None` for a name in no namespace.
   pub namespace: Option<NameId>,
   /// Local part; always an `NCName`.
   pub local: NameId,
@@ -183,12 +197,12 @@ impl ExpandedName {
 
 /// A qualified name as it appears in the document, retaining the prefix.
 ///
-/// The prefix is not part of a name's identity, but it must be preserved: serialization,
-/// `name()`, and QName-valued attribute content all depend on it.
+/// Although the prefix is not part of the name identifier, it must be retained because serialization, `name()`, and
+/// attribute values of type QName all depend on this prefix.
 ///
 /// # Examples
 ///
-/// Two names with different prefixes bound to the same namespace are the same name:
+/// Two names that are bound to the same namespace but have different prefixes are considered to be the same name:
 ///
 /// ```
 /// use xylogue_core::{NamePool, QName};
@@ -263,7 +277,7 @@ mod tests {
     assert_eq!(pool.resolve(NameId::XMLNS), "xmlns");
     assert_eq!(pool.resolve(NameId::XML_NS), XML_NS_URI);
     assert_eq!(pool.resolve(NameId::XMLNS_NS), XMLNS_NS_URI);
-    assert_eq!(pool.len(), 5);
+    assert_eq!(pool.len(), RESERVED_NAMES.len());
     assert!(pool.is_empty());
   }
 
@@ -284,7 +298,7 @@ mod tests {
     let mut pool = NamePool::new();
     assert!(pool.intern_ncname("item").is_ok());
     let err = pool.intern_ncname("p:item").unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Name);
+    assert!(matches!(err, Error::Name { .. }));
     assert!(pool.intern_ncname("").is_err());
   }
 

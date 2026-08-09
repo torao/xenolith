@@ -62,7 +62,7 @@ impl XPath {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::XPath`](xylogue_core::ErrorKind::XPath) if the expression cannot be
+  /// Returns [`Error::XPath`](xylogue_core::Error::XPath) if the expression cannot be
   /// read, with the position in it that could not be made sense of.
   pub fn compile(&self, expression: &str) -> Result<XPathExpression> {
     Ok(XPathExpression { source: expression.to_owned(), tree: parse(expression)?, namespaces: self.namespaces.clone() })
@@ -128,7 +128,7 @@ impl XPathExpression {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::XPath`](xylogue_core::ErrorKind::XPath) if the expression asks for
+  /// Returns [`Error::XPath`](xylogue_core::Error::XPath) if the expression asks for
   /// something the context cannot give — an unbound variable or prefix, a function that is not
   /// available — or applies an operator to a value of the wrong type.
   pub fn evaluate<M: Model>(&self, model: &M, node: M::Node) -> Result<Value<M::Node>> {

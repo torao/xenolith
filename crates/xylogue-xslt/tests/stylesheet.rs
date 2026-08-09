@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use xylogue_core::{Error, ErrorKind};
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_xdm::{DomModel, Model};
 use xylogue_xslt::{Loader, Stylesheet};
@@ -34,11 +34,7 @@ impl Modules {
 
 impl Loader for Modules {
   fn load(&mut self, uri: &str) -> Result<Vec<u8>, Error> {
-    self
-      .0
-      .get(uri)
-      .map(|text| text.as_bytes().to_vec())
-      .ok_or_else(|| Error::new(ErrorKind::Io, format!("no module at {uri}")))
+    self.0.get(uri).map(|text| text.as_bytes().to_vec()).ok_or_else(|| Error::io(format!("no module at {uri}")))
   }
 }
 
@@ -205,7 +201,7 @@ fn a_module_that_cannot_be_loaded_says_which_entry_point_would_load_it() {
 #[test]
 fn what_is_not_a_stylesheet_is_refused_with_a_reason() {
   let not_a_stylesheet = Stylesheet::compile(b"<html/>", "file:///s.xsl").expect_err("is refused");
-  assert_eq!(not_a_stylesheet.kind(), ErrorKind::Xslt);
+  assert!(matches!(not_a_stylesheet, Error::Xslt { .. }));
   assert!(not_a_stylesheet.message().contains("xsl:stylesheet"), "{}", not_a_stylesheet.message());
 
   let no_version =

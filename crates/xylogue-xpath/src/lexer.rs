@@ -8,7 +8,7 @@
 //! tokens that already mean one thing.
 
 use xylogue_core::chars::{is_ncname_char, is_ncname_start_char, is_whitespace};
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 
 use crate::ast::Axis;
 
@@ -191,7 +191,7 @@ impl<'a> Lexer<'a> {
   }
 
   fn error(&self, at: usize, message: impl Into<String>) -> Error {
-    Error::new(ErrorKind::XPath, format!("{} at position {at} of the XPath expression", message.into()))
+    Error::xpath(format!("{} at position {at} of the XPath expression", message.into()))
   }
 
   /// Reads the next token, given the one before it.

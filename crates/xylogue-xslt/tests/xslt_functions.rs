@@ -1,6 +1,6 @@
 //! The functions XSLT adds to XPath (XSLT 1.0 §12.4, §15).
 
-use xylogue_core::ErrorKind;
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_xdm::DomModel;
 use xylogue_xpath::{Context, Functions, Value};
@@ -200,7 +200,7 @@ fn every_instruction_named_as_available_is_one_that_runs() {
     let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
     let model = DomModel::new(&doc);
     if let Err(error) = transform(&stylesheet, &model, model.root_node()) {
-      assert_eq!(error.kind(), ErrorKind::Xslt);
+      assert!(matches!(error, Error::Xslt { .. }));
       assert!(!error.message().contains("not implemented"), "xsl:{instruction}: {}", error.message());
     }
   }

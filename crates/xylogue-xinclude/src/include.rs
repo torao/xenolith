@@ -1,7 +1,7 @@
 //! The XInclude processor.
 
 use xylogue_core::name::XML_NS_URI;
-use xylogue_core::{Error, ErrorKind, uri};
+use xylogue_core::{Error, uri};
 use xylogue_dom::{Document, NodeId, NodeType, build};
 
 use crate::Loader;
@@ -69,8 +69,8 @@ impl XInclude {
   ///
   /// # Errors
   ///
-  /// [`ErrorKind::XInclude`] for an inclusion loop, a failed inclusion with no fallback, or a
-  /// misplaced `xi:fallback`; [`ErrorKind::Limit`] if the depth or count bound is passed; and
+  /// [`Error::XInclude`] for an inclusion loop, a failed inclusion with no fallback, or a
+  /// misplaced `xi:fallback`; [`Error::Limit`] if the depth or count bound is passed; and
   /// whatever a resource's own parsing or decoding raises.
   pub fn expand<L: Loader>(&self, doc: &mut Document, loader: &mut L) -> Result<(), Error> {
     let mut state = State { loader, count: 0, chain: Vec::new() };
@@ -113,11 +113,11 @@ impl XInclude {
     depth: usize,
   ) -> Result<(), Error> {
     if depth >= self.max_depth {
-      return Err(Error::new(ErrorKind::Limit, format!("XInclude nested more than {} deep", self.max_depth)));
+      return Err(Error::limit(format!("XInclude nested more than {} deep", self.max_depth)));
     }
     state.count += 1;
     if state.count > self.max_includes {
-      return Err(Error::new(ErrorKind::Limit, format!("more than {} inclusions", self.max_includes)));
+      return Err(Error::limit(format!("more than {} inclusions", self.max_includes)));
     }
 
     let parent = doc.parent(include).expect("an xi:include always has a parent");
@@ -343,7 +343,7 @@ fn decode(bytes: &[u8], encoding: &str) -> Result<String, Error> {
 }
 
 fn xinclude_error(message: &str) -> Error {
-  Error::new(ErrorKind::XInclude, message.to_owned())
+  Error::xinclude(message.to_owned())
 }
 
 fn dom_error(error: xylogue_dom::DomException) -> Error {

@@ -53,7 +53,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::{Document, NodeId, NodeType};
 use xylogue_xdm::{Model, NodeKind};
 use xylogue_xpath::{Context, Expr, Functions, Namespaces, PathStart, Value, Variables};
@@ -204,7 +204,7 @@ impl ResultTree {
   ///
   /// # Errors
   ///
-  /// [`ErrorKind::Xslt`] if the encoding is not one this build can write — which needs the
+  /// [`Error::Xslt`] if the encoding is not one this build can write — which needs the
   /// `encodings` feature for anything but UTF-8.
   pub fn to_bytes(&self) -> Result<Vec<u8>> {
     output::encode(&self.serialize(), self.output.encoding())
@@ -215,8 +215,8 @@ impl ResultTree {
 ///
 /// # Errors
 ///
-/// [`ErrorKind::Xslt`] for an instruction the engine does not understand, a template that cannot
-/// be found, or a transformation that recurses too deep; [`ErrorKind::XPath`] for an expression
+/// [`Error::Xslt`] for an instruction the engine does not understand, a template that cannot
+/// be found, or a transformation that recurses too deep; [`Error::XPath`] for an expression
 /// that cannot be read or evaluated.
 ///
 /// # Examples
@@ -625,7 +625,7 @@ impl<M: Model> Engine<'_, M> {
   fn apply(&mut self, focus: Focus<M::Node>, mode: Option<&str>) -> Result<()> {
     if self.depth >= self.max_depth {
       let message = format!("the transformation is more than {} templates deep", self.max_depth);
-      return Err(Error::new(ErrorKind::Xslt, message));
+      return Err(Error::xslt(message));
     }
     let matched = self.stylesheet.template_for_using(self.model, focus.node, mode, self.running.as_ref())?;
     let Some(template) = matched else {
@@ -667,11 +667,11 @@ impl<M: Model> Engine<'_, M> {
       // §5.6: there has to *be* a current template rule. In the content of a top-level variable,
       // which runs before any rule has matched, there is none — and nothing this could mean.
       let message = "xsl:apply-imports was used where no template rule is current".to_owned();
-      return Err(Error::new(ErrorKind::Xslt, message));
+      return Err(Error::xslt(message));
     };
     if self.depth >= self.max_depth {
       let message = format!("the transformation is more than {} templates deep", self.max_depth);
-      return Err(Error::new(ErrorKind::Xslt, message));
+      return Err(Error::xslt(message));
     }
     let mode = rule.mode.clone();
     let matched = self.stylesheet.imported_template_for(
@@ -971,7 +971,7 @@ impl<M: Model> Engine<'_, M> {
       }
     }
     let message = format!("xsl:{local} is not implemented yet; see ROADMAP.md for which phase brings it");
-    Err(Error::new(ErrorKind::Xslt, message))
+    Err(Error::xslt(message))
   }
 
   /// An extension element (XSLT 1.0 §14).
@@ -997,7 +997,7 @@ impl<M: Model> Engine<'_, M> {
       "{name} is an extension element, and this implements none; \
        give it an xsl:fallback, or ask element-available() before relying on it"
     );
-    Err(Error::new(ErrorKind::Xslt, message))
+    Err(Error::xslt(message))
   }
 
   /// EXSLT's `exsl:document`: a result of its own, written where the caller says.
@@ -1138,12 +1138,12 @@ impl<M: Model> Engine<'_, M> {
     let name = self.required(module, element, "name", "xsl:call-template")?;
     let parameters = self.with_params(module, element, focus)?;
     let Some(template) = self.stylesheet.template_named(&name) else {
-      return Err(Error::new(ErrorKind::Xslt, format!("no template is named {name:?}")));
+      return Err(Error::xslt(format!("no template is named {name:?}")));
     };
     let (target_module, target_element) = (template.module(), template.element());
     if self.depth >= self.max_depth {
       let message = format!("the transformation is more than {} templates deep", self.max_depth);
-      return Err(Error::new(ErrorKind::Xslt, message));
+      return Err(Error::xslt(message));
     }
     self.depth += 1;
     let outcome = self.run_template(target_module, target_element, focus, parameters);
@@ -1244,7 +1244,7 @@ impl<M: Model> Engine<'_, M> {
       // put a prefix in the result that means nothing there either.
       None => {
         let message = format!("{what} names {name:?}, and the prefix {prefix:?} is not bound in the stylesheet");
-        Err(Error::new(ErrorKind::Xslt, message))
+        Err(Error::xslt(message))
       }
     }
   }
@@ -1281,7 +1281,7 @@ impl<M: Model> Engine<'_, M> {
     // An attribute added where no element is open has nowhere to go; XSLT calls that an error.
     if self.output.node_type(target) != NodeType::Element {
       let message = format!("xsl:attribute {name:?} has no element to be added to");
-      return Err(Error::new(ErrorKind::Xslt, message));
+      return Err(Error::xslt(message));
     }
     match namespace {
       Some(namespace) => self.output.set_attribute_ns(target, Some(&namespace), &name, &value),
@@ -1372,7 +1372,7 @@ impl<M: Model> Engine<'_, M> {
         let namespace = self.model.expanded_name(node).and_then(|name| name.namespace);
         let target = *self.insertion.last().expect("there is always somewhere to put the result");
         if self.output.node_type(target) != NodeType::Element {
-          return Err(Error::new(ErrorKind::Xslt, format!("the attribute {name:?} has no element to be copied onto")));
+          return Err(Error::xslt(format!("the attribute {name:?} has no element to be copied onto")));
         }
         match namespace {
           Some(namespace) => self.output.set_attribute_ns(target, Some(&namespace), &name, &value),
@@ -1390,7 +1390,7 @@ impl<M: Model> Engine<'_, M> {
     let text = self.captured_text(module, element, focus)?;
     let terminate = self.stylesheet.document(module).attribute(element, "terminate") == Some("yes");
     if terminate {
-      return Err(Error::new(ErrorKind::Xslt, format!("the stylesheet stopped: {text}")));
+      return Err(Error::xslt(format!("the stylesheet stopped: {text}")));
     }
     self.messages.push(text);
     Ok(())
@@ -1415,12 +1415,12 @@ impl<M: Model> Engine<'_, M> {
     for name in named.split_whitespace() {
       // §7.1.4: a set that uses itself, however far around, has no meaning.
       if self.attribute_set_chain.iter().any(|used| used == name) {
-        return Err(Error::new(ErrorKind::Xslt, format!("the attribute set {name:?} uses itself")));
+        return Err(Error::xslt(format!("the attribute set {name:?} uses itself")));
       }
       let sets: Vec<(usize, NodeId)> =
         self.stylesheet.attribute_sets_named(name).map(|set| (set.module(), set.element())).collect();
       if sets.is_empty() {
-        return Err(Error::new(ErrorKind::Xslt, format!("no attribute set is named {name:?}")));
+        return Err(Error::xslt(format!("no attribute set is named {name:?}")));
       }
       self.attribute_set_chain.push(name.to_owned());
       let outcome = self.apply_attribute_sets(&sets, target, focus);
@@ -1647,7 +1647,7 @@ impl<M: Model> Engine<'_, M> {
       Some("traditional") => LetterValue::Traditional,
       Some(other) => {
         let message = format!("xsl:number letter-value {other:?} is neither alphabetic nor traditional");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     };
     Ok(Format::parse(&format, letter_value))
@@ -1690,7 +1690,7 @@ impl<M: Model> Engine<'_, M> {
       "any" => Ok(vec![self.count_everything_before(node, count, from, namespaces)?]),
       other => {
         let message = format!("xsl:number level {other:?} is not single, multiple or any");
-        Err(Error::new(ErrorKind::Xslt, message))
+        Err(Error::xslt(message))
       }
     }
   }
@@ -1924,7 +1924,7 @@ impl<M: Model> Engine<'_, M> {
       // A qualified name here names a type an implementation invented.
       Some(other) => {
         let message = format!("xsl:sort data-type {other:?} is not one this understands");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     };
     let descending = match order.as_deref() {
@@ -1932,7 +1932,7 @@ impl<M: Model> Engine<'_, M> {
       Some("descending") => true,
       Some(other) => {
         let message = format!("xsl:sort order {other:?} is neither ascending nor descending");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     };
     let case = match case_order.as_deref() {
@@ -1941,7 +1941,7 @@ impl<M: Model> Engine<'_, M> {
       Some("lower-first") => CaseOrder::LowerFirst,
       Some(other) => {
         let message = format!("xsl:sort case-order {other:?} is neither upper-first nor lower-first");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     };
 
@@ -2046,7 +2046,7 @@ impl<M: Model> Engine<'_, M> {
       Value::NodeSet(nodes) => Ok(nodes),
       other => {
         let message = format!("{what} selects a node-set, but {expression:?} gave {}", describe(&other));
-        Err(Error::new(ErrorKind::Xslt, message))
+        Err(Error::xslt(message))
       }
     }
   }
@@ -2151,11 +2151,9 @@ impl<M: Model> Engine<'_, M> {
       document.append_child(root, imported).map_err(dom_error)?;
     }
     let adopted = self.running.adopt(document, root)?.ok_or_else(|| {
-      Error::new(
-        ErrorKind::Xslt,
+      Error::xslt(
         "exsl:node-set() needs somewhere to put the tree; run the transformation with a \
-         TreeSpace (or a LoadedDocuments) sharing the model's Documents handle"
-          .to_owned(),
+         TreeSpace (or a LoadedDocuments) sharing the model's Documents handle",
       )
     })?;
     self.running.remember_adopted(fragment, adopted);
@@ -2169,7 +2167,7 @@ impl<M: Model> Engine<'_, M> {
       .document(module)
       .attribute(element, attribute)
       .map(ToOwned::to_owned)
-      .ok_or_else(|| Error::new(ErrorKind::Xslt, format!("{what} needs a {attribute}")))
+      .ok_or_else(|| Error::xslt(format!("{what} needs a {attribute}")))
   }
 
   // --- Whitespace in the source ---------------------------------------------------------------

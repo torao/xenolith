@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_core::uri;
 use xylogue_dom::{Document, NodeId, NodeType, build};
 use xylogue_xdm::{ExpandedName, Model, NodeKind};
@@ -354,9 +354,9 @@ impl Stylesheet {
   ///
   /// # Errors
   ///
-  /// [`ErrorKind::Xslt`] if the document is not a stylesheet, or names a module — use
+  /// [`Error::Xslt`] if the document is not a stylesheet, or names a module — use
   /// [`compile_with`](Self::compile_with) for a stylesheet built from several. Whatever the
-  /// parser raises if the document is not well-formed, and [`ErrorKind::XPath`] if a pattern
+  /// parser raises if the document is not well-formed, and [`Error::XPath`] if a pattern
   /// cannot be read.
   pub fn compile(source: &[u8], system_id: &str) -> Result<Self> {
     Self::compile_with(source, system_id, &mut NoLoader)
@@ -1339,7 +1339,7 @@ pub(crate) fn default_namespace(document: &Document, element: NodeId) -> Option<
 }
 
 fn xslt_error(message: impl Into<String>) -> Error {
-  Error::new(ErrorKind::Xslt, message.into())
+  Error::xslt(message.into())
 }
 
 #[cfg(test)]

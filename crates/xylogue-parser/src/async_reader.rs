@@ -6,7 +6,7 @@
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 
 use crate::config::ParserConfig;
 use crate::entity::{Entity, Limits};
@@ -59,7 +59,7 @@ pub struct NoResolver;
 impl AsyncUriResolver for NoResolver {
   async fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<Vec<u8>>> {
     let message = format!("{request}: no resolver is configured; attach one with with_resolver to allow this");
-    Err(Error::new(ErrorKind::WellFormedness, message))
+    Err(Error::well_formedness(message))
   }
 }
 
@@ -89,6 +89,21 @@ impl<R: AsyncRead + Unpin> AsyncReader<R> {
       finished: false,
       resolver: NoResolver,
     }
+  }
+
+  /// Fixes the encoding of the document, skipping detection.
+  ///
+  /// The asynchronous counterpart to [`Reader::with_encoding`](crate::Reader::with_encoding):
+  /// give the encoding here when it is dictated from outside rather than sniffed. Call before the
+  /// first [`advance`](Self::advance), and before [`with_resolver`](Self::with_resolver).
+  /// Detection is skipped, so a leading byte-order mark is not stripped.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if `encoding` is not one this build can decode.
+  pub fn with_encoding(mut self, encoding: &str) -> Result<Self> {
+    self.parser.set_encoding(encoding)?;
+    Ok(self)
   }
 
   /// Sets the parser configuration: the optional `xml:base` and `xml:id` processing.
@@ -125,7 +140,7 @@ impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> 
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Io`] if the source fails, and whatever the parser reports for a
+  /// Returns [`Error::Io`] if the source fails, and whatever the parser reports for a
   /// document that breaks the rules.
   pub async fn advance(&mut self) -> Result<Option<EventKind>> {
     loop {
@@ -154,7 +169,7 @@ impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> 
     }
     let read = self.source.read(&mut self.buffer).await.map_err(|e| {
       let at = self.parser.location();
-      Error::new(ErrorKind::Io, format!("cannot read the document: {e}")).at(at).caused_by(e)
+      Error::io(format!("cannot read the document: {e}")).at(at).caused_by(e)
     })?;
     self.finished = read == 0;
     self.parser.feed(&self.buffer[..read], self.finished)

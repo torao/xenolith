@@ -1,6 +1,6 @@
 //! Evaluating an expression tree against a tree of nodes.
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_xdm::{Model, NodeKind};
 
 use crate::ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
@@ -324,5 +324,5 @@ fn node_set<N>(value: Value<N>, wanted: &str) -> Result<Vec<N>> {
 }
 
 fn error(message: impl Into<String>) -> Error {
-  Error::new(ErrorKind::XPath, message.into())
+  Error::xpath(message.into())
 }

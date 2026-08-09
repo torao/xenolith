@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 
 use xylogue_core::chars;
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 use xylogue_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 #[cfg(feature = "xml-base")]
 use xylogue_core::uri::UriReference;
@@ -354,6 +354,21 @@ impl Parser {
     &self.config
   }
 
+  /// Fixes the encoding of the document, skipping detection.
+  ///
+  /// Use this when the encoding is dictated from outside the document — a transport header, or a
+  /// caller who simply knows it — instead of the byte-order mark and declaration the document
+  /// would otherwise be sniffed for. It must be called before the first [`feed`](Self::feed);
+  /// [`CharStream::use_encoding`] describes the detail, the byte-order mark caveat included.
+  ///
+  /// # Errors
+  ///
+  /// See [`CharStream::use_encoding`]: an unknown or unavailable encoding, or a call made after
+  /// bytes have already been fed.
+  pub fn set_encoding(&mut self, encoding: &str) -> Result<()> {
+    self.stack.current_mut().stream_mut().use_encoding(encoding)
+  }
+
   /// Supplies bytes of the document, or of whatever entity is innermost.
   ///
   /// # Errors
@@ -367,7 +382,7 @@ impl Parser {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::WellFormedness`] or [`ErrorKind::Namespace`] for a document that
+  /// Returns [`Error::WellFormedness`] or [`Error::Namespace`] for a document that
   /// breaks the rules, and passes on decoding and limit errors.
   pub fn advance(&mut self) -> Result<Progress> {
     if self.dtd_active {
@@ -488,10 +503,10 @@ impl Parser {
   fn finish(&mut self) -> Result<Progress> {
     if let Some(open) = self.open.last() {
       let message = format!("element <{}> is never closed", &self.names[open.lexical.clone()]);
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     if self.phase == Phase::Prolog {
-      return Err(self.error(ErrorKind::WellFormedness, "the document has no root element"));
+      return Err(self.error(Error::well_formedness, "the document has no root element"));
     }
     self.kind = None;
     Ok(Progress::Eof)
@@ -534,14 +549,14 @@ impl Parser {
       // Only a genuine declaration, at the very start of the document entity, is allowed.
       if target != "xml" || self.token_at.offset != 0 || self.stack.depth() > 1 {
         let message = format!("\"{target}\" is a reserved target");
-        return Err(self.error(ErrorKind::WellFormedness, message));
+        return Err(self.error(Error::well_formedness, message));
       }
       self.xml_declaration(data)?;
       return Ok(Some(EventKind::XmlDeclaration));
     }
     if !chars::is_name(target) {
       let message = format!("{target:?} is not a valid processing instruction target");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     self.name = QName::new(None, None, self.pool.intern(target));
     self.text.clear();
@@ -558,7 +573,7 @@ impl Parser {
       // `S` between the pseudo-attributes, not an optional one.
       if whitespace_len(rest) == 0 {
         let message = "the XML declaration needs whitespace between its parts";
-        return Err(self.error(ErrorKind::WellFormedness, message));
+        return Err(self.error(Error::well_formedness, message));
       }
       let (name, value, tail) = self.pseudo_attribute(rest)?;
       match name {
@@ -568,7 +583,7 @@ impl Parser {
           let digits = value.strip_prefix("1.").filter(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
           if digits.is_none() {
             let message = format!("{value:?} is not an XML version; it must be \"1.\" followed by digits");
-            return Err(self.error(ErrorKind::WellFormedness, message));
+            return Err(self.error(Error::well_formedness, message));
           }
           self.version = value.to_owned();
         }
@@ -577,7 +592,7 @@ impl Parser {
             let message = format!(
               "{value:?} is not an encoding name; it must start with a letter and hold only letters, digits, \".\", \"_\" and \"-\""
             );
-            return Err(self.error(ErrorKind::WellFormedness, message));
+            return Err(self.error(Error::well_formedness, message));
           }
           self.declared_encoding = Some(value.to_owned());
         }
@@ -587,27 +602,27 @@ impl Parser {
             "no" => Some(false),
             other => {
               let message = format!("standalone must be \"yes\" or \"no\", not {other:?}");
-              return Err(self.error(ErrorKind::WellFormedness, message));
+              return Err(self.error(Error::well_formedness, message));
             }
           };
         }
         other => {
           let message = format!("{other:?} is out of place in the XML declaration");
-          return Err(self.error(ErrorKind::WellFormedness, message));
+          return Err(self.error(Error::well_formedness, message));
         }
       }
       seen.push(name);
       rest = tail;
     }
     if self.version.is_empty() {
-      return Err(self.error(ErrorKind::WellFormedness, "the XML declaration has no version"));
+      return Err(self.error(Error::well_formedness, "the XML declaration has no version"));
     }
     Ok(())
   }
 
   /// Reads one `name = "value"` of the XML declaration, returning it and what follows.
   fn pseudo_attribute<'t>(&self, rest: &'t str) -> Result<(&'t str, &'t str, &'t str)> {
-    let malformed = |what: &str| self.error(ErrorKind::WellFormedness, format!("the XML declaration {what}"));
+    let malformed = |what: &str| self.error(Error::well_formedness, format!("the XML declaration {what}"));
     let rest = rest.trim_start_matches(chars::is_whitespace);
     let name_len = rest.find(|c: char| c == '=' || chars::is_whitespace(c)).unwrap_or(rest.len());
     let (name, rest) = rest.split_at(name_len);
@@ -635,8 +650,7 @@ impl Parser {
       return Ok(());
     }
     let at = stream.location();
-    let malformed =
-      |what: &str| Error::new(ErrorKind::WellFormedness, format!("the text declaration {what}")).at(at.clone());
+    let malformed = |what: &str| Error::well_formedness(format!("the text declaration {what}")).at(at.clone());
     let end = remainder.find("?>").ok_or_else(|| malformed("is not closed by \"?>\""))?;
     let mut rest = &remainder[5..end];
 
@@ -663,13 +677,13 @@ impl Parser {
     let body = &text[4..text.len() - 3];
     if let Some(i) = body.find("--") {
       let message = "a comment may not contain \"--\"; use \"-\" or end the comment here";
-      return Err(self.error_at(ErrorKind::WellFormedness, message, text, 4 + i));
+      return Err(self.error_at(Error::well_formedness, message, text, 4 + i));
     }
     // `Comment ::= '<!--' ((Char - '-') | ('-' (Char - '-')))* '-->'`, so the body cannot end
     // with a dash either: `<!--a--->` is three dashes, not a comment closed by the last two.
     if body.ends_with('-') {
       let message = "a comment may not end with \"-\" before its \"-->\"";
-      return Err(self.error_at(ErrorKind::WellFormedness, message, text, text.len() - 4));
+      return Err(self.error_at(Error::well_formedness, message, text, text.len() - 4));
     }
     self.text.clear();
     self.text.push_str(body);
@@ -679,10 +693,10 @@ impl Parser {
   fn doctype(&mut self, text: &str) -> Result<Option<EventKind>> {
     if self.phase != Phase::Prolog {
       let message = "the document type declaration must come before the root element";
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     if self.seen_doctype {
-      return Err(self.error(ErrorKind::WellFormedness, "there may be only one document type declaration"));
+      return Err(self.error(Error::well_formedness, "there may be only one document type declaration"));
     }
     self.seen_doctype = true;
 
@@ -691,7 +705,7 @@ impl Parser {
     let name_len = body.find(|c: char| chars::is_whitespace(c) || c == '[').unwrap_or(body.len());
     if !chars::is_name(&body[..name_len]) {
       let message = format!("{:?} is not a valid document type name", &body[..name_len.min(body.len())]);
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     self.doctype_name = Some(self.pool.intern(&body[..name_len]));
     let after_name = &body[name_len..];
@@ -706,11 +720,11 @@ impl Parser {
       None
     } else if external.starts_with("SYSTEM") || external.starts_with("PUBLIC") {
       Some(parse_external_id(external).ok_or_else(|| {
-        self.error(ErrorKind::WellFormedness, format!("{external:?} is not a valid external identifier"))
+        self.error(Error::well_formedness, format!("{external:?} is not a valid external identifier"))
       })?)
     } else {
       let message = format!("{external:?} is not a valid external identifier in the document type declaration");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     };
     // Keep the identifiers for the accessors; `dtd_external_id` itself is consumed on fetch.
     if let Some((public_id, system_id)) = &self.dtd_external_id {
@@ -765,7 +779,7 @@ impl Parser {
 
   fn cdata(&mut self, text: &str) -> Result<EventKind> {
     if self.phase != Phase::Content {
-      return Err(self.error(ErrorKind::WellFormedness, "a CDATA section may only appear inside the root element"));
+      return Err(self.error(Error::well_formedness, "a CDATA section may only appear inside the root element"));
     }
     self.text.clear();
     self.text.push_str(&text[9..text.len() - 3]);
@@ -780,7 +794,7 @@ impl Parser {
     if let Some(i) = text.find("]]>") {
       self.token_at = at.clone();
       let message = "\"]]>\" may not appear in text; write \"]]&gt;\"";
-      return Err(self.error_at(ErrorKind::WellFormedness, message, text, i));
+      return Err(self.error_at(Error::well_formedness, message, text, i));
     }
     if self.pending_text.is_empty() {
       self.pending_text_at = at.clone();
@@ -805,7 +819,7 @@ impl Parser {
       self.token_at = self.pending_text_at.clone();
       let place = if self.phase == Phase::Prolog { "before" } else { "after" };
       let message = format!("text may not appear {place} the root element");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     std::mem::swap(&mut self.text, &mut self.pending_text);
     self.pending_text.clear();
@@ -819,7 +833,7 @@ impl Parser {
     if self.phase != Phase::Content {
       self.token_at = at.clone();
       let message = "a reference may not appear outside the root element";
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     let body = &text[1..text.len() - 1];
     if let Some(c) = self.character_or_predefined(body, text, at)? {
@@ -851,7 +865,7 @@ impl Parser {
       name if chars::is_name(name) => return Ok(None),
       _ => {
         let message = format!("\"&{body};\" is not a reference; write \"&amp;\" for a literal ampersand");
-        return Err(Error::new(ErrorKind::WellFormedness, message).at(at.clone()));
+        return Err(Error::well_formedness(message).at(at.clone()));
       }
     };
     Ok(Some(c))
@@ -859,7 +873,7 @@ impl Parser {
 
   /// Parses `#dd`/`#xhh` into the character it denotes.
   fn character_reference(&self, body: &str, token: &str, at: &Location) -> Result<char> {
-    let error = |message: String| Error::new(ErrorKind::WellFormedness, message).at(at.clone());
+    let error = |message: String| Error::well_formedness(message).at(at.clone());
     let digits = &body[1..];
     let (digits, radix) = match digits.strip_prefix('x') {
       Some(hex) => (hex, 16),
@@ -888,7 +902,7 @@ impl Parser {
       let message = format!(
         "entity \"{display}\" is declared in the external subset, which a standalone document may not depend on"
       );
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     match self.dtd.as_ref().and_then(|dtd| dtd.general_entity(name)).cloned() {
       Some(GeneralEntity::Internal { value }) => {
@@ -899,7 +913,7 @@ impl Parser {
       }
       Some(GeneralEntity::Unparsed { .. }) => {
         let message = format!("unparsed entity \"{display}\" may not be referenced in content");
-        Err(self.error(ErrorKind::WellFormedness, message))
+        Err(self.error(Error::well_formedness, message))
       }
       Some(GeneralEntity::External { public_id, system_id }) => {
         // Stop and ask for it. A driver resolves it and calls `provide_entity`, or
@@ -926,7 +940,7 @@ impl Parser {
          or write \"&amp;{name};\" if a literal ampersand was meant"
       )
     };
-    self.error(ErrorKind::WellFormedness, message)
+    self.error(Error::well_formedness, message)
   }
 
   fn start_tag(&mut self, text: &str) -> Result<EventKind> {
@@ -934,7 +948,7 @@ impl Parser {
       Phase::Prolog => self.phase = Phase::Content,
       Phase::Content => {}
       Phase::Epilog => {
-        return Err(self.error(ErrorKind::WellFormedness, "a document may have only one root element"));
+        return Err(self.error(Error::well_formedness, "a document may have only one root element"));
       }
     }
     let limit = self.stack.limits().max_element_depth;
@@ -942,7 +956,7 @@ impl Parser {
       let message = format!(
         "elements are nested more than {limit} deep; raise Limits::max_element_depth if the document is trusted"
       );
-      return Err(self.error(ErrorKind::Limit, message));
+      return Err(self.error(Error::limit, message));
     }
     let empty = text.ends_with("/>");
     let body = &text[1..text.len() - if empty { 2 } else { 1 }];
@@ -991,17 +1005,17 @@ impl Parser {
     let name = text[2..text.len() - 1].trim_end_matches(chars::is_whitespace);
     let Some(open) = self.open.last() else {
       let message = format!("</{name}> closes an element that was never opened");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     };
     let expected = &self.names[open.lexical.clone()];
     if expected != name {
       let message = format!("</{name}> does not close <{expected}>");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     if open.entity_depth != self.stack.depth() {
       // The start tag and this end tag are in different entities.
       let message = format!("<{expected}> and its end tag are in different entities");
-      return Err(self.error(ErrorKind::WellFormedness, message));
+      return Err(self.error(Error::well_formedness, message));
     }
     let open = self.open.pop().expect("just inspected");
     self.close(open);
@@ -1050,7 +1064,7 @@ impl Parser {
       }
       if spaces == 0 {
         let message = "attributes must be separated by whitespace";
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
+        return Err(self.error_at(Error::well_formedness, message, token, base + at));
       }
 
       let name_len = rest[at..].find(|c: char| c == '=' || chars::is_whitespace(c)).unwrap_or(rest.len() - at);
@@ -1062,26 +1076,26 @@ impl Parser {
       if !rest[at..].starts_with('=') {
         // Most often a bare HTML-style attribute such as `checked` or `disabled`.
         let message = format!("attribute \"{name}\" has no value; every XML attribute needs one, as {name}=\"...\"");
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
+        return Err(self.error_at(Error::well_formedness, message, token, base + at));
       }
       at += 1;
       at += whitespace_len(&rest[at..]);
 
       let Some(quote) = rest[at..].chars().next().filter(|c| *c == '"' || *c == '\'') else {
         let message = format!("the value of \"{name}\" is not quoted; enclose it in \" or '");
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
+        return Err(self.error_at(Error::well_formedness, message, token, base + at));
       };
       at += quote.len_utf8();
       let Some(end) = rest[at..].find(quote) else {
         let message = format!("the value of \"{name}\" is not terminated");
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + at));
+        return Err(self.error_at(Error::well_formedness, message, token, base + at));
       };
       let raw = &rest[at..at + end];
       let raw_at = base + at;
       at += end + quote.len_utf8();
 
       let Some((prefix, local)) = chars::split_qname(name) else {
-        return Err(self.error_at(ErrorKind::Namespace, bad_qname(name, "attribute"), token, name_at));
+        return Err(self.error_at(Error::namespace, bad_qname(name, "attribute"), token, name_at));
       };
       let declares_namespace = prefix == Some("xmlns") || (prefix.is_none() && local == "xmlns");
       let start = values.len();
@@ -1133,7 +1147,7 @@ impl Parser {
           "attribute \"{name}\" would take a default from the external subset, \
            which a standalone document may not depend on"
         );
-        return Err(self.error(ErrorKind::WellFormedness, message));
+        return Err(self.error(Error::well_formedness, message));
       }
       let start = self.attribute_text.len();
       if value.contains('&') {
@@ -1150,7 +1164,7 @@ impl Parser {
       let lexical = self.pool.resolve(def.name).to_owned();
       let Some((prefix, local)) = chars::split_qname(&lexical) else {
         let message = format!("the DTD declares an attribute with the invalid name {lexical:?}");
-        return Err(self.error(ErrorKind::WellFormedness, message));
+        return Err(self.error(Error::well_formedness, message));
       };
       let declares_namespace = prefix == Some("xmlns") || (prefix.is_none() && local == "xmlns");
       let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
@@ -1186,11 +1200,11 @@ impl Parser {
           None
         };
         if let Some(message) = bad {
-          return Err(self.error(ErrorKind::Namespace, message));
+          return Err(self.error(Error::namespace, message));
         }
       } else if value == XML_NS_URI || value == XMLNS_NS_URI {
         let message = format!("{value:?} may not be the default namespace");
-        return Err(self.error(ErrorKind::Namespace, message));
+        return Err(self.error(Error::namespace, message));
       }
 
       let namespace = (!value.is_empty()).then(|| self.pool.intern(&value));
@@ -1201,7 +1215,7 @@ impl Parser {
 
   fn resolve_element_name(&mut self, name: &str) -> Result<QName> {
     let Some((prefix, local)) = chars::split_qname(name) else {
-      return Err(self.error(ErrorKind::Namespace, bad_qname(name, "element")));
+      return Err(self.error(Error::namespace, bad_qname(name, "element")));
     };
     let prefix = prefix.map(|p| self.pool.intern(p));
     let namespace = self.scope.resolve(prefix);
@@ -1236,7 +1250,7 @@ impl Parser {
     for (i, attribute) in self.attributes.iter().enumerate() {
       if let Some(other) = self.attributes[..i].iter().find(|a| a.name.expanded == attribute.name.expanded) {
         let message = format!("attribute \"{}\" appears twice", other.name.to_lexical(&self.pool));
-        return Err(self.error(ErrorKind::WellFormedness, message));
+        return Err(self.error(Error::well_formedness, message));
       }
     }
     Ok(())
@@ -1258,7 +1272,7 @@ impl Parser {
           "preserve" => XmlSpace::Preserve,
           other => {
             let message = format!("xml:space must be \"default\" or \"preserve\", not {other:?}");
-            return Err(self.error(ErrorKind::WellFormedness, message));
+            return Err(self.error(Error::well_formedness, message));
           }
         };
       } else if attribute.name.local() == self.lang_name {
@@ -1285,7 +1299,7 @@ impl Parser {
       // XML Base §3.1: characters disallowed in a URI are escaped before the value is used.
       let escaped = xylogue_core::uri::escape_uri(&self.attribute_text[attribute.value.clone()]);
       let reference = UriReference::parse(&escaped).map_err(|e| {
-        self.error(ErrorKind::Uri, format!("xml:base value {escaped:?} is not a valid URI reference: {}", e.message()))
+        self.error(Error::uri, format!("xml:base value {escaped:?} is not a valid URI reference: {}", e.message()))
       })?;
       return Ok(Some(inherited.map_or_else(|| reference.clone(), |base| base.resolve(&reference))));
     }
@@ -1331,12 +1345,12 @@ impl Parser {
       done += i;
       if rest.as_bytes()[i] == b'<' {
         let message = "\"<\" may not appear in an attribute value; write \"&lt;\"";
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + done));
+        return Err(self.error_at(Error::well_formedness, message, token, base + done));
       }
       let reference = &rest[i..];
       let Some(end) = reference.find(';') else {
         let message = "a reference must end with \";\"; write \"&amp;\" for a literal ampersand";
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, base + done));
+        return Err(self.error_at(Error::well_formedness, message, token, base + done));
       };
       self.expand_reference(&reference[1..end], out, token, base + done)?;
       rest = &reference[end + 1..];
@@ -1361,7 +1375,7 @@ impl Parser {
         } else {
           format!("\"&{body};\" is not a character reference; write \"&#\" and digits, or \"&#x\" and hex digits")
         };
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+        return Err(self.error_at(Error::well_formedness, message, token, at));
       }
       let code = u32::from_str_radix(digits, radix).ok();
       let Some(c) = code.and_then(char::from_u32).filter(|c| chars::is_char(*c)) else {
@@ -1370,7 +1384,7 @@ impl Parser {
           "\"&{body};\" is not a character XML permits, and no escape can represent it \
            (XML 1.0 allows #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and #x10000-#x10FFFF)"
         );
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+        return Err(self.error_at(Error::well_formedness, message, token, at));
       };
       out.push(c);
       return Ok(());
@@ -1384,7 +1398,7 @@ impl Parser {
       name if chars::is_name(name) => return self.expand_general_in_attribute(name, out, token, at),
       other => {
         let message = format!("\"&{other};\" is not a reference; write \"&amp;\" for a literal ampersand");
-        return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+        return Err(self.error_at(Error::well_formedness, message, token, at));
       }
     }
     Ok(())
@@ -1399,20 +1413,20 @@ impl Parser {
     if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(id)) {
       let message =
         format!("entity \"{name}\" is declared in the external subset, which a standalone document may not depend on");
-      return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+      return Err(self.error_at(Error::well_formedness, message, token, at));
     }
     let entity = self.dtd.as_ref().and_then(|dtd| dtd.general_entity(id)).cloned();
     match entity {
       Some(GeneralEntity::Internal { value }) => {
         if self.expanding.contains(&id) {
           let message = format!("entity \"{name}\" refers to itself");
-          return Err(self.error_at(ErrorKind::WellFormedness, message, token, at));
+          return Err(self.error_at(Error::well_formedness, message, token, at));
         }
         if self.expanding.len() >= self.stack.limits().max_depth {
           let limit = self.stack.limits().max_depth;
           let message =
             format!("entities are nested more than {limit} deep; raise Limits::max_depth if the document is trusted");
-          return Err(Error::new(ErrorKind::Limit, message).at(self.token_at.clone()));
+          return Err(Error::limit(message).at(self.token_at.clone()));
         }
         self.expanding.push(id);
         // The replacement stands where a literal value would, so it normalizes the same way.
@@ -1422,11 +1436,11 @@ impl Parser {
       }
       Some(GeneralEntity::Unparsed { .. }) => {
         let message = format!("unparsed entity \"{name}\" may not be referenced in an attribute value");
-        Err(self.error_at(ErrorKind::WellFormedness, message, token, at))
+        Err(self.error_at(Error::well_formedness, message, token, at))
       }
       Some(GeneralEntity::External { .. }) => {
         let message = format!("external entity \"{name}\" may not be referenced in an attribute value");
-        Err(self.error_at(ErrorKind::WellFormedness, message, token, at))
+        Err(self.error_at(Error::well_formedness, message, token, at))
       }
       None => Err(self.undeclared_entity(name)),
     }
@@ -1634,7 +1648,7 @@ impl Parser {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Encoding`] if the bytes cannot be decoded, and passes on the limit
+  /// Returns [`Error::Encoding`] if the bytes cannot be decoded, and passes on the limit
   /// errors that guard against a hostile entity.
   ///
   /// # Panics
@@ -1686,7 +1700,7 @@ impl Parser {
   ///
   /// # Errors
   ///
-  /// [`ErrorKind::WellFormedness`] for a general or parameter entity.
+  /// [`Error::WellFormedness`] for a general or parameter entity.
   ///
   /// # Panics
   ///
@@ -1699,7 +1713,7 @@ impl Parser {
       return Ok(());
     }
     let what = request.name().map_or_else(|| "an external entity".to_owned(), |name| format!("entity \"{name}\""));
-    Err(self.error(ErrorKind::WellFormedness, format!("{what} could not be resolved")))
+    Err(self.error(Error::well_formedness, format!("{what} could not be resolved")))
   }
 
   /// Iterates over the remaining events, copying each one.
@@ -1734,16 +1748,18 @@ impl Parser {
     let name = self.pool.resolve(prefix);
     let message =
       format!("prefix \"{name}\" is not bound; add an xmlns:{name} attribute to this element or an ancestor");
-    self.error(ErrorKind::Namespace, message)
+    self.error(Error::namespace, message)
   }
 
   /// Builds an error at the start of the token being interpreted.
-  fn error(&self, kind: ErrorKind, message: impl Into<String>) -> Error {
-    Error::new(kind, message).at(self.token_at.clone())
+  ///
+  /// `build` is one of [`Error`]'s per-kind constructors, e.g. [`Error::well_formedness`].
+  fn error(&self, build: fn(String) -> Error, message: impl Into<String>) -> Error {
+    build(message.into()).at(self.token_at.clone())
   }
 
   /// Builds an error pointing at `index` within the current token.
-  fn error_at(&self, kind: ErrorKind, message: impl Into<String>, token: &str, index: usize) -> Error {
+  fn error_at(&self, build: fn(String) -> Error, message: impl Into<String>, token: &str, index: usize) -> Error {
     let mut at = self.token_at.clone();
     for c in token[..index.min(token.len())].chars() {
       if c == '\n' {
@@ -1754,7 +1770,7 @@ impl Parser {
       }
       at.offset += 1;
     }
-    Error::new(kind, message).at(at)
+    build(message.into()).at(at)
   }
 }
 
@@ -1782,13 +1798,13 @@ impl Iterator for Events<'_> {
         self.done = true;
         let message = "the document is incomplete; feed the remaining bytes before iterating, \
                        or drive the parser with advance() so it can ask for more";
-        Some(Err(Error::new(ErrorKind::Internal, message).at(self.parser.location())))
+        Some(Err(Error::Internal { message: message.into() }.at(self.parser.location())))
       }
       Ok(Progress::NeedEntity) => {
         self.done = true;
         let message = "the document references an external entity; iterate over a Reader with a \
                        resolver, or drive the parser with advance() so the entity can be provided";
-        Some(Err(Error::new(ErrorKind::Internal, message).at(self.parser.location())))
+        Some(Err(Error::Internal { message: message.into() }.at(self.parser.location())))
       }
       Err(e) => {
         self.done = true;
@@ -1944,7 +1960,11 @@ mod tests {
     let whole = trace_in_chunks(xml, xml.len().max(1)).expect_err("should fail");
     for chunk in [1, 2, 3, 7] {
       let split = trace_in_chunks(xml, chunk).expect_err("should fail whatever the chunk size");
-      assert_eq!(split.kind(), whole.kind(), "chunk size {chunk} changed the error kind");
+      assert_eq!(
+        std::mem::discriminant(&split),
+        std::mem::discriminant(&whole),
+        "chunk size {chunk} changed the error kind"
+      );
     }
     whole
   }
@@ -1998,7 +2018,7 @@ mod tests {
 
   #[test]
   fn a_namespace_declaration_leaves_scope_with_its_element() {
-    assert_eq!(error("<a><b xmlns:p='urn:p'/><p:c/></a>").kind(), ErrorKind::Namespace);
+    assert!(matches!(error("<a><b xmlns:p='urn:p'/><p:c/></a>"), Error::Namespace { .. }));
   }
 
   #[test]
@@ -2121,7 +2141,7 @@ mod tests {
     assert!(error("<a></b>").message().contains("does not close"));
     assert!(error("<a/></a>").message().contains("never opened"));
     assert!(error("<a>").message().contains("never closed"));
-    assert_eq!(error("<a></a></a>").kind(), ErrorKind::WellFormedness);
+    assert!(matches!(error("<a></a></a>"), Error::WellFormedness { .. }));
   }
 
   #[test]
@@ -2144,17 +2164,17 @@ mod tests {
 
   #[test]
   fn rejects_undeclared_prefixes() {
-    assert_eq!(error("<p:a/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<a p:x='1'/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<a xmlns:p=''/>").kind(), ErrorKind::Namespace);
+    assert!(matches!(error("<p:a/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<a p:x='1'/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<a xmlns:p=''/>"), Error::Namespace { .. }));
   }
 
   #[test]
   fn protects_the_reserved_prefixes() {
-    assert_eq!(error("<a xmlns:xmlns='urn:x'/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<a xmlns:xml='urn:x'/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<a xmlns:p='http://www.w3.org/XML/1998/namespace'/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<a xmlns='http://www.w3.org/2000/xmlns/'/>").kind(), ErrorKind::Namespace);
+    assert!(matches!(error("<a xmlns:xmlns='urn:x'/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<a xmlns:xml='urn:x'/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<a xmlns:p='http://www.w3.org/XML/1998/namespace'/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<a xmlns='http://www.w3.org/2000/xmlns/'/>"), Error::Namespace { .. }));
     // Rebinding xml to its own namespace name is allowed.
     assert_eq!(trace("<a xmlns:xml='http://www.w3.org/XML/1998/namespace'/>").unwrap().len(), 2);
   }
@@ -2164,8 +2184,8 @@ mod tests {
     assert!(error("<a x/>").message().contains("no value"));
     assert!(error("<a x=1/>").message().contains("not quoted"));
     assert!(error("<a x='1'y='2'/>").message().contains("separated by whitespace"));
-    assert_eq!(error("<a:b:c/>").kind(), ErrorKind::Namespace);
-    assert_eq!(error("<1a/>").kind(), ErrorKind::Namespace);
+    assert!(matches!(error("<a:b:c/>"), Error::Namespace { .. }));
+    assert!(matches!(error("<1a/>"), Error::Namespace { .. }));
   }
 
   #[test]

@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use xylogue_core::ErrorKind;
 use xylogue_dom::build;
 use xylogue_xdm::DomModel;
 use xylogue_xslt::{ResultSink, Stylesheet, Transform, transform};
@@ -26,7 +25,7 @@ struct Refuses;
 
 impl ResultSink for Refuses {
   fn write(&mut self, _href: &str, _bytes: &[u8]) -> xylogue_core::Result<()> {
-    Err(xylogue_core::Error::new(ErrorKind::Io, "this sink writes nothing".to_owned()))
+    Err(xylogue_core::Error::io("this sink writes nothing".to_owned()))
   }
 }
 

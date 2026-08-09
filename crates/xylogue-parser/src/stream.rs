@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use xylogue_core::chars;
 use xylogue_core::encoding::{self, Decoder};
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 
 /// How many bytes to accumulate before deciding the encoding of an entity.
 ///
@@ -112,8 +112,8 @@ impl CharStream {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Encoding`] if the name is unknown, or
-  /// [`ErrorKind::UnsupportedFeature`] if it needs a feature that was not compiled in.
+  /// Returns [`Error::Encoding`] if the name is unknown, or
+  /// [`Error::UnsupportedFeature`] if it needs a feature that was not compiled in.
   pub fn with_encoding(encoding: &str) -> Result<Self> {
     let decoder = encoding::decoder_for(encoding)?;
     Ok(Self { encoding: Some(decoder.encoding().to_owned()), state: State::Decoding(decoder), ..Self::new() })
@@ -126,7 +126,7 @@ impl CharStream {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::WellFormedness`] if the text contains a character `Char` forbids.
+  /// Returns [`Error::WellFormedness`] if the text contains a character `Char` forbids.
   pub fn from_text(text: &str) -> Result<Self> {
     let mut stream = Self { state: State::Decoding(Box::new(NoDecoder)), ..Self::new() };
     stream.append(text)?;
@@ -146,6 +146,30 @@ impl CharStream {
   pub fn with_public_id(mut self, public_id: impl Into<Arc<str>>) -> Self {
     self.public_id = Some(public_id.into());
     self
+  }
+
+  /// Fixes the encoding of a stream still waiting to sniff one, skipping detection.
+  ///
+  /// This is how an encoding named outside the entity — a transport header, a caller's override —
+  /// takes effect on a stream that was built to sniff: the sniffing state is replaced with a
+  /// decoder for `encoding`, and the stream's identifiers and position are kept. Detection is
+  /// skipped entirely, so a leading byte-order mark is *not* stripped; feed undecorated bytes, or
+  /// let the stream sniff instead when the input may carry one.
+  ///
+  /// # Errors
+  ///
+  /// Returns whatever [`encoding::decoder_for`] does for an unknown or unavailable encoding, and
+  /// an [`Error::Internal`] if the stream has already been fed — the encoding is a decision that
+  /// has to be made before the first byte.
+  pub fn use_encoding(&mut self, encoding: &str) -> Result<()> {
+    if !matches!(&self.state, State::Sniffing(sniffed) if sniffed.is_empty()) {
+      let message = "the encoding must be chosen before any bytes are fed to the stream";
+      return Err(Error::Internal { message: message.into() });
+    }
+    let decoder = encoding::decoder_for(encoding)?;
+    self.encoding = Some(decoder.encoding().to_owned());
+    self.state = State::Decoding(decoder);
+    Ok(())
   }
 
   /// Supplies more bytes, decoding as much as possible.
@@ -170,12 +194,12 @@ impl CharStream {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Encoding`] for undecodable bytes, [`ErrorKind::WellFormedness`] for
-  /// a character `Char` forbids, and [`ErrorKind::Internal`] if called after `last`.
+  /// Returns [`Error::Encoding`] for undecodable bytes, [`Error::WellFormedness`] for
+  /// a character `Char` forbids, and [`Error::Internal`] if called after `last`.
   pub fn feed(&mut self, bytes: &[u8], last: bool) -> Result<()> {
     if self.finished {
       let message = "this entity was already fed its last bytes; feed(.., true) may only be called once";
-      return Err(Error::new(ErrorKind::Internal, message).at(self.location()));
+      return Err(Error::Internal { message: message.into() }.at(self.location()));
     }
     if let State::Sniffing(sniffed) = &mut self.state {
       sniffed.extend_from_slice(bytes);
@@ -209,7 +233,8 @@ impl CharStream {
     }
 
     if last && !self.pending.is_empty() {
-      return Err(Error::new(ErrorKind::Encoding, "the entity ends with an incomplete character").at(self.location()));
+      let message = "the entity ends with an incomplete character";
+      return Err(Error::encoding(message).at(self.location()));
     }
     self.finished = last;
     self.append(&text)
@@ -233,7 +258,7 @@ impl CharStream {
           c as u32,
           self.encoding.as_deref().unwrap_or("this encoding")
         );
-        return Err(Error::new(ErrorKind::WellFormedness, message).at(self.location_of(self.buf.len())));
+        return Err(Error::well_formedness(message).at(self.location_of(self.buf.len())));
       }
       self.buf.push(c);
       self.chars_appended += 1;
@@ -442,7 +467,7 @@ mod tests {
     // NUL, so it fails as a character error rather than being silently guessed.
     let utf16: Vec<u8> = "<d/>".encode_utf16().flat_map(u16::to_be_bytes).collect();
     let mut stream = CharStream::new();
-    assert_eq!(stream.feed(&utf16, true).unwrap_err().kind(), ErrorKind::WellFormedness);
+    assert!(matches!(stream.feed(&utf16, true).unwrap_err(), Error::WellFormedness { .. }));
   }
 
   #[test]
@@ -469,7 +494,7 @@ mod tests {
   fn rejects_characters_that_char_forbids() {
     let mut stream = CharStream::with_encoding("UTF-8").unwrap();
     let err = stream.feed(b"<a>\x0c</a>", true).unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::WellFormedness);
+    assert!(matches!(err, Error::WellFormedness { .. }));
     assert_eq!(err.location().column, 4, "reports where the character is");
   }
 
@@ -484,14 +509,28 @@ mod tests {
   fn an_entity_ending_mid_character_is_an_encoding_error() {
     let mut stream = CharStream::with_encoding("UTF-8").unwrap();
     let err = stream.feed(&"あ".as_bytes()[..2], true).unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Encoding);
+    assert!(matches!(err, Error::Encoding { .. }));
   }
 
   #[test]
   fn feeding_after_the_end_is_a_bug() {
     let mut stream = CharStream::with_encoding("UTF-8").unwrap();
     stream.feed(b"a", true).unwrap();
-    assert_eq!(stream.feed(b"b", true).unwrap_err().kind(), ErrorKind::Internal);
+    assert!(matches!(stream.feed(b"b", true).unwrap_err(), Error::Internal { .. }));
+  }
+
+  #[test]
+  fn use_encoding_fixes_a_fresh_stream_but_not_one_already_fed() {
+    // 0xE9 is 'é' in ISO-8859-1 but not valid UTF-8, so the choice of encoding is visible.
+    let mut stream = CharStream::new();
+    stream.use_encoding("ISO-8859-1").unwrap();
+    stream.feed(&[0xE9], true).unwrap();
+    assert_eq!(stream.remainder(), "é");
+
+    // Once a byte has been fed, the encoding can no longer be chosen.
+    let mut fed = CharStream::new();
+    fed.feed(b"x", false).unwrap();
+    assert!(matches!(fed.use_encoding("UTF-8").unwrap_err(), Error::Internal { .. }));
   }
 
   #[test]
@@ -511,7 +550,7 @@ mod tests {
     let stream = CharStream::from_text("a\r\nb").unwrap();
     assert_eq!(stream.remainder(), "a\nb");
     assert!(stream.is_complete());
-    assert_eq!(CharStream::from_text("\u{0}").unwrap_err().kind(), ErrorKind::WellFormedness);
+    assert!(matches!(CharStream::from_text("\u{0}").unwrap_err(), Error::WellFormedness { .. }));
   }
 
   #[test]

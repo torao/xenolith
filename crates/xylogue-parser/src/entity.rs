@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 use xylogue_core::uri::UriReference;
 
 use crate::stream::CharStream;
@@ -251,8 +251,8 @@ impl EntityStack {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::WellFormedness`] if the entity is already open, which is the
-  /// well-formedness constraint "No Recursion", and [`ErrorKind::Limit`] if a bound in
+  /// Returns [`Error::WellFormedness`] if the entity is already open, which is the
+  /// well-formedness constraint "No Recursion", and [`Error::Limit`] if a bound in
   /// [`Limits`] would be exceeded.
   ///
   /// # Examples
@@ -260,7 +260,7 @@ impl EntityStack {
   /// An entity that refers to itself is refused rather than expanded forever:
   ///
   /// ```
-  /// use xylogue_core::ErrorKind;
+  /// use xylogue_core::Error;
   /// use xylogue_parser::{CharStream, Entity, EntityKind, EntityStack, Limits};
   ///
   /// let mut stack = EntityStack::new(Entity::document(CharStream::from_text("&e;")?), Limits::default());
@@ -270,7 +270,7 @@ impl EntityStack {
   ///
   /// stack.push(entity_e())?;
   /// let err = stack.push(entity_e()).unwrap_err();
-  /// assert_eq!(err.kind(), ErrorKind::WellFormedness);
+  /// assert!(matches!(err, Error::WellFormedness { .. }));
   /// # Ok::<(), xylogue_core::Error>(())
   /// ```
   pub fn push(&mut self, entity: Entity) -> Result<()> {
@@ -278,7 +278,7 @@ impl EntityStack {
       if self.is_open(name) {
         let open: Vec<&str> = self.entities.iter().filter_map(|e| e.name().map(|n| &**n)).collect();
         let message = format!("entity \"{name}\" refers to itself, through {}", open.join(" -> "));
-        return Err(Error::new(ErrorKind::WellFormedness, message).at(self.location()));
+        return Err(Error::well_formedness(message).at(self.location()));
       }
     }
     if self.entities.len() >= self.limits.max_depth {
@@ -317,7 +317,7 @@ impl EntityStack {
   ///
   /// # Errors
   ///
-  /// Whatever [`CharStream::feed`] returns, plus [`ErrorKind::Limit`] if the expansion budget
+  /// Whatever [`CharStream::feed`] returns, plus [`Error::Limit`] if the expansion budget
   /// is exhausted.
   pub fn feed(&mut self, bytes: &[u8], last: bool) -> Result<()> {
     let before = self.current().stream().chars_decoded();
@@ -391,7 +391,7 @@ impl EntityStack {
   }
 
   fn limit_exceeded(&self, message: String) -> Error {
-    Error::new(ErrorKind::Limit, message).at(self.location())
+    Error::limit(message).at(self.location())
   }
 }
 
@@ -431,7 +431,7 @@ mod tests {
     stack.push(text_entity("a", "&b;")).unwrap();
     stack.push(text_entity("b", "&a;")).unwrap();
     let err = stack.push(text_entity("a", "&b;")).unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::WellFormedness);
+    assert!(matches!(err, Error::WellFormedness { .. }));
     assert!(err.message().contains("\"a\""));
   }
 
@@ -471,7 +471,7 @@ mod tests {
     stack.push(text_entity("a", "x")).unwrap();
     stack.push(text_entity("b", "x")).unwrap();
     let err = stack.push(text_entity("c", "x")).unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::Limit);
+    assert!(matches!(err, Error::Limit { .. }));
   }
 
   #[test]
@@ -483,7 +483,7 @@ mod tests {
     stack.pop();
     stack.push(text_entity("b", "x")).unwrap();
     stack.pop();
-    assert_eq!(stack.push(text_entity("c", "x")).unwrap_err().kind(), ErrorKind::Limit);
+    assert!(matches!(stack.push(text_entity("c", "x")).unwrap_err(), Error::Limit { .. }));
   }
 
   #[test]
@@ -494,7 +494,7 @@ mod tests {
     );
     stack.push(text_entity("a", "0123456789")).unwrap();
     stack.pop();
-    assert_eq!(stack.push(text_entity("b", "x")).unwrap_err().kind(), ErrorKind::Limit);
+    assert!(matches!(stack.push(text_entity("b", "x")).unwrap_err(), Error::Limit { .. }));
   }
 
   #[test]
@@ -512,7 +512,7 @@ mod tests {
       ))
       .unwrap();
     stack.feed(b"abcd", false).unwrap();
-    assert_eq!(stack.feed(b"e", true).unwrap_err().kind(), ErrorKind::Limit);
+    assert!(matches!(stack.feed(b"e", true).unwrap_err(), Error::Limit { .. }));
   }
 
   #[test]

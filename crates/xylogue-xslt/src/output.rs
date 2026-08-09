@@ -22,7 +22,7 @@
 
 use std::collections::HashSet;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::{Document, NodeId, NodeType};
 
 use crate::stylesheet::OutputMethod;
@@ -143,7 +143,7 @@ impl Output {
           "text" => OutputMethod::Text,
           other => {
             let message = format!("exsl:document method {other:?} is not one this can write");
-            return Err(Error::new(ErrorKind::Xslt, message));
+            return Err(Error::xslt(message));
           }
         };
         // Said outright, so §16's "work it out from the document element" does not apply.
@@ -515,7 +515,7 @@ pub(crate) fn encode(written: &str, encoding: Option<&str>) -> Result<Vec<u8>> {
 #[cfg(feature = "encodings")]
 fn transcode(written: &str, label: &str) -> Result<Vec<u8>> {
   let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) else {
-    return Err(Error::new(ErrorKind::Xslt, format!("no encoding is named {label:?}")));
+    return Err(Error::xslt(format!("no encoding is named {label:?}")));
   };
   // A character the encoding cannot hold becomes a character reference, which is what §16 asks
   // for and is still readable back.
@@ -529,5 +529,5 @@ fn transcode(written: &str, label: &str) -> Result<Vec<u8>> {
   let _ = written;
   let message =
     format!("writing the result in {label:?} needs the `encodings` feature; without it only UTF-8 can be written");
-  Err(Error::new(ErrorKind::Xslt, message))
+  Err(Error::xslt(message))
 }

@@ -38,6 +38,9 @@ xylogue = { version = "0.0.0", path = "crates/xylogue", default-features = false
 # Argument parsing for the `xylogue` binary. No library crate depends on it.
 clap = { version = "4", features = ["derive", "wrap_help"] }
 encoding_rs = "0.8"
+# Derives `Display` and `Error` for `ErrorKind`, so each variant owns its own wording and its
+# structured payload. A build-time proc-macro with no runtime footprint; MSRV 1.61.
+thiserror = "2"
 # The collation `xsl:sort` needs for a language other than code-point order (ROADMAP decision 2).
 # EXSLT's regular-expressions module. A linear-time matcher: no backreferences or lookaround,
 # and in exchange no pattern that can be made to run for ever by its input.

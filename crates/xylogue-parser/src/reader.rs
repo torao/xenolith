@@ -7,7 +7,7 @@
 
 use std::io::Read;
 
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 
 use crate::config::ParserConfig;
 use crate::entity::{Entity, Limits};
@@ -85,7 +85,9 @@ impl<R: Read> Reader<R> {
   /// let mut reader = Reader::with_system_id("<a>".as_bytes(), "file:///doc.xml");
   /// let error = reader.advance().and_then(|_| reader.advance()).unwrap_err();
   /// assert_eq!(error.location().system_id.as_deref(), Some("file:///doc.xml"));
-  /// assert!(error.to_string().starts_with("file:///doc.xml:"));
+  /// // The location is a field on the error; its `Display` is the message alone, so a caller
+  /// // that wants a position-prefixed line composes the two itself.
+  /// assert!(error.to_string().starts_with("not well-formed:"));
   /// ```
   #[must_use]
   pub fn with_system_id(source: R, system_id: &str) -> Self {
@@ -116,6 +118,32 @@ impl<R: Read> Reader<R> {
     self
   }
 
+  /// Fixes the encoding of the document, skipping detection.
+  ///
+  /// By default the encoding is sniffed from a byte-order mark and the declaration; give it here
+  /// when it is dictated from outside — an HTTP `Content-Type`, say, or a caller who knows the
+  /// file. Call before the first [`advance`](Self::advance). Detection is skipped, so a leading
+  /// byte-order mark is not stripped; leave the encoding unset when the input may carry one. Any
+  /// system identifier already set with [`with_system_id`](Self::with_system_id) is kept.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if `encoding` is not one this build can decode.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylogue_parser::Reader;
+  ///
+  /// let mut reader = Reader::new("<a/>".as_bytes()).with_encoding("US-ASCII")?;
+  /// assert!(reader.advance()?.is_some());
+  /// # Ok::<(), xylogue_core::Error>(())
+  /// ```
+  pub fn with_encoding(mut self, encoding: &str) -> Result<Self> {
+    self.parser.set_encoding(encoding)?;
+    Ok(self)
+  }
+
   /// Sets the parser configuration: the optional `xml:base` and `xml:id` processing.
   ///
   /// See [`ParserConfig`]. Call before the first [`advance`](Self::advance).
@@ -132,7 +160,7 @@ impl<R: Read> Reader<R> {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::Io`] if the source fails, and whatever the parser reports for a
+  /// Returns [`Error::Io`] if the source fails, and whatever the parser reports for a
   /// document that breaks the rules.
   pub fn advance(&mut self) -> Result<Option<EventKind>> {
     loop {
@@ -158,7 +186,7 @@ impl<R: Read> Reader<R> {
       None => {
         let at = self.parser.location();
         let message = format!("{request}: no resolver is configured; call Reader::with_resolver to allow this");
-        Err(Error::new(ErrorKind::WellFormedness, message).at(at))
+        Err(Error::well_formedness(message).at(at))
       }
     }
   }
@@ -172,7 +200,7 @@ impl<R: Read> Reader<R> {
     }
     let read = self.source.read(&mut self.buffer).map_err(|e| {
       let at = self.parser.location();
-      Error::new(ErrorKind::Io, format!("cannot read the document: {e}")).at(at).caused_by(e)
+      Error::io(format!("cannot read the document: {e}")).at(at).caused_by(e)
     })?;
     self.finished = read == 0;
     self.parser.feed(&self.buffer[..read], self.finished)
@@ -291,6 +319,26 @@ mod tests {
   }
 
   #[test]
+  fn an_explicit_encoding_overrides_sniffing() {
+    // 0xE9 is 'é' in ISO-8859-1 but not valid UTF-8: naming the encoding is what makes it read.
+    let bytes: &[u8] = b"<a>caf\xE9</a>";
+    let mut reader = Reader::new(bytes).with_encoding("ISO-8859-1").unwrap();
+    let mut text = None;
+    while let Some(kind) = reader.advance().unwrap() {
+      if kind == EventKind::Text {
+        text = Some(reader.parser().text().to_owned());
+      }
+    }
+    assert_eq!(text.as_deref(), Some("café"));
+
+    // Left to sniff, the same bytes are read as UTF-8, where 0xE9 is a fatal error.
+    assert!(matches!(kinds(Reader::new(bytes)), Err(Error::Encoding { .. })));
+
+    // An encoding this build cannot provide is refused up front.
+    assert!(Reader::new(bytes).with_encoding("no-such-encoding").is_err());
+  }
+
+  #[test]
   fn an_empty_source_is_a_document_without_a_root() {
     let error = kinds(Reader::new(&b""[..])).unwrap_err();
     assert!(error.message().contains("no root element"));
@@ -299,7 +347,7 @@ mod tests {
   #[test]
   fn io_errors_are_reported_with_their_cause() {
     let error = kinds(Reader::new(Failing)).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Io);
+    assert!(matches!(error, Error::Io { .. }));
     assert!(error.message().contains("cannot read"));
     assert!(std::error::Error::source(&error).is_some(), "the io::Error is kept as the cause");
   }
@@ -316,7 +364,7 @@ mod tests {
         Ok(Some(kind)) => got.push(kind),
         Ok(None) => break,
         // Retrying an interruption is the caller's business; here it stands in for a stall.
-        Err(e) if e.kind() == ErrorKind::Io => continue,
+        Err(Error::Io { .. }) => continue,
         Err(e) => panic!("{e}"),
       }
     }

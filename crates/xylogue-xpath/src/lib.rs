@@ -59,7 +59,7 @@
 //! | `XPathFunctionResolver` | [`Functions`] |
 //! | `XPathFunction` | [`Function`] |
 //! | `XPathConstants.NODESET` / `.STRING` / … | [`Value`] and its conversions |
-//! | `XPathExpressionException` | [`ErrorKind::XPath`](xylogue_core::ErrorKind::XPath) |
+//! | `XPathExpressionException` | [`Error::XPath`](xylogue_core::Error::XPath) |
 //!
 //! One difference is deliberate: Java asks for the result type up front and casts, while here
 //! the [`Value`] says which type it is and converts on request, since XPath's conversions are
@@ -121,7 +121,7 @@ use xylogue_xdm::Model;
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::XPath`](xylogue_core::ErrorKind::XPath) if the expression cannot be
+/// Returns [`Error::XPath`](xylogue_core::Error::XPath) if the expression cannot be
 /// read, with the position in the expression that could not be made sense of.
 ///
 /// # Examples
@@ -146,7 +146,7 @@ pub fn parse(expression: &str) -> Result<Expr> {
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::XPath`](xylogue_core::ErrorKind::XPath) if the expression asks for
+/// Returns [`Error::XPath`](xylogue_core::Error::XPath) if the expression asks for
 /// something the context cannot give — an unbound variable or prefix, a function that is not
 /// available — or applies an operator to a value of the wrong type.
 pub fn evaluate<M: Model>(expr: &Expr, model: &M, node: M::Node) -> Result<Value<M::Node>> {

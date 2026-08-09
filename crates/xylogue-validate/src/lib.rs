@@ -59,7 +59,7 @@ pub use ids::XmlIdValidator;
 
 use std::ops::ControlFlow;
 
-use xylogue_core::error::{Error, ErrorKind, Location};
+use xylogue_core::error::{Error, Location};
 use xylogue_core::name::{NamePool, QName};
 use xylogue_parser::AttributeRef;
 
@@ -92,10 +92,10 @@ impl ValidityError {
     &self.location
   }
 
-  /// Converts to the crate-wide [`Error`] type, as a recoverable [`ErrorKind::Validity`].
+  /// Converts to the crate-wide [`Error`] type, as a recoverable [`Error::Validity`].
   #[must_use]
   pub fn to_error(&self) -> Error {
-    Error::recoverable(ErrorKind::Validity, self.message.clone()).at(self.location.clone())
+    Error::validity(self.message.clone()).at(self.location.clone())
   }
 }
 

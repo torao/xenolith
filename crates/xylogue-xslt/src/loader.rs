@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::{Document, NodeId, build};
 use xylogue_xdm::{Documents, DomNode};
 
@@ -42,7 +42,7 @@ impl Loader for NoLoader {
       "this stylesheet names the module {uri:?}, but no loader was given; \
        use Stylesheet::compile_with to supply one"
     );
-    Err(Error::new(ErrorKind::Xslt, message))
+    Err(Error::xslt(message))
   }
 }
 
@@ -144,7 +144,7 @@ impl ResultSink for NoResults {
       "exsl:document asked to write {href:?}, and no result sink was given; \
        supply one with Transform::with_results to say where a secondary result may go"
     );
-    Err(Error::new(ErrorKind::Xslt, message))
+    Err(Error::xslt(message))
   }
 }
 

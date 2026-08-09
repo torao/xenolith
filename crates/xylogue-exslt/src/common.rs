@@ -84,7 +84,7 @@ pub fn register<M: Model>(functions: Functions<M>) -> Functions<M> {
              only a variable holding one can be converted",
             crate::support::describe(&other)
           );
-          Err(xylogue_core::Error::new(xylogue_core::ErrorKind::Xslt, message))
+          Err(xylogue_core::Error::xslt(message))
         }
         None => unreachable!("the arity was just checked"),
       }

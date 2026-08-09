@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_xdm::Model;
 use xylogue_xpath::{Context, Functions, Value, is_core_function};
 
@@ -235,9 +235,9 @@ pub(crate) fn register<M: Model>(
       let Some(symbols) = formats.get(&name) else {
         let named = name.map_or_else(String::new, |(_, local)| local);
         let message = format!("no xsl:decimal-format is named {named:?}");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       };
-      let parsed = DecimalPattern::parse(&pattern, symbols).map_err(|message| Error::new(ErrorKind::Xslt, message))?;
+      let parsed = DecimalPattern::parse(&pattern, symbols).map_err(Error::xslt)?;
       Ok(Value::String(parsed.format(number, symbols)))
     })
     .with("", "key", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
@@ -270,7 +270,7 @@ pub(crate) fn register<M: Model>(
       let node = for_current
         .current
         .get()
-        .ok_or_else(|| Error::new(ErrorKind::Xslt, "current() was called outside a transformation".to_owned()))?;
+        .ok_or_else(|| Error::xslt("current() was called outside a transformation".to_owned()))?;
       Ok(Value::NodeSet(vec![node]))
     })
     .with("", "generate-id", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
@@ -281,7 +281,7 @@ pub(crate) fn register<M: Model>(
         Some(Value::NodeSet(nodes)) => first_in_document_order(nodes, context),
         Some(other) => {
           let message = format!("generate-id() takes a node-set, but was given {}", describe(other));
-          return Err(Error::new(ErrorKind::Xslt, message));
+          return Err(Error::xslt(message));
         }
       };
       Ok(Value::String(node.map(|node| for_identifier.identifier(node)).unwrap_or_default()))
@@ -349,7 +349,7 @@ fn expand<M: Model>(name: &str, context: &Context<'_, M>) -> Result<(Option<Stri
       Some(namespace) => Ok((Some(namespace.to_owned()), local.to_owned())),
       None => {
         let message = format!("the prefix \"{prefix}\" of \"{name}\" is not bound");
-        Err(Error::new(ErrorKind::Xslt, message))
+        Err(Error::xslt(message))
       }
     },
   }
@@ -370,7 +370,7 @@ fn arity<N>(name: &str, arguments: &[Value<N>], least: usize, most: Option<usize
       None => format!("at least {least} argument(s)"),
     };
     let message = format!("the function \"{name}()\" needs {expected}, but was given {found}");
-    return Err(Error::new(ErrorKind::Xslt, message));
+    return Err(Error::xslt(message));
   }
   Ok(())
 }

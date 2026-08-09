@@ -3,7 +3,7 @@
 //! Each case checks the tree by printing it back, which writes the unabbreviated form with
 //! binary expressions parenthesized — so both what was recognized and how it was grouped show.
 
-use xylogue_core::ErrorKind;
+use xylogue_core::Error;
 use xylogue_xpath::parse;
 
 /// The parsed expression, written back out.
@@ -14,7 +14,7 @@ fn tree(expression: &str) -> String {
 /// The message of the error `expression` fails with.
 fn error(expression: &str) -> String {
   let error = parse(expression).expect_err("fails");
-  assert_eq!(error.kind(), ErrorKind::XPath);
+  assert!(matches!(error, Error::XPath { .. }));
   error.message().to_owned()
 }
 

@@ -7,6 +7,13 @@
 
 use xylogue_parser::{Event, EventKind, Parser, Progress, Reader};
 
+/// Renders an error the way a diagnostic would: its location, if known, then the message. The
+/// location is a field on the error now, not part of its `Display`, so a caller that wants it in
+/// the string composes the two.
+fn describe(e: &xylogue_core::Error) -> String {
+  if e.location().is_unknown() { e.to_string() } else { format!("{}: {e}", e.location()) }
+}
+
 /// Parses `xml` with the parser fed in `chunk`-sized pieces.
 fn by_parser(xml: &str, chunk: usize) -> Result<Vec<Event>, String> {
   let mut parser = Parser::new();
@@ -19,23 +26,23 @@ fn by_parser(xml: &str, chunk: usize) -> Result<Vec<Event>, String> {
       Ok(Progress::Eof) => return Ok(events),
       Ok(Progress::NeedMoreInput) => {
         let end = (fed + chunk).min(bytes.len());
-        parser.feed(&bytes[fed..end], end == bytes.len()).map_err(|e| e.to_string())?;
+        parser.feed(&bytes[fed..end], end == bytes.len()).map_err(|e| describe(&e))?;
         fed = end;
       }
       Ok(other) => panic!("unexpected {other:?}"),
-      Err(e) => return Err(e.to_string()),
+      Err(e) => return Err(describe(&e)),
     }
   }
 }
 
 fn by_reader(xml: &str) -> Result<Vec<Event>, String> {
-  Reader::new(xml.as_bytes()).events().collect::<Result<_, _>>().map_err(|e| e.to_string())
+  Reader::new(xml.as_bytes()).events().collect::<Result<_, _>>().map_err(|e| describe(&e))
 }
 
 #[cfg(feature = "tokio")]
 fn by_async_reader(xml: &str) -> Result<Vec<Event>, String> {
   use xylogue_parser::AsyncReader;
-  tokio_test::block_on(AsyncReader::new(xml.as_bytes()).events()).map_err(|e| e.to_string())
+  tokio_test::block_on(AsyncReader::new(xml.as_bytes()).events()).map_err(|e| describe(&e))
 }
 
 /// Parses `xml` every way available, requiring them all to agree.
@@ -204,7 +211,7 @@ impl xylogue_parser::resolve::UriResolver for MapResolver {
 
 fn parse_with(xml: &str, files: &[(&'static str, &'static [u8])]) -> Result<Vec<Event>, String> {
   let resolver = MapResolver(files.iter().copied().collect());
-  Reader::new(xml.as_bytes()).with_resolver(resolver).events().collect::<Result<_, _>>().map_err(|e| e.to_string())
+  Reader::new(xml.as_bytes()).with_resolver(resolver).events().collect::<Result<_, _>>().map_err(|e| describe(&e))
 }
 
 #[test]

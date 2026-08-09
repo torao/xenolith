@@ -5,7 +5,7 @@
 //! A brace that is meant literally is doubled — `{{` and `}}` — which is the only escape there
 //! is, so the grammar is small enough to read by hand.
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 
 /// One part of an attribute value template.
 #[derive(Clone, Debug, PartialEq)]
@@ -84,7 +84,7 @@ fn expression_end(text: &str) -> Option<usize> {
 }
 
 fn avt_error(value: &str, why: &str) -> Error {
-  Error::new(ErrorKind::Xslt, format!("{value:?} is not a valid attribute value template: {why}"))
+  Error::xslt(format!("{value:?} is not a valid attribute value template: {why}"))
 }
 
 #[cfg(test)]

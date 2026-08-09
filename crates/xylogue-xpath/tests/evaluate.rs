@@ -1,6 +1,6 @@
 //! Evaluating XPath 1.0 expressions: axes, node tests, predicates, operators and conversions.
 
-use xylogue_core::ErrorKind;
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_xdm::{DomModel, DomNode, Model, NodeKind};
 use xylogue_xpath::{Value, Variables, XPath};
@@ -43,7 +43,7 @@ fn error(xml: &str, expression: &str) -> String {
   let model = DomModel::new(&doc);
   let query = XPath::new().compile(expression).expect("parses");
   let error = query.evaluate(&model, model.root_node()).expect_err("fails");
-  assert_eq!(error.kind(), ErrorKind::XPath);
+  assert!(matches!(error, Error::XPath { .. }));
   error.message().to_owned()
 }
 

@@ -16,7 +16,7 @@
 //! [XPath parser](xylogue_xpath::parse) and then checked against the subset, rather than given
 //! a second grammar that could drift away from the first.
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_xdm::Model;
 use xylogue_xpath::{Axis, BinaryOp, Expr, NameTest, Namespaces, NodeTest, Path, PathStart, Step, Variables};
 
@@ -55,8 +55,8 @@ impl Pattern {
   ///
   /// # Errors
   ///
-  /// Returns [`ErrorKind::XPath`] if the text is not a path at all, and
-  /// [`ErrorKind::Xslt`](xylogue_core::ErrorKind::Xslt) if it is a path but not one a pattern
+  /// Returns [`Error::XPath`] if the text is not a path at all, and
+  /// [`Error::Xslt`](xylogue_core::Error::Xslt) if it is a path but not one a pattern
   /// may be — an axis other than `child` or `attribute`, or an expression other than `id()` or
   /// `key()` at its head.
   pub fn compile(pattern: &str) -> Result<Self> {
@@ -592,5 +592,5 @@ fn default_priority(anchor: &Anchor, steps: &[PatternStep]) -> f64 {
 }
 
 fn not_a_pattern(source: &str, why: &str) -> Error {
-  Error::new(ErrorKind::Xslt, format!("{source:?} is not a valid pattern: {why}"))
+  Error::xslt(format!("{source:?} is not a valid pattern: {why}"))
 }

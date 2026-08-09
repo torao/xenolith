@@ -1,6 +1,6 @@
 //! Running a stylesheet: the instructions, the built-in rules, and what they build.
 
-use xylogue_core::{Error, ErrorKind};
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_serialize::Serializer;
 use xylogue_xdm::DomModel;
@@ -26,7 +26,7 @@ fn error(body: &str, xml: &str) -> String {
   let doc = build::parse(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let error = transform(&stylesheet, &model, model.root_node()).expect_err("fails");
-  assert_eq!(error.kind(), ErrorKind::Xslt, "{}", error.message());
+  assert!(matches!(error, Error::Xslt { .. }), "{}", error.message());
   error.message().to_owned()
 }
 

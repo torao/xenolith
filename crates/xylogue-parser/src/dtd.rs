@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use xylogue_core::chars;
-use xylogue_core::error::{Error, ErrorKind, Location, Result};
+use xylogue_core::error::{Error, Location, Result};
 use xylogue_core::name::{NameId, NamePool};
 
 /// A general entity: one that a reference in content or an attribute may name.
@@ -309,7 +309,7 @@ pub(crate) fn parse_internal_subset(subset: &str, pool: &mut NamePool, base: Loc
   match parse_dtd(&mut buf, &mut internal_len, pool, &base)? {
     DtdOutcome::Complete(dtd) => Ok(*dtd),
     DtdOutcome::NeedExternalPe(pe) => {
-      Err(Error::new(ErrorKind::UnsupportedFeature, format!("needs external parameter entity \"{}\"", pe.name)))
+      Err(Error::UnsupportedFeature { message: format!("needs external parameter entity \"{}\"", pe.name) })
     }
   }
 }
@@ -452,7 +452,7 @@ impl DtdParser<'_> {
   /// The sentinel error that unwinds a pass paused for an external parameter entity. It is
   /// never surfaced: [`parse_dtd`] turns it into [`DtdOutcome::NeedExternalPe`].
   fn pause_error(&self) -> Error {
-    Error::new(ErrorKind::Internal, "<paused for an external parameter entity>")
+    Error::Internal { message: "<paused for an external parameter entity>".into() }
   }
 
   /// Handles one of the constructs that begin with `<` in the subset.
@@ -1205,7 +1205,7 @@ impl DtdParser<'_> {
   }
 
   fn error(&self, message: impl Into<String>) -> Error {
-    Error::new(ErrorKind::WellFormedness, message).at(self.base.clone())
+    Error::well_formedness(message).at(self.base.clone())
   }
 }
 

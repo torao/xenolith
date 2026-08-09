@@ -126,8 +126,7 @@ struct Files;
 impl Loader for Files {
   fn load(&mut self, uri: &str) -> xylogue::Result<Vec<u8>> {
     let path = path_of(uri);
-    fs::read(&path)
-      .map_err(|error| xylogue::Error::new(xylogue::ErrorKind::Xslt, format!("{}: {error}", display(Path::new(&path)))))
+    fs::read(&path).map_err(|error| xylogue::Error::xslt(format!("{}: {error}", display(Path::new(&path)))))
   }
 }
 

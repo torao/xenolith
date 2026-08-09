@@ -136,7 +136,7 @@ pub mod transform;
 #[doc = include_str!("../MIGRATING-FROM-JAVA.md")]
 pub mod migrating_from_java {}
 
-pub use xylogue_core::{Error, ErrorKind, Location, Result, Severity};
+pub use xylogue_core::{Error, Location, Result, Severity};
 pub use xylogue_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};
 pub use xylogue_core::{chars, encoding, error, name, uri};
 

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use xylogue_core::{Error, ErrorKind};
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_serialize::Serializer;
 use xylogue_xinclude::{Loader, XInclude};
@@ -18,7 +18,7 @@ impl Files {
 
 impl Loader for Files {
   fn load(&mut self, uri: &str) -> Result<Vec<u8>, Error> {
-    self.0.get(uri).cloned().ok_or_else(|| Error::new(ErrorKind::Io, format!("no resource at {uri}")))
+    self.0.get(uri).cloned().ok_or_else(|| Error::io(format!("no resource at {uri}")))
   }
 }
 
@@ -84,7 +84,7 @@ fn uses_the_fallback_when_the_resource_is_missing() {
 #[test]
 fn a_missing_resource_with_no_fallback_is_fatal() {
   let error = run(&format!("<doc{NS}><xi:include href='gone.xml'/></doc>"), &[], XInclude::new()).unwrap_err();
-  assert_eq!(error.kind(), ErrorKind::XInclude);
+  assert!(matches!(error, Error::XInclude { .. }));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn an_inclusion_loop_is_detected() {
     XInclude::new(),
   )
   .unwrap_err();
-  assert_eq!(error.kind(), ErrorKind::XInclude);
+  assert!(matches!(error, Error::XInclude { .. }));
   assert!(error.message().contains("loop"), "{}", error.message());
 }
 
@@ -110,7 +110,7 @@ fn the_inclusion_count_is_bounded() {
     XInclude::new().with_max_includes(1),
   )
   .unwrap_err();
-  assert_eq!(error.kind(), ErrorKind::Limit);
+  assert!(matches!(error, Error::Limit { .. }));
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn xpointer_is_rejected_with_parse_text() {
     XInclude::new(),
   )
   .unwrap_err();
-  assert_eq!(error.kind(), ErrorKind::XInclude);
+  assert!(matches!(error, Error::XInclude { .. }));
 }
 
 #[test]

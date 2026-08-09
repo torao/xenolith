@@ -1,6 +1,6 @@
 //! Template match patterns: what matches, and what priority a pattern gets by default.
 
-use xylogue_core::ErrorKind;
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_xdm::{DomModel, Model, NodeKind};
 use xylogue_xpath::{Namespaces, Variables};
@@ -63,7 +63,7 @@ fn priority(pattern: &str) -> f64 {
 /// The message of the error a pattern fails to compile with.
 fn error(pattern: &str) -> String {
   let error = Pattern::compile(pattern).expect_err("is refused");
-  assert_eq!(error.kind(), ErrorKind::Xslt, "{}", error.message());
+  assert!(matches!(error, Error::Xslt { .. }), "{}", error.message());
   error.message().to_owned()
 }
 
@@ -191,11 +191,11 @@ fn what_is_not_a_pattern_is_refused_with_a_reason() {
   assert!(error("1 + 2").contains("a path"), "{}", error("1 + 2"));
   // `a//` never reaches the pattern checks — the path grammar wants a step after `//` — but the
   // step that `//` stands for can be written out, and then it does.
-  assert_eq!(Pattern::compile("a//").unwrap_err().kind(), ErrorKind::XPath);
+  assert!(matches!(Pattern::compile("a//").unwrap_err(), Error::XPath { .. }));
   let dangling = "a/descendant-or-self::node()";
   assert!(error(dangling).contains("may not end"), "{}", error(dangling));
   // Not a path at all: the XPath parser refuses it first, so the kind is XPath.
-  assert_eq!(Pattern::compile("a[").unwrap_err().kind(), ErrorKind::XPath);
+  assert!(matches!(Pattern::compile("a[").unwrap_err(), Error::XPath { .. }));
 }
 
 #[test]

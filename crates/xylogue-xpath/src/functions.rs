@@ -9,7 +9,7 @@
 //! ones in [`value`](crate::value), so the behaviour is the same wherever they are applied.
 
 use xylogue_core::chars::is_whitespace;
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_core::name::XML_NS_URI;
 use xylogue_xdm::Model;
 
@@ -238,7 +238,7 @@ fn extension<M: Model>(
       "the prefix \"{prefix}\" of the function \"{prefix}:{local}\" is not bound; \
        bind it before compiling the expression"
     );
-    return Err(Error::new(ErrorKind::XPath, message));
+    return Err(Error::xpath(message));
   };
   let found = context.functions.and_then(|functions| functions.get(namespace, local));
   let Some(function) = found else {
@@ -260,7 +260,7 @@ fn no_extension<M: Model>(namespace: &str, local: &str, context: &Context<'_, M>
     format!("registered: {}", available.join(", "))
   };
   let message = format!("no extension function {{{namespace}}}{local} is registered; {known}");
-  Error::new(ErrorKind::XPath, message)
+  Error::xpath(message)
 }
 
 // --- The functions that need more than a line ---------------------------------------------------
@@ -407,7 +407,7 @@ fn arity<N>(name: &str, arguments: &[Value<N>], min: usize, max: Option<usize>) 
     None => format!("at least {min} argument{}", plural(min)),
   };
   let message = format!("the function \"{name}()\" takes {expected}, but was given {}", arguments.len());
-  Err(Error::new(ErrorKind::XPath, message))
+  Err(Error::xpath(message))
 }
 
 const fn plural(count: usize) -> &'static str {
@@ -416,11 +416,11 @@ const fn plural(count: usize) -> &'static str {
 
 fn argument_type(name: &str, found: &str, expected: &str) -> Error {
   let message = format!("the function \"{name}()\" needs {expected}, but was given {found}");
-  Error::new(ErrorKind::XPath, message)
+  Error::xpath(message)
 }
 
 fn unavailable(name: &str) -> Error {
-  Error::new(ErrorKind::XPath, format!("no function named \"{name}\" is available"))
+  Error::xpath(format!("no function named \"{name}\" is available"))
 }
 
 #[cfg(test)]

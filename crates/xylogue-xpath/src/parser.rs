@@ -4,7 +4,7 @@
 //! `or` down to a single step. The abbreviations are expanded as they are recognized, so what
 //! comes out is the plain form described in [`ast`](crate::ast).
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 
 use crate::ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
 use crate::lexer::{NodeTypeName, Spanned, Token};
@@ -83,7 +83,7 @@ impl Parser<'_> {
   }
 
   fn error(&self, message: impl Into<String>) -> Error {
-    Error::new(ErrorKind::XPath, format!("{} at position {} of the XPath expression", message.into(), self.position()))
+    Error::xpath(format!("{} at position {} of the XPath expression", message.into(), self.position()))
   }
 
   // --- Precedence levels --------------------------------------------------------------------

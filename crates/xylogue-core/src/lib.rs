@@ -1,7 +1,7 @@
 //! Core primitives shared by every layer of xylogue.
 //!
-//! This crate deliberately knows nothing about parsing, trees or transformation. It provides
-//! the vocabulary the rest of the workspace agrees on:
+//! This crate provides vocabulary that is commonly used in order parts of the workspace. It deliberately does not deal
+//! with concepts such as parsing, tree structures, or transformations:
 //!
 //! - [`error`] — errors carrying a [`Location`] in the *entity* they occurred in.
 //! - [`chars`] — the character classes of XML 1.0 Fifth Edition.
@@ -42,21 +42,21 @@
 //!
 //! # Feature flags
 //!
-//! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via
-//!   `encoding_rs`. With it off, [`encoding::decoder_for`] reports
-//!   [`ErrorKind::UnsupportedFeature`] rather than silently falling back.
-
+//! - `encodings` (default): By default, xylogue can utirize the character encodings supported by [`encoding_rs`]. If
+//!   this is disabled, only UTF-8, UTF-16, US-ASCII, and ISO-8859-1 will be available; any other encoding will result
+//!   in a [`Error::UnsupportedFeature`] being reported via [`encoding::decoder_for`].
+//!
 //! # Specifications
 //!
-//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
-//! read while writing this can still be found:
+//! These were implemented based on the following documents. The dates shown are the last modified dates on the
+//! documents at the time of access.
 //!
-//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation 26 November 2008. [`chars`] is its character
-//!   classes and productions; [`encoding`] its §4.3.3 rules for reading a document's encoding.
-//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation 8 December 2009. [`name`] is
-//!   its `QName`, prefix and expanded-name model.
-//! - [RFC 3986] — Uniform Resource Identifier (URI): Generic Syntax, January 2005. [`uri`] is
-//!   its §5.3 reference resolution.
+//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation (26 November 2008). [`chars`] refers to the character class and
+//!   production urles; [`encoding`] refers to the rules in §4.3.3 for determining the encoding of the document.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation (8 December 2009). [`name`] refers to `QName`,
+//!   prefix, and expanded-name model.
+//! - [RFC 3986] — Uniform Resource Identifier (URI): Generic Syntax (January 2005). [`uri`] refers to §5.3 reference
+//!   resolution.
 //!
 //! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
 //! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
@@ -68,6 +68,6 @@ pub mod error;
 pub mod name;
 pub mod uri;
 
-pub use error::{Error, ErrorKind, Location, Result, Severity};
+pub use error::{Error, Location, Result, Severity};
 pub use name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 pub use uri::UriReference;

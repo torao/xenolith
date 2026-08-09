@@ -1,6 +1,6 @@
 //! Extension functions, and the output method a stylesheet asks for.
 
-use xylogue_core::ErrorKind;
+use xylogue_core::Error;
 use xylogue_dom::build;
 use xylogue_xdm::DomModel;
 use xylogue_xpath::{Context, Functions, Value};
@@ -74,7 +74,7 @@ fn a_function_whose_prefix_is_not_bound_says_so() {
   let model = DomModel::new(&doc);
   let functions = Functions::new();
   let error = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect_err("fails");
-  assert_eq!(error.kind(), ErrorKind::XPath);
+  assert!(matches!(error, Error::XPath { .. }));
   assert!(error.message().contains("not bound"), "{}", error.message());
 }
 
@@ -101,7 +101,7 @@ fn the_output_method_is_read_from_the_stylesheet() {
 fn an_output_method_that_cannot_be_written_is_refused() {
   let error =
     Stylesheet::compile(sheet("<xsl:output method=\"pdf\"/>").as_bytes(), "file:///s.xsl").expect_err("is refused");
-  assert_eq!(error.kind(), ErrorKind::Xslt);
+  assert!(matches!(error, Error::Xslt { .. }));
   assert!(error.message().contains("pdf"), "{}", error.message());
 }
 

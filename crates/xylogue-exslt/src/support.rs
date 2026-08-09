@@ -7,7 +7,7 @@
 //! is added.
 
 #[cfg(feature = "_module")]
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 #[cfg(any(feature = "math", feature = "sets"))]
 use xylogue_xdm::Model;
 #[cfg(any(feature = "math", feature = "sets"))]
@@ -26,7 +26,7 @@ pub(crate) fn arity<N>(name: &str, arguments: &[Value<N>], least: usize, most: O
       None => format!("at least {least} argument(s)"),
     };
     let message = format!("the function \"{name}()\" needs {expected}, but was given {found}");
-    return Err(Error::new(ErrorKind::XPath, message));
+    return Err(Error::xpath(message));
   }
   Ok(())
 }
@@ -41,7 +41,7 @@ pub(crate) fn nodes<M: Model>(name: &str, value: &Value<M::Node>) -> Result<Vec<
     Value::NodeSet(nodes) => Ok(nodes.clone()),
     other => {
       let message = format!("{name}() takes a node-set, but was given {}", describe(other));
-      Err(Error::new(ErrorKind::XPath, message))
+      Err(Error::xpath(message))
     }
   }
 }

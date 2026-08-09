@@ -6,7 +6,7 @@
 //! text has grown. That is what makes the parser resumable at any byte boundary.
 
 use xylogue_core::chars;
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 
 /// The kind of token found, before it is interpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +65,7 @@ fn scan_markup_declaration(rest: &str, complete: bool) -> Result<Option<(Token, 
   if rest.starts_with(MARKUP_PREFIXES[2]) {
     return match scan_doctype(rest) {
       Some(len) => Ok(Some((Token::Doctype, len))),
-      None if complete => Err(Error::new(ErrorKind::WellFormedness, "the document type declaration is not closed")),
+      None if complete => Err(Error::well_formedness("the document type declaration is not closed")),
       None => Ok(None),
     };
   }
@@ -73,7 +73,7 @@ fn scan_markup_declaration(rest: &str, complete: bool) -> Result<Option<(Token, 
   if !complete && MARKUP_PREFIXES.iter().any(|p| p.starts_with(rest)) {
     return Ok(None);
   }
-  Err(Error::new(ErrorKind::WellFormedness, format!("{} is not markup", clip(rest, 10))))
+  Err(Error::well_formedness(format!("{} is not markup", clip(rest, 10))))
 }
 
 /// Scans a token that ends at a fixed delimiter, searching from `from`.
@@ -89,9 +89,7 @@ fn delimited(
   }
   match rest[from..].find(terminator) {
     Some(i) => Ok(Some((token, from + i + terminator.len()))),
-    None if complete => {
-      Err(Error::new(ErrorKind::WellFormedness, format!("{} is not terminated by {terminator:?}", clip(rest, 20))))
-    }
+    None if complete => Err(Error::well_formedness(format!("{} is not terminated by {terminator:?}", clip(rest, 20)))),
     None => Ok(None),
   }
 }
@@ -106,7 +104,7 @@ fn scan_start_tag(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> 
       (None, '"' | '\'') => quote = Some(c),
       (None, '>') => return Ok(Some((Token::StartTag, i + 1))),
       (None, '<') => {
-        return Err(Error::new(ErrorKind::WellFormedness, "'<' may not appear inside a tag"));
+        return Err(Error::well_formedness("'<' may not appear inside a tag"));
       }
       (None, _) => {}
     }
@@ -167,9 +165,8 @@ fn scan_text(rest: &str, complete: bool) -> Option<usize> {
 
 /// Scans `&...;`. The content is not interpreted here; that is the parser's work.
 fn scan_reference(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
-  let unterminated = || {
-    Error::new(ErrorKind::WellFormedness, "a reference must end with \";\"; write \"&amp;\" for a literal ampersand")
-  };
+  let unterminated =
+    || Error::well_formedness("a reference must end with \";\"; write \"&amp;\" for a literal ampersand");
   // A character reference `&#...;` is taken up to its `;` even when the characters between
   // are wrong, so the parser can say precisely why; only a `<`, another `&` or whitespace
   // marks it as a bare ampersand. An entity reference `&name;` instead ends at the first
@@ -190,7 +187,7 @@ fn scan_reference(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> 
 
 fn incomplete(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
   if complete {
-    return Err(Error::new(ErrorKind::WellFormedness, format!("the entity ends inside {}", clip(rest, 20))));
+    return Err(Error::well_formedness(format!("the entity ends inside {}", clip(rest, 20))));
   }
   Ok(None)
 }

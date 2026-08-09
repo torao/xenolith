@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::build;
 use xylogue_serialize::Serializer;
 use xylogue_xdm::{Documents, DomModel};
@@ -28,7 +28,7 @@ impl Loader for Shelf {
   fn load(&mut self, uri: &str) -> Result<Vec<u8>> {
     match self.0.get(uri) {
       Some(xml) => Ok(xml.as_bytes().to_vec()),
-      None => Err(Error::new(ErrorKind::Xslt, format!("nothing is shelved at {uri:?}"))),
+      None => Err(Error::xslt(format!("nothing is shelved at {uri:?}"))),
     }
   }
 }

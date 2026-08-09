@@ -1,38 +1,5 @@
 //! Errors and source locations.
 //!
-//! Every error carries a [`Location`] where one is known. XML processors are judged by their
-//! diagnostics as much as by their conformance, and a location that is threaded through from
-//! the start is far cheaper than one retrofitted later.
-//!
-//! # Writing a message
-//!
-//! Two people read these, and they are not in the same position:
-//!
-//! - **The author of the document.** They see [`WellFormedness`](ErrorKind::WellFormedness),
-//!   [`Validity`](ErrorKind::Validity), [`Namespace`](ErrorKind::Namespace),
-//!   [`Name`](ErrorKind::Name) and [`Encoding`](ErrorKind::Encoding). They have the file open
-//!   at the line we named. They cannot read our source and do not know our types.
-//! - **The programmer calling xylogue.** They see [`Limit`](ErrorKind::Limit),
-//!   [`UnsupportedFeature`](ErrorKind::UnsupportedFeature), [`Io`](ErrorKind::Io) and
-//!   [`Internal`](ErrorKind::Internal). Their document is probably fine; their configuration
-//!   or their code is not.
-//!
-//! Whichever it is, the message answers one question: **what do I do next?**
-//!
-//! - Say what is wrong, then what would be right. `xml:space must be "default" or
-//!   "preserve", not "maybe"` beats `invalid value for xml:space`.
-//! - Quote what was actually found, with `{:?}`, and keep it short. The reader is matching
-//!   our words against their file.
-//! - Name the remedy when it is not in the document: which limit to raise, which feature to
-//!   enable, which method to call. The programmer cannot guess our field names.
-//! - Do not restate the kind or the location; [`Display`](std::fmt::Display) already prints
-//!   both. Write `element <a> is never closed`, not
-//!   `well-formedness error at line 3: element <a> is never closed`.
-//! - Lower case, no trailing period, no exclamation. These are fragments, not sentences.
-//! - Do not apologize and do not scold. State the fact.
-//!
-//! The XML specification's own wording is worth reaching for — an author who searches the
-//! phrase should land on the rule they broke — but plain language wins where they conflict.
 
 use std::fmt;
 use std::sync::Arc;
@@ -42,9 +9,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A position in an entity.
 ///
-/// The origin is the *entity*, not the document: a location inside an external entity reports
-/// that entity's system identifier and its own line numbering. This is what XML requires, and
-/// it is also what base URI resolution needs later.
+/// The XML/SAX specification requires that, when an error occurs while the parser is reading the content of an external
+/// entity referenced from an XML document, the parser report the position within the external entity rather than the
+/// XML document from which it began reading. The position within the external entity is reported as the entity's
+/// system identifier followed by its line number.
 ///
 /// # Examples
 ///
@@ -104,7 +72,7 @@ impl fmt::Display for Location {
   }
 }
 
-/// Severity of a diagnostic, matching the three levels of SAX's `ErrorHandler`.
+/// Severity of a diagnostic, corresponds to the three level of SAX's `ErrorHandler`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
   /// Does not affect the result; reported for information.
@@ -125,153 +93,279 @@ impl fmt::Display for Severity {
   }
 }
 
-/// Broad classification of an error.
-///
-/// Variants are added as later phases land; match with a wildcard arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ErrorKind {
-  /// I/O failure while reading an entity.
-  Io,
-  /// Malformed input for the character encoding in use, or an unsupported encoding.
-  Encoding,
-  /// Malformed URI or an unresolvable relative reference.
-  Uri,
-  /// A string that must match an XML production (`Name`, `NCName`, ...) does not.
-  Name,
-  /// Well-formedness violation.
-  WellFormedness,
-  /// Validity constraint violation (recoverable).
-  Validity,
-  /// Namespace constraint violation.
-  Namespace,
-  /// A resource limit was exceeded: entity expansion, nesting depth, node count.
-  Limit,
-  /// An XInclude processing error: an inclusion loop, or a failed inclusion with no fallback.
-  XInclude,
-  /// An XPath expression could not be parsed, or failed while being evaluated.
-  XPath,
-  /// A stylesheet is not one XSLT allows, or a transformation could not be carried out.
-  Xslt,
-  /// The requested capability was not compiled in; see the crate's feature flags.
-  UnsupportedFeature,
-  /// A bug in xylogue. Build these with [`Error::internal`].
-  Internal,
-}
-
-impl fmt::Display for ErrorKind {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str(match self {
-      Self::Io => "I/O error",
-      Self::Encoding => "encoding error",
-      Self::Uri => "URI error",
-      Self::Name => "name error",
-      Self::WellFormedness => "not well-formed",
-      Self::Validity => "not valid",
-      Self::Namespace => "namespace error",
-      Self::Limit => "limit exceeded",
-      Self::XInclude => "XInclude error",
-      Self::XPath => "XPath error",
-      Self::Xslt => "XSLT error",
-      Self::UnsupportedFeature => "unsupported feature",
-      Self::Internal => "internal error",
-    })
-  }
-}
+/// A location that can only be identified as "somewhere", shared by errors that have no fixed location.
+static UNKNOWN_LOCATION: Location = Location::unknown();
 
 /// An error produced anywhere in the xylogue pipeline.
+///
+/// Each variant represents a distinct failure type and conveys the information that the failure is intended to
+/// indicate. Since the number of error type may increaase as fixes are made and subsequent phases are implemented,
+/// unintended errors should be matched using a wildcard arm to ensure backword compatibility.
 ///
 /// # Examples
 ///
 /// ```
-/// use xylogue_core::{Error, ErrorKind, Location, Severity};
+/// use xylogue_core::{Error, Location, Severity};
 ///
-/// let err = Error::new(ErrorKind::WellFormedness, "mismatched end tag: expected </a>")
+/// let err = Error::well_formedness("mismatched end tag: expected </a>")
 ///   .at(Location { line: 12, column: 3, ..Location::unknown() }.with_system_id("file:///doc.xml"));
 ///
-/// assert_eq!(err.kind(), ErrorKind::WellFormedness);
+/// assert!(matches!(err, Error::WellFormedness { .. }));
 /// assert_eq!(err.severity(), Severity::Fatal); // well-formedness errors stop processing
 /// assert_eq!(err.location().line, 12);
-/// assert_eq!(
-///   err.to_string(),
-///   "file:///doc.xml:12:3: not well-formed: mismatched end tag: expected </a>"
-/// );
+/// assert_eq!(err.to_string(), "not well-formed: mismatched end tag: expected </a>");
 ///
 /// // Validity errors are recoverable: the caller may report and continue.
-/// let invalid = Error::recoverable(ErrorKind::Validity, "element \"b\" is not allowed here");
+/// let invalid = Error::validity("element \"b\" is not allowed here");
 /// assert_eq!(invalid.severity(), Severity::Error);
 /// ```
-#[derive(Debug)]
-pub struct Error {
-  kind: ErrorKind,
-  severity: Severity,
-  message: String,
-  location: Location,
-  source: Option<Box<dyn std::error::Error + Send + Sync>>,
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+  /// I/O failure while reading an entity.
+  #[error("I/O error: {message}")]
+  Io {
+    /// Where the read was taking place, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+    /// The underlying I/O error.
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+  },
+  /// Malformed input for the character encoding in use, or an unsupported encoding.
+  #[error("encoding error: {message}")]
+  Encoding {
+    /// Where in the entity the bytes were being decoded.
+    location: Location,
+    /// A message explaining what went wrong, and what the caller can do about it.
+    message: String,
+    /// The 0-based index, the first byte position that could not be decoded within the byte sequence passed to the
+    /// decoder during the call in which the error occurred. `None` if the byte position causing the error does not
+    /// exist, for example, if the encoding name is unknown or an entity ends mid_character.
+    byte_offset: Option<usize>,
+  },
+  /// Malformed URI or an unresolvable relative reference.
+  #[error("URI error: {message}")]
+  Uri {
+    /// Where the reference appeared, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// A string that must match an XML production (`Name`, `NCName`, ...) does not.
+  #[error("name error: {message}")]
+  Name {
+    /// Where the name appeared, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// Well-formedness violation.
+  #[error("not well-formed: {message}")]
+  WellFormedness {
+    /// Where the violation was detected.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// Validity constraint violation (recoverable).
+  #[error("not valid: {message}")]
+  Validity {
+    /// Where the violation was detected.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// Namespace constraint violation.
+  #[error("namespace error: {message}")]
+  Namespace {
+    /// Where the violation was detected.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// A resource limit was exceeded: entity expansion, nesting depth, node count.
+  #[error("limit exceeded: {message}")]
+  Limit {
+    /// Where the limit was reached.
+    location: Location,
+    /// Which limit, and how to raise it.
+    message: String,
+  },
+  /// An XInclude processing error: an inclusion loop, or a failed inclusion with no fallback.
+  #[error("XInclude error: {message}")]
+  XInclude {
+    /// Where the `xi:include` appeared.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// An XPath expression could not be parsed, or failed while being evaluated.
+  #[error("XPath error: {message}")]
+  XPath {
+    /// Where in the expression or the stylesheet the failure lies, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// A stylesheet is not one XSLT allows, or a transformation could not be carried out.
+  #[error("XSLT error: {message}")]
+  Xslt {
+    /// Where in the stylesheet the failure lies, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+  },
+  /// The requested feature was not included in the build; see the crate's feature flags. The message should specify
+  /// the name of the missing feature.
+  #[error("unsupported feature: {message}")]
+  UnsupportedFeature {
+    /// Which capability, which feature would supply it, and what the build can do instead. Built
+    /// by [`Error::unsupported_feature`] so the wording stays uniform.
+    message: String,
+  },
+  /// A bug in xylogue or a dependent library, or that the API was called in a way prohibited by the API specification.
+  #[error("internal error: {message}")]
+  Internal {
+    /// What was expected that did not hold, and what the caller should do about it.
+    message: String,
+  },
 }
 
 impl Error {
-  /// Creates a fatal error.
+  /// An I/O failure while reading an entity.
   #[must_use]
-  pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-    Self { kind, severity: Severity::Fatal, message: message.into(), location: Location::unknown(), source: None }
+  pub fn io(message: impl Into<String>) -> Self {
+    Self::Io { location: Location::unknown(), message: message.into(), source: None }
   }
 
-  /// Creates a recoverable error, as used for validity constraints.
+  /// A character-encoding failure. When the problematic byte has been indicated, specify [`byte_offset`] to indicate
+  /// its byte offset.
+  ///
+  /// [`byte_offset`]: Error::Encoding
   #[must_use]
-  pub fn recoverable(kind: ErrorKind, message: impl Into<String>) -> Self {
-    Self { severity: Severity::Error, ..Self::new(kind, message) }
+  pub fn encoding(message: impl Into<String>) -> Self {
+    Self::Encoding { location: Location::unknown(), message: message.into(), byte_offset: None }
   }
 
-  /// Attaches a source location.
+  /// A malformed URI or an unresolvable relative reference.
+  #[must_use]
+  pub fn uri(message: impl Into<String>) -> Self {
+    Self::Uri { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A string that must match an XML name production does not.
+  #[must_use]
+  pub fn name(message: impl Into<String>) -> Self {
+    Self::Name { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A well-formedness violation.
+  #[must_use]
+  pub fn well_formedness(message: impl Into<String>) -> Self {
+    Self::WellFormedness { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A validity-constraint violation. Recoverable: its [`severity`](Error::severity) is
+  /// [`Severity::Error`], so a caller may report it and continue.
+  #[must_use]
+  pub fn validity(message: impl Into<String>) -> Self {
+    Self::Validity { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A namespace-constraint violation.
+  #[must_use]
+  pub fn namespace(message: impl Into<String>) -> Self {
+    Self::Namespace { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A resource limit exceeded.
+  #[must_use]
+  pub fn limit(message: impl Into<String>) -> Self {
+    Self::Limit { location: Location::unknown(), message: message.into() }
+  }
+
+  /// An XInclude processing failure.
+  #[must_use]
+  pub fn xinclude(message: impl Into<String>) -> Self {
+    Self::XInclude { location: Location::unknown(), message: message.into() }
+  }
+
+  /// An XPath expression could not be parsed or evaluated.
+  #[must_use]
+  pub fn xpath(message: impl Into<String>) -> Self {
+    Self::XPath { location: Location::unknown(), message: message.into() }
+  }
+
+  /// A stylesheet could not be compiled or applied.
+  #[must_use]
+  pub fn xslt(message: impl Into<String>) -> Self {
+    Self::Xslt { location: Location::unknown(), message: message.into() }
+  }
+
+  /// For errors where the `Location` field of the source is specified, associate that location with the error. For all
+  /// other errors, take no action.
+  ///
   #[must_use]
   pub fn at(mut self, location: Location) -> Self {
-    self.location = location;
+    match &mut self {
+      Self::Io { location: at, .. }
+      | Self::Encoding { location: at, .. }
+      | Self::Uri { location: at, .. }
+      | Self::Name { location: at, .. }
+      | Self::WellFormedness { location: at, .. }
+      | Self::Validity { location: at, .. }
+      | Self::Namespace { location: at, .. }
+      | Self::Limit { location: at, .. }
+      | Self::XInclude { location: at, .. }
+      | Self::XPath { location: at, .. }
+      | Self::Xslt { location: at, .. } => *at = location,
+      Self::UnsupportedFeature { .. } | Self::Internal { .. } => {}
+    }
     self
   }
 
-  /// Attaches an underlying cause.
+  /// Associates tha root cause of an [`Io`](Error::Io) error. For other types of errors that do not have a source, it
+  /// does nothing.
+  ///
   #[must_use]
   pub fn caused_by(mut self, source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-    self.source = Some(source.into());
+    if let Self::Io { source: cause, .. } = &mut self {
+      *cause = Some(source.into());
+    }
     self
   }
 
-  /// Overrides the severity.
+  /// Where the error occurred, or an unknown location for the kinds that have none.
   #[must_use]
-  pub fn with_severity(mut self, severity: Severity) -> Self {
-    self.severity = severity;
-    self
+  pub fn location(&self) -> &Location {
+    match self {
+      Self::Io { location, .. }
+      | Self::Encoding { location, .. }
+      | Self::Uri { location, .. }
+      | Self::Name { location, .. }
+      | Self::WellFormedness { location, .. }
+      | Self::Validity { location, .. }
+      | Self::Namespace { location, .. }
+      | Self::Limit { location, .. }
+      | Self::XInclude { location, .. }
+      | Self::XPath { location, .. }
+      | Self::Xslt { location, .. } => location,
+      Self::UnsupportedFeature { .. } | Self::Internal { .. } => &UNKNOWN_LOCATION,
+    }
   }
 
-  /// The classification of this error.
-  #[must_use]
-  pub const fn kind(&self) -> ErrorKind {
-    self.kind
-  }
-
-  /// The severity of this error.
+  /// The severity, in the SAX sense: a validity violation is recoverable, everything else fatal.
   #[must_use]
   pub const fn severity(&self) -> Severity {
-    self.severity
-  }
-
-  /// Where the error occurred.
-  #[must_use]
-  pub const fn location(&self) -> &Location {
-    &self.location
-  }
-
-  /// The human-readable description, without location or classification.
-  #[must_use]
-  pub fn message(&self) -> &str {
-    &self.message
+    match self {
+      Self::Validity { .. } => Severity::Error,
+      _ => Severity::Fatal,
+    }
   }
 
   /// Builds an error for a situation that should be unreachable.
-  ///
-  /// The reader has done nothing wrong and can do nothing about it, so the message says so
-  /// and asks for a report rather than leaving them to doubt their document.
   ///
   /// # Examples
   ///
@@ -285,22 +379,18 @@ impl Error {
   /// ```
   #[must_use]
   pub fn internal(what: impl std::fmt::Display) -> Self {
-    Self::new(ErrorKind::Internal, format!("{what}; this is a bug in xylogue, please report it"))
+    Self::Internal { message: format!("{what}; this is a bug in xylogue, please report it") }
   }
 
-  /// Builds the error returned when a capability was not compiled in.
-  ///
-  /// Requesting a disabled capability must fail loudly rather than silently degrade; see the
-  /// feature policy in `ROADMAP.md`. The reader here is a programmer who can edit
-  /// `Cargo.toml`, so the message names the feature and says what the build can still do.
+  /// Generates an error that is returned when the build is compiled with a feature disabled.
   ///
   /// # Examples
   ///
   /// ```
-  /// use xylogue_core::{Error, ErrorKind};
+  /// use xylogue_core::Error;
   ///
   /// let err = Error::unsupported_feature("decoding \"Shift_JIS\"", "encodings", "this build handles UTF-8 only");
-  /// assert_eq!(err.kind(), ErrorKind::UnsupportedFeature);
+  /// assert!(matches!(err, Error::UnsupportedFeature { .. }));
   /// assert_eq!(
   ///   err.to_string(),
   ///   "unsupported feature: decoding \"Shift_JIS\" needs the `encodings` feature, \
@@ -308,34 +398,36 @@ impl Error {
   /// );
   /// ```
   #[must_use]
-  pub fn unsupported_feature(capability: impl Into<String>, feature: &str, fallback: &str) -> Self {
-    let capability = capability.into();
-    Self::new(
-      ErrorKind::UnsupportedFeature,
-      format!("{capability} needs the `{feature}` feature, which this build does not have; {fallback}"),
-    )
-  }
-}
-
-impl fmt::Display for Error {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    if self.location.is_unknown() {
-      write!(f, "{}: {}", self.kind, self.message)
-    } else {
-      write!(f, "{}: {}: {}", self.location, self.kind, self.message)
+  pub fn unsupported_feature(capability: impl std::fmt::Display, feature: &str, fallback: &str) -> Self {
+    Self::UnsupportedFeature {
+      message: format!("{capability} needs the `{feature}` feature, which this build does not have; {fallback}"),
     }
   }
-}
 
-impl std::error::Error for Error {
-  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    self.source.as_ref().map(|e| &**e as &(dyn std::error::Error + 'static))
+  /// The human-readable detail, without the kind label or the location.
+  #[must_use]
+  pub fn message(&self) -> &str {
+    match self {
+      Self::Io { message, .. }
+      | Self::Encoding { message, .. }
+      | Self::Uri { message, .. }
+      | Self::Name { message, .. }
+      | Self::WellFormedness { message, .. }
+      | Self::Validity { message, .. }
+      | Self::Namespace { message, .. }
+      | Self::Limit { message, .. }
+      | Self::XInclude { message, .. }
+      | Self::XPath { message, .. }
+      | Self::Xslt { message, .. }
+      | Self::UnsupportedFeature { message, .. }
+      | Self::Internal { message, .. } => message,
+    }
   }
 }
 
 impl From<std::io::Error> for Error {
   fn from(e: std::io::Error) -> Self {
-    Self::new(ErrorKind::Io, e.to_string()).caused_by(e)
+    Self::Io { location: Location::unknown(), message: e.to_string(), source: Some(Box::new(e)) }
   }
 }
 
@@ -344,22 +436,26 @@ mod tests {
   use super::*;
 
   #[test]
-  fn display_includes_location_when_known() {
-    let e = Error::new(ErrorKind::WellFormedness, "mismatched end tag")
+  fn display_prefixes_the_kind_and_location_stays_a_field() {
+    let e = Error::well_formedness("mismatched end tag")
       .at(Location { line: 12, column: 5, ..Location::unknown() }.with_system_id("file:///doc.xml"));
-    assert_eq!(e.to_string(), "file:///doc.xml:12:5: not well-formed: mismatched end tag");
+    // The location is not in the message; it is read from the field.
+    assert_eq!(e.to_string(), "not well-formed: mismatched end tag");
+    assert_eq!((e.location().line, e.location().column), (12, 5));
+    assert_eq!(e.location().system_id.as_deref(), Some("file:///doc.xml"));
   }
 
   #[test]
-  fn display_omits_unknown_location() {
-    let e = Error::new(ErrorKind::Internal, "unreachable");
-    assert_eq!(e.to_string(), "internal error: unreachable");
+  fn a_kind_without_a_location_reports_an_unknown_one() {
+    let e = Error::internal("unreachable");
+    assert_eq!(e.to_string(), "internal error: unreachable; this is a bug in xylogue, please report it");
+    assert!(e.location().is_unknown());
   }
 
   #[test]
-  fn severity_defaults_to_fatal_and_orders() {
-    assert_eq!(Error::new(ErrorKind::Io, "x").severity(), Severity::Fatal);
-    assert_eq!(Error::recoverable(ErrorKind::Validity, "x").severity(), Severity::Error);
+  fn only_a_validity_violation_is_recoverable() {
+    assert_eq!(Error::io("x").severity(), Severity::Fatal);
+    assert_eq!(Error::validity("x").severity(), Severity::Error);
     assert!(Severity::Warning < Severity::Error && Severity::Error < Severity::Fatal);
   }
 }

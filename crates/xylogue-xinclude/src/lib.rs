@@ -41,7 +41,7 @@
 //! struct Map(HashMap<&'static str, &'static [u8]>);
 //! impl Loader for Map {
 //!   fn load(&mut self, uri: &str) -> Result<Vec<u8>, Error> {
-//!     self.0.get(uri).map(|b| b.to_vec()).ok_or_else(|| Error::new(xylogue_core::ErrorKind::Io, "not found"))
+//!     self.0.get(uri).map(|b| b.to_vec()).ok_or_else(|| Error::io("not found"))
 //!   }
 //! }
 //!

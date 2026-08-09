@@ -49,7 +49,7 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::{Document, build};
 use xylogue_xdm::{Documents, DomModel, DomNode};
 use xylogue_xpath::Functions;
@@ -156,7 +156,7 @@ impl Transformer {
         // A stylesheet is compiled from its text, because the modules it names are fetched
         // during compilation and each needs its own document.
         let message = "a stylesheet is compiled from bytes; give Source::bytes, not a Document".to_owned();
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     };
     Ok(Self { stylesheet: Some(stylesheet), transform: Transform::new(), resolver: None })

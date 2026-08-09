@@ -48,7 +48,7 @@
 
 use std::rc::Rc;
 
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::Document;
 use xylogue_xdm::Model;
 use xylogue_xpath::{Context, Functions, Value};
@@ -164,7 +164,7 @@ fn as_tokens<M: Model>(
       "{name}() answers with nodes, and needs somewhere to put them; register the EXSLT \
        functions with register_with and a TreeSpace sharing the model's Documents handle"
     );
-    Error::new(ErrorKind::Xslt, message)
+    Error::xslt(message)
   })?;
 
   // The answer is the tokens themselves, which are the children of the tree that was taken in —

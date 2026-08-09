@@ -22,7 +22,7 @@
 use std::rc::Rc;
 
 use regex::{Regex, RegexBuilder};
-use xylogue_core::error::{Error, ErrorKind, Result};
+use xylogue_core::error::{Error, Result};
 use xylogue_dom::Document;
 use xylogue_xdm::Model;
 use xylogue_xpath::{Context, Functions, Value};
@@ -110,7 +110,7 @@ fn read_flags(written: &str) -> Result<Flags> {
       'm' => flags.multi_line = true,
       other => {
         let message = format!("the regular expression flag {other:?} is not one of g, i or m");
-        return Err(Error::new(ErrorKind::Xslt, message));
+        return Err(Error::xslt(message));
       }
     }
   }
@@ -122,7 +122,7 @@ fn compile(pattern: &str, flags: &Flags) -> Result<Regex> {
   RegexBuilder::new(pattern).case_insensitive(flags.case_insensitive).multi_line(flags.multi_line).build().map_err(
     |error| {
       let message = format!("the regular expression {pattern:?} cannot be used: {error}");
-      Error::new(ErrorKind::Xslt, message)
+      Error::xslt(message)
     },
   )
 }
@@ -148,7 +148,7 @@ fn as_matches<M: Model>(
                    the EXSLT functions with register_with and a TreeSpace sharing the model's \
                    Documents handle"
       .to_owned();
-    Error::new(ErrorKind::Xslt, message)
+    Error::xslt(message)
   })?;
   Ok(Value::NodeSet(context.model.children(adopted)))
 }
