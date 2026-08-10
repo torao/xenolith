@@ -20,7 +20,7 @@
 //! let bytes = b"\xEF\xBB\xBF<doc href='sub/part.xml'/>";
 //!
 //! // 1. Sniff, then skip the byte-order mark the decoder must not see.
-//! let detected = encoding::detect(bytes);
+//! let detected = encoding::detect(bytes).or_default();
 //! assert_eq!(detected.encoding, "UTF-8");
 //! let mut decoder = encoding::decoder_for(&detected.encoding)?;
 //! let mut text = String::new();

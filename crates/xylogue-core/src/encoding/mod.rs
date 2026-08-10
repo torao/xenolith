@@ -11,7 +11,7 @@ mod detect;
 mod encoding_rs_backend;
 
 pub use builtin::{AsciiDecoder, Latin1Decoder, Utf8Decoder, Utf16Decoder};
-pub use detect::{Detection, DetectionSource, detect};
+pub use detect::{Detected, Detection, DetectionSource, detect};
 
 use crate::error::{Error, Location, Result};
 
