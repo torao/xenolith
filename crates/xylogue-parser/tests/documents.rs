@@ -5,13 +5,27 @@
 //! asynchronous one — because the promise of the sans-I/O design is that the driver cannot
 //! change the answer.
 
-use xylogue_parser::{Event, EventKind, Parser, Progress, Reader};
+use xylogue_parser::{Bounds, Event, EventKind, Parser, Progress, Reader};
 
 /// Renders an error the way a diagnostic would: its location, if known, then the message. The
 /// location is a field on the error now, not part of its `Display`, so a caller that wants it in
 /// the string composes the two.
 fn describe(e: &xylogue_core::Error) -> String {
   if e.location().is_unknown() { e.to_string() } else { format!("{}: {e}", e.location()) }
+}
+
+/// Merges adjacent text events, as a consumer that wants whole text nodes does. The parser may split a
+/// long text run into fragments, and where the splits fall depends on how the bytes were fed, so the
+/// drivers are compared on their coalesced text rather than on the raw fragments.
+fn coalesce_text(events: Vec<Event>) -> Vec<Event> {
+  let mut out: Vec<Event> = Vec::with_capacity(events.len());
+  for event in events {
+    match (out.last_mut(), &event) {
+      (Some(Event::Text(last)), Event::Text(next)) => last.push_str(next),
+      _ => out.push(event),
+    }
+  }
+  out
 }
 
 /// Parses `xml` with the parser fed in `chunk`-sized pieces.
@@ -22,8 +36,8 @@ fn by_parser(xml: &str, chunk: usize) -> Result<Vec<Event>, String> {
   let mut events = Vec::new();
   loop {
     match parser.advance() {
-      Ok(Progress::Event(_)) => events.push(Event::capture(&parser)),
-      Ok(Progress::Eof) => return Ok(events),
+      Ok(Progress::Event(_)) => events.push(Event::capture(&parser).map_err(|e| describe(&e))?),
+      Ok(Progress::Eof) => return Ok(coalesce_text(events)),
       Ok(Progress::NeedMoreInput) => {
         let end = (fed + chunk).min(bytes.len());
         parser.feed(&bytes[fed..end], end == bytes.len()).map_err(|e| describe(&e))?;
@@ -36,13 +50,13 @@ fn by_parser(xml: &str, chunk: usize) -> Result<Vec<Event>, String> {
 }
 
 fn by_reader(xml: &str) -> Result<Vec<Event>, String> {
-  Reader::new(xml.as_bytes()).events().collect::<Result<_, _>>().map_err(|e| describe(&e))
+  Reader::new(xml.as_bytes()).events().collect::<Result<Vec<Event>, _>>().map(coalesce_text).map_err(|e| describe(&e))
 }
 
 #[cfg(feature = "tokio")]
 fn by_async_reader(xml: &str) -> Result<Vec<Event>, String> {
   use xylogue_parser::AsyncReader;
-  tokio_test::block_on(AsyncReader::new(xml.as_bytes()).events()).map_err(|e| describe(&e))
+  tokio_test::block_on(AsyncReader::new(xml.as_bytes()).events()).map(coalesce_text).map_err(|e| describe(&e))
 }
 
 /// Parses `xml` every way available, requiring them all to agree.
@@ -176,7 +190,7 @@ fn a_byte_order_mark_is_not_content() {
 #[test]
 fn ill_formed_documents_are_rejected_with_a_useful_message() {
   let cases = [
-    ("<a>", "never closed"),
+    ("<a>", "not closed"),
     ("<a></b>", "does not close"),
     ("</a>", "never opened"),
     ("<a/><b/>", "only one root"),
@@ -204,8 +218,9 @@ impl xylogue_parser::resolve::UriResolver for MapResolver {
   fn resolve(
     &mut self,
     request: &xylogue_parser::resolve::EntityRequest,
-  ) -> Result<Option<Vec<u8>>, xylogue_core::Error> {
-    Ok(self.0.get(request.system_id()).map(|b| b.to_vec()))
+  ) -> Result<Option<Box<dyn std::io::Read>>, xylogue_core::Error> {
+    let entry = self.0.get(request.system_id()).map(|b| b.to_vec());
+    Ok(entry.map(|b| Box::new(std::io::Cursor::new(b)) as Box<dyn std::io::Read>))
   }
 }
 
@@ -351,7 +366,7 @@ fn a_declared_entity_expands_in_content_and_attributes() {
 #[test]
 fn an_expansion_bomb_is_refused_rather_than_expanded() {
   // The billion-laughs shape: each level names the one below it ten times. Expanding it fully
-  // would be 10^10 characters; the entity-expansion budget must stop it long before that.
+  // would be 10^10 characters; the entity-expansion limits must stop it long before that.
   let mut dtd = String::from("<!DOCTYPE a [<!ENTITY l0 \"boom\">");
   for level in 1..=10 {
     let child = format!("&l{};", level - 1);
@@ -419,4 +434,39 @@ fn positions_survive_multi_byte_characters() {
   // Columns count characters, not bytes: "<a>" is 3, the Japanese 8, the space 1, so the
   // reference begins at column 13 and not at byte 27.
   assert!(message.starts_with("1:13:"), "{message}");
+}
+
+#[test]
+fn a_long_text_run_arrives_whole_however_it_is_fragmented() {
+  // Several times the parser's text-fragmentation threshold. Fed in small pieces the run is emitted in
+  // fragments; fed whole it is one event. Coalesced, both make one text node with all of the content.
+  let text = "x".repeat(30_000);
+  let xml = format!("<a>{text}</a>");
+  let whole = by_parser(&xml, xml.len()).expect("whole");
+  let chunked = by_parser(&xml, 500).expect("chunked");
+  assert_eq!(whole, chunked, "the fragments coalesce to the same events, however the bytes were fed");
+  let text_event = whole.iter().find(|e| e.kind() == EventKind::Text).expect("a text event");
+  assert_eq!(text_event.text(), Some(text.as_str()));
+}
+
+#[test]
+fn a_bound_rejects_an_oversized_token_but_the_default_does_not() {
+  // A large comment is a single markup token. The generous default cap lets this 20 KB comment through;
+  // a tighter application-set bound rejects it.
+  let xml = format!("<a><!-- {} --></a>", "c".repeat(20_000));
+  let ok = Reader::new(xml.as_bytes()).events().collect::<Result<Vec<_>, _>>();
+  assert!(ok.is_ok(), "20 KB is well under the default comment bound");
+
+  let bounds = Bounds::default().with_max_comment(4096);
+  let err = Reader::new(xml.as_bytes()).with_bounds(bounds).events().collect::<Result<Vec<_>, _>>().unwrap_err();
+  assert!(describe(&err).contains("Bounds::max_comment"), "{}", describe(&err));
+}
+
+#[test]
+fn a_forbidden_sequence_is_caught_even_when_text_is_fragmented() {
+  // The "]]>" falls at the end of a long run, so its "]]" and ">" can land in different fragments; the
+  // scanner must still not let it slip across a fragment boundary.
+  let xml = format!("<a>{}]]></a>", "x".repeat(30_000));
+  let err = by_parser(&xml, 500).expect_err("]]> is forbidden in text");
+  assert!(err.contains("]]>"), "{err}");
 }

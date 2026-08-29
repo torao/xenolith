@@ -39,7 +39,9 @@
 //! let mut text = String::new();
 //! while let Some(kind) = reader.advance()? {
 //!   if kind == EventKind::Text {
-//!     text.push_str(reader.parser().text());
+//!     if let Some(chars) = reader.parser().event_ref().and_then(|e| e.text()) {
+//!       text.push_str(chars);
+//!     }
 //!   }
 //! }
 //! assert_eq!(text, "Hello");

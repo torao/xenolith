@@ -59,6 +59,25 @@ impl Location {
   pub fn is_unknown(&self) -> bool {
     self.line == 0 && self.system_id.is_none()
   }
+
+  /// Advances this location past `c`. This allows the location to be updated using the characters read from the entity.
+  ///
+  /// A line feed (U+000A; LF, '\n') indicates the start of a new line. This increments the line number by one so that
+  /// it points to the next line, and reset [`column`](Self::column) to 1 at the beginning of the line. All other
+  /// characters advance the column by 1. [`offset`](Self::offset) is incremented by 1 regardless of the character.
+  ///
+  /// Since the end of a line is considered to be normalized to a single U+000A (XML 1.0 §2.11), a line cannot begin
+  /// with any other character.
+  ///
+  pub fn advance(&mut self, c: char) {
+    if c == '\n' {
+      self.line += 1;
+      self.column = 1;
+    } else {
+      self.column += 1;
+    }
+    self.offset += 1;
+  }
 }
 
 impl fmt::Display for Location {
@@ -99,8 +118,8 @@ static UNKNOWN_LOCATION: Location = Location::unknown();
 /// An error produced anywhere in the xylogue pipeline.
 ///
 /// Each variant represents a distinct failure type and conveys the information that the failure is intended to
-/// indicate. Since the number of error type may increaase as fixes are made and subsequent phases are implemented,
-/// unintended errors should be matched using a wildcard arm to ensure backword compatibility.
+/// indicate. Since the number of error type may increase as fixes are made and subsequent phases are implemented,
+/// unintended errors should be matched using a wildcard arm to ensure backward compatibility.
 ///
 /// # Examples
 ///
@@ -130,6 +149,38 @@ pub enum Error {
     /// What went wrong.
     message: String,
     /// The underlying I/O error.
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+  },
+  /// A failure caused by the application code of the entity resolver invoked by the parser.
+  ///
+  /// This variant allows the application to store its own error as [`source`](std::error::Error::source) because the
+  /// parser cannot determine what went wrong inside the application's callback. The caller can retrieve the original
+  /// error by down-casting the `source`.
+  ///
+  #[error("resolver error: {message}")]
+  Resolver {
+    /// Where the parser was when it called out, if known.
+    location: Location,
+    /// What went wrong.
+    message: String,
+    /// The application's own error, preserved so a caller can downcast to recover it.
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+  },
+  /// A failure raised by application code in a SAX-style event handler driven over the parser.
+  ///
+  /// Like [`Resolver`](Self::Resolver), the parser cannot know what went wrong inside the callback, so the
+  /// application's own error is stored as [`source`](std::error::Error::source); a caller can downcast it to recover the
+  /// original.
+  ///
+  #[error("SAX handler error: {message}")]
+  SaxHandler {
+    /// Where the handler was called, if known.
+    location: Location,
+    /// What went wrong, taken from the application error's `Display`.
+    message: String,
+    /// The application's own error, preserved so a caller can downcast to recover it.
     #[source]
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
   },
@@ -240,6 +291,41 @@ impl Error {
     Self::Io { location: Location::unknown(), message: message.into(), source: None }
   }
 
+  /// A failure raised by application code the parser called into, such as a resolver.
+  ///
+  /// Wrap an application-specific errors (such as database or network failures) in this way, they are relayed to the
+  /// caller via the parser. The application error is stored as [`source`](std::error::Error::source), and its string
+  /// representation serves as the error message. If the location is known, append the location information using
+  /// [`at`](Self::at).
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xylogue_core::Error;
+  ///
+  /// let cause = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the catalog is locked");
+  /// let err = Error::resolver(cause);
+  /// assert!(matches!(err, Error::Resolver { .. }));
+  /// assert_eq!(err.to_string(), "resolver error: the catalog is locked");
+  /// assert!(std::error::Error::source(&err).is_some());
+  /// ```
+  #[must_use]
+  pub fn resolver(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+    let source = source.into();
+    Self::Resolver { location: Location::unknown(), message: source.to_string(), source: Some(source) }
+  }
+
+  /// A failure raised by application code in a SAX-style event handler.
+  ///
+  /// Like [`resolver`](Self::resolver), the application error is stored as [`source`](std::error::Error::source) and its
+  /// string representation serves as the message; append a location with [`at`](Self::at) when it is known.
+  ///
+  #[must_use]
+  pub fn sax_handler(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+    let source = source.into();
+    Self::SaxHandler { location: Location::unknown(), message: source.to_string(), source: Some(source) }
+  }
+
   /// A character-encoding failure. When the problematic byte has been indicated, specify [`byte_offset`] to indicate
   /// its byte offset.
   ///
@@ -311,6 +397,8 @@ impl Error {
   pub fn at(mut self, location: Location) -> Self {
     match &mut self {
       Self::Io { location: at, .. }
+      | Self::Resolver { location: at, .. }
+      | Self::SaxHandler { location: at, .. }
       | Self::Encoding { location: at, .. }
       | Self::Uri { location: at, .. }
       | Self::Name { location: at, .. }
@@ -326,12 +414,12 @@ impl Error {
     self
   }
 
-  /// Associates tha root cause of an [`Io`](Error::Io) error. For other types of errors that do not have a source, it
-  /// does nothing.
+  /// Associates the root cause of an [`Io`](Error::Io) or [`Resolver`](Error::Resolver) error.
+  /// For other types of errors that do not have a source, it does nothing.
   ///
   #[must_use]
   pub fn caused_by(mut self, source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-    if let Self::Io { source: cause, .. } = &mut self {
+    if let Self::Io { source: cause, .. } | Self::Resolver { source: cause, .. } = &mut self {
       *cause = Some(source.into());
     }
     self
@@ -342,6 +430,8 @@ impl Error {
   pub fn location(&self) -> &Location {
     match self {
       Self::Io { location, .. }
+      | Self::Resolver { location, .. }
+      | Self::SaxHandler { location, .. }
       | Self::Encoding { location, .. }
       | Self::Uri { location, .. }
       | Self::Name { location, .. }
@@ -409,6 +499,8 @@ impl Error {
   pub fn message(&self) -> &str {
     match self {
       Self::Io { message, .. }
+      | Self::Resolver { message, .. }
+      | Self::SaxHandler { message, .. }
       | Self::Encoding { message, .. }
       | Self::Uri { message, .. }
       | Self::Name { message, .. }

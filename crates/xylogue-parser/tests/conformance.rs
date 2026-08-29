@@ -101,10 +101,10 @@ struct FileResolver {
 }
 
 impl UriResolver for FileResolver {
-  fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Vec<u8>>, xylogue_core::Error> {
+  fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xylogue_core::Error> {
     let Some(uri) = request.resolved_uri() else { return Ok(None) };
     let path = uri.strip_prefix("file:///").map(PathBuf::from).unwrap_or_else(|| self.root.join(request.system_id()));
-    Ok(std::fs::read(&path).ok())
+    Ok(std::fs::File::open(&path).ok().map(|f| Box::new(f) as Box<dyn std::io::Read>))
   }
 }
 

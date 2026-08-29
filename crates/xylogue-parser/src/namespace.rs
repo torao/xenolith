@@ -1,50 +1,76 @@
-//! Prefix bindings in scope.
+//! Prefix-to-namespace bindings in scope during parsing.
 //!
-//! Bindings are kept in one stack rather than a map per element: declarations are rare, scopes
-//! are shallow, and entering or leaving an element then costs nothing but moving an index.
+//! A prefixed declaration `xmlns:p="..."` binds the prefix `p` to the value, while a prefix-less declaration
+//! `xmlns="..."` binds the default namespace (the namespace to which prefix-less names belong) to the value. `xmlns=""`
+//! removes the declaration of the default namespace. The scope of a declaration extends to the element containing it
+//! and its child elements; however, if a re-declaration exists nested within a child element, it shadows the outer
+//! declaration. The `xml` prefix is bound to `http://www.w3.org/XML/1998/namespace` by the specification and is always
+//! in scope.
+//!
+//! A single element can contain multiple prefix bindings. In a naive implementation, one might think of maintaining a
+//! map of prefix bindings for each element, but in this parser implementation, they are kept on a single stack. When
+//! the parser detects a start tag with prefix bindings, it stores the current depth of the stack and pushes the
+//! bindings for each `xmlns` declaration onto the stack. Then, when it encounters the corresponding end tag, it
+//! truncates the stack to the stored depth. When resolving prefixes, a linear search from the top of the stack finds
+//! the innermost binding, allowing shadowing to function naturally. In fact, there are generally not many `xmlns`
+//! declarations in a document and their scope is shallow, scanning a short stack is less costly than traversing
+//! elements to maintain a map.
+//!
 
 use xylogue_core::name::NameId;
 
-/// One prefix binding. A `prefix` of `None` is the default namespace.
+/// A single prefix binding.
+///
+/// If `prefix` is `None`, the default namespace is used, and names without a prefix belong to this namespace. If
+/// `namespace` is `None`, no prefix is bound. `xmlns=""` uses this to remove the declaration of the default namespace.
+///
 #[derive(Clone, Copy, Debug)]
 struct Binding {
   prefix: Option<NameId>,
   namespace: Option<NameId>,
 }
 
-/// The prefix bindings in scope, outermost first.
+/// The prefix bindings within the scope, listed in order from the outermost first.
+///
 #[derive(Debug)]
 pub(crate) struct NamespaceScope {
   bindings: Vec<Binding>,
 }
 
 impl NamespaceScope {
-  /// Creates a scope holding only the binding of `xml`, which is fixed by the specification
-  /// and always in scope.
+  /// Creates a scope contains only the `xml` binding. This binding is fixed by the specification and is always present
+  /// within the scope.
+  ///
   pub(crate) fn new() -> Self {
     Self { bindings: vec![Binding { prefix: Some(NameId::XML), namespace: Some(NameId::XML_NS) }] }
   }
 
-  /// Records where the current element's declarations begin.
+  /// The current stack depth, This is used so that the scope can be reverted with [`revert`](Self::revert) when
+  /// current element ends.
+  ///
   pub(crate) fn mark(&self) -> usize {
     self.bindings.len()
   }
 
-  /// Discards the declarations made since `mark`.
+  /// Discards prefix binding declarations made after [`mark`](Self::mark) and terminates their scope. This is called
+  /// when the element in which the declarations were made is closed.
+  ///
   pub(crate) fn revert(&mut self, mark: usize) {
     self.bindings.truncate(mark);
   }
 
-  /// Adds a binding. A `namespace` of `None` undeclares the prefix, which only `xmlns=""` may
-  /// do in Namespaces 1.0.
+  /// Adds a prefix binding. Specifying `None` for `namespace` removes the prefix declaration. In Namespace 1.0, the
+  /// only way to do this is with `xmlns=""`.
+  ///
   pub(crate) fn bind(&mut self, prefix: Option<NameId>, namespace: Option<NameId>) {
     self.bindings.push(Binding { prefix, namespace });
   }
 
-  /// Resolves a prefix, innermost binding first.
+  /// Resolves the `prefix`. Bindings are processed in order, starting with the innermost binding on the stack.
   ///
-  /// `None` means the prefix is not bound; for the default namespace that is the normal state
-  /// and means "no namespace".
+  /// `None` means that no binding declaration exists for that prefix. For the default namespace, this is the initial
+  /// state and means "no namespace."
+  ///
   pub(crate) fn resolve(&self, prefix: Option<NameId>) -> Option<NameId> {
     self.bindings.iter().rev().find(|b| b.prefix == prefix).and_then(|b| b.namespace)
   }

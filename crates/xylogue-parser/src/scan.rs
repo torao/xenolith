@@ -1,14 +1,16 @@
 //! Finding token boundaries.
 //!
-//! Scanning answers one question: does the text hold a complete token, and how long is it?
-//! It never consumes anything and never interprets what it finds, so a scan that runs out of
-//! text simply reports that more input is needed and is retried from the same place once the
-//! text has grown. That is what makes the parser resumable at any byte boundary.
+//! Scanning is an operation that determines whether the text contains a complete token and, if so, how long it is. It
+//! does not consume characters or interpret what it finds. If the text runs out and scanning is interrupted, it report
+//! that "more input required," and when more text becomes available, it resumes from the same position.
+//!
 
 use xylogue_core::chars;
 use xylogue_core::error::{Error, Result};
 
-/// The kind of token found, before it is interpreted.
+use crate::config::Bounds;
+
+/// The type of detected token in its pre-parsed internal state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Token {
   /// `<?target data?>`, which includes the XML declaration.
@@ -29,94 +31,169 @@ pub(crate) enum Token {
   Reference,
 }
 
+impl Token {
+  /// A human-readable description of this token type for diagnostic purpose.
+  ///
+  fn describe(self) -> &'static str {
+    match self {
+      Token::Reference => "a reference",
+      Token::Comment => "a comment",
+      Token::CData => "a CDATA section",
+      Token::Pi => "a processing instruction",
+      Token::StartTag => "a start tag",
+      Token::EndTag => "a end tag",
+      Token::Doctype => "a document type declaration",
+      Token::Text => "text",
+    }
+  }
+
+  /// The byte size limit applied to this token type, and the corresponding field name in [`Bounds`].
+  ///
+  fn limit(self, bounds: &Bounds) -> (Option<usize>, &'static str) {
+    match self {
+      Token::Reference => (bounds.max_reference, "max_reference"),
+      Token::Comment => (bounds.max_comment, "max_comment"),
+      Token::CData => (bounds.max_cdata, "max_cdata"),
+      Token::Pi => (bounds.max_pi, "max_pi"),
+      Token::StartTag | Token::EndTag => (bounds.max_tag, "max_tag"),
+      Token::Doctype => (bounds.max_doctype, "max_doctype"),
+      Token::Text => (None, "text_fragment_len"),
+    }
+  }
+}
+
 /// Prefixes that may follow `<!`.
 const MARKUP_PREFIXES: [&str; 3] = ["<!--", "<![CDATA[", "<!DOCTYPE"];
 
-/// Finds the token at the start of `rest`.
+/// The result of [`scan`]. Either a complete token was found, or further input is required to complete the token.
 ///
-/// Returns `Ok(None)` when `rest` holds only part of a token and `complete` is false, meaning
-/// the caller should feed more input and scan again. `complete` says that `rest` is all the
-/// text the entity will ever have, which turns a partial token into an error.
-pub(crate) fn scan(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
-  debug_assert!(!rest.is_empty());
-  if rest.starts_with('&') {
-    return scan_reference(rest, complete);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scan {
+  /// A complete token: Its type and the number of bytes from the start of `rest.
+  Found(Token, usize),
+  /// The data in the buffer was insufficient to complete the token. The caller should add more input and scan again.
+  Pending,
+}
+
+impl Scan {
+  /// If the scan is still [`Pending`](Self::Pending) and the buffer has exceeded the byte limit stored in `bounds` by
+  /// [`token`](Token::limit), the result is converted into an ill-formed error.
+  ///
+  fn bounded(self, token: Token, rest: &str, bounds: &Bounds) -> Result<Self> {
+    if let Scan::Pending = self {
+      let (limit, field) = token.limit(bounds);
+      if let Some(max) = limit {
+        if rest.len() > max {
+          return Err(Error::well_formedness(format!(
+            "{} longer than {max} bytes was found; increase Bounds::{field} if the input is valid",
+            token.describe()
+          )));
+        }
+      }
+    }
+    Ok(self)
   }
+}
+
+/// Determines the token at the beginning of `rest`.
+///
+/// Returns [`Scan::Pending`] if `rest` contains only a portion of a token and `complete` is false. In this case, the
+/// caller should feed more input and scans again. When `complete` is true, an error is raised indicating an incomplete
+/// token.
+///
+pub(crate) fn scan(rest: &str, complete: bool, bounds: &Bounds) -> Result<Scan> {
+  if rest.is_empty() {
+    return Err(Error::internal("scan was called with an empty remainder"));
+  }
+  // Reference, &...;
+  if rest.starts_with('&') {
+    return scan_reference(rest, complete)?.bounded(Token::Reference, rest, bounds);
+  }
+  // Text
   if !rest.starts_with('<') {
-    return Ok(scan_text(rest, complete).map(|len| (Token::Text, len)));
+    // Text has no bound: it is streamed in fragments, not buffered whole.
+    return scan_text(rest, complete, bounds.text_fragment_len);
   }
   match rest.as_bytes().get(1) {
-    None => incomplete("<", complete),
-    Some(b'?') => delimited(rest, Token::Pi, 2, "?>", complete),
-    Some(b'/') => delimited(rest, Token::EndTag, 2, ">", complete),
-    Some(b'!') => scan_markup_declaration(rest, complete),
-    _ => scan_start_tag(rest, complete),
+    None => incomplete(Token::StartTag, rest, complete),
+    Some(b'?') => delimited(rest, Token::Pi, 2, "?>", complete)?.bounded(Token::Pi, rest, bounds),
+    Some(b'/') => delimited(rest, Token::EndTag, 2, ">", complete)?.bounded(Token::EndTag, rest, bounds),
+    Some(b'!') => scan_markup_declaration(rest, complete, bounds),
+    _ => scan_start_tag(rest, complete)?.bounded(Token::StartTag, rest, bounds),
   }
 }
 
 /// Scans one of the constructs introduced by `<!`.
-fn scan_markup_declaration(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
+fn scan_markup_declaration(rest: &str, complete: bool, bounds: &Bounds) -> Result<Scan> {
+  // Comment, <!-- ... -->
   if rest.starts_with(MARKUP_PREFIXES[0]) {
-    return delimited(rest, Token::Comment, 4, "-->", complete);
+    return delimited(rest, Token::Comment, 4, "-->", complete)?.bounded(Token::Comment, rest, bounds);
   }
+  // CData Section, <![CDATA[ ... ]]>
   if rest.starts_with(MARKUP_PREFIXES[1]) {
-    return delimited(rest, Token::CData, 9, "]]>", complete);
+    return delimited(rest, Token::CData, 9, "]]>", complete)?.bounded(Token::CData, rest, bounds);
   }
+  // DOCTYPE, <!DOCTYPE ... >
   if rest.starts_with(MARKUP_PREFIXES[2]) {
-    return match scan_doctype(rest) {
-      Some(len) => Ok(Some((Token::Doctype, len))),
-      None if complete => Err(Error::well_formedness("the document type declaration is not closed")),
-      None => Ok(None),
+    let doctype = match scan_doctype(rest) {
+      Some(len) => Scan::Found(Token::Doctype, len),
+      None if complete => return Err(Error::well_formedness("the document type declaration is not closed")),
+      None => Scan::Pending,
     };
+    return doctype.bounded(Token::Doctype, rest, bounds);
   }
   // Still too short to tell which of them it is.
   if !complete && MARKUP_PREFIXES.iter().any(|p| p.starts_with(rest)) {
-    return Ok(None);
+    Ok(Scan::Pending)
+  } else {
+    Err(Error::well_formedness(format!("{} is not markup", clip(rest, 10))))
   }
-  Err(Error::well_formedness(format!("{} is not markup", clip(rest, 10))))
 }
 
-/// Scans a token that ends at a fixed delimiter, searching from `from`.
-fn delimited(
-  rest: &str,
-  token: Token,
-  from: usize,
-  terminator: &str,
-  complete: bool,
-) -> Result<Option<(Token, usize)>> {
+/// Scans a token that end with a specified delimiter. Starts searching from `from`.
+///
+fn delimited(rest: &str, token: Token, from: usize, terminator: &str, complete: bool) -> Result<Scan> {
   if rest.len() <= from {
-    return incomplete(rest, complete);
+    return incomplete(token, rest, complete);
   }
   match rest[from..].find(terminator) {
-    Some(i) => Ok(Some((token, from + i + terminator.len()))),
-    None if complete => Err(Error::well_formedness(format!("{} is not terminated by {terminator:?}", clip(rest, 20)))),
-    None => Ok(None),
+    Some(i) => Ok(Scan::Found(token, from + i + terminator.len())),
+    None if complete => Err(Error::well_formedness(format!(
+      "{} is not terminated by {terminator:?}: {}",
+      token.describe(),
+      clip(rest, 20)
+    ))),
+    None => Ok(Scan::Pending),
   }
 }
 
-/// Scans `<name ...>`, ignoring `>` inside attribute values.
-fn scan_start_tag(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
+/// Scans `<name ...>`. Ignores any `>` characters within the attribute values.
+///
+fn scan_start_tag(rest: &str, complete: bool) -> Result<Scan> {
   let mut quote = None;
   for (i, c) in rest.char_indices().skip(1) {
-    match (quote, c) {
-      (Some(q), c) if c == q => quote = None,
-      (Some(_), _) => {}
-      (None, '"' | '\'') => quote = Some(c),
-      (None, '>') => return Ok(Some((Token::StartTag, i + 1))),
-      (None, '<') => {
-        return Err(Error::well_formedness("'<' may not appear inside a tag"));
+    if let Some(q) = quote {
+      if c == q {
+        quote = None;
       }
-      (None, _) => {}
+    } else {
+      match c {
+        '"' | '\'' => quote = Some(c),
+        '>' => return Ok(Scan::Found(Token::StartTag, i + 1)),
+        '<' => return Err(Error::well_formedness("'<' may not appear inside a tag")),
+        _ => {}
+      }
     }
   }
-  incomplete(rest, complete)
+  incomplete(Token::StartTag, rest, complete)
 }
 
 /// Scans `<!DOCTYPE ... >`, allowing an internal subset in brackets.
 ///
-/// The declaration is not interpreted here; that is the DTD parser's work. Comments and
-/// processing instructions are stepped over whole, so an apostrophe or a bracket inside one —
-/// as in `<!--doesn't-->` — is not mistaken for markup.
+/// Interpreting declarations is the responsibility of the DTD parser and is not performed here. Comments and processing
+/// instructions are skipped as-is, so even if they contain apostrophes or square brackets, such as `<!--doesn't-->`,
+/// they will not be mistaken for markup.
+///
 fn scan_doctype(rest: &str) -> Option<usize> {
   let mut i = 0;
   let mut quote: Option<char> = None;
@@ -149,53 +226,82 @@ fn scan_doctype(rest: &str) -> Option<usize> {
   None
 }
 
-/// Finds how much character data can be taken from the front of `rest`.
+/// Returns a token consist of a run of [`Text`](Token::Text) starting at the beginning of `rest`, or [`Scan::Pending`]
+/// if waiting for more input.
 ///
-/// A run of character data is only ever taken whole: up to the next `<`, or to the end of the
-/// entity. Emitting it piecewise would be cheaper, but the XPath data model requires text
-/// nodes to be maximal, so a run split by the arrival of input would have to be stitched back
-/// together by every caller. It also means the events a document produces do not depend on
-/// how its bytes were divided.
-fn scan_text(rest: &str, complete: bool) -> Option<usize> {
+/// A run continues until the next `<` or `&`, or until the end of the entity. If such a boundary is found within the
+/// `rest`, the run terminates immediately before it. If no such boundary is found, and `complete` is true, the Text
+/// extends to the end of the entity. Additionally, even if the entity has not reached its termination, the Text is
+/// converted into a fragment once the run reaches `fragment_len` bytes. Otherwise, it returns [`Scan::Pending`] and
+/// waits for further input.
+///
+fn scan_text(rest: &str, complete: bool, fragment_len: usize) -> Result<Scan> {
   match rest.find(['<', '&']) {
-    Some(i) => (i > 0).then_some(i),
-    None => complete.then_some(rest.len()),
+    // The caller has already verified that `rest` does not begin with `<` or `&`. To prevent returning a length of 0,
+    // this returns an internal error.
+    Some(0) => Err(Error::internal("scan_text ran on a text run that begins with '<' or '&'")),
+    Some(i) => Ok(Scan::Found(Token::Text, i)),
+    // Once input is complete, return the entire of `rest`. Otherwise, return the fragment as soon as it exceeds the
+    // limited size, or hold it if it might be followed by `<` or `&`.
+    None if complete => Ok(Scan::Found(Token::Text, rest.len())),
+    None if rest.len() >= fragment_len => Ok(text_fragment(rest)),
+    None => Ok(Scan::Pending),
   }
 }
 
-/// Scans `&...;`. The content is not interpreted here; that is the parser's work.
-fn scan_reference(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
-  let unterminated =
-    || Error::well_formedness("a reference must end with \";\"; write \"&amp;\" for a literal ampersand");
-  // A character reference `&#...;` is taken up to its `;` even when the characters between
-  // are wrong, so the parser can say precisely why; only a `<`, another `&` or whitespace
-  // marks it as a bare ampersand. An entity reference `&name;` instead ends at the first
-  // character a name may not contain, which must be the `;`.
-  let body = &rest[1..];
-  let boundary = if body.starts_with('#') {
-    body.char_indices().find(|(_, c)| matches!(*c, ';' | '<' | '&') || chars::is_whitespace(*c))
-  } else {
-    body.char_indices().find(|(_, c)| !chars::is_name_char(*c))
-  };
-  match boundary {
-    Some((i, ';')) => Ok(Some((Token::Reference, 1 + i + 1))),
-    Some(_) => Err(unterminated()),
-    None if complete => Err(unterminated()),
-    None => Ok(None),
+/// Returns the fragmented text boundary. This fragment does not contain `<` or `&`. If there is not text to fragment,
+/// it returns [`Scan::Pending`].
+///
+/// XML 1.0 §2.4 defines the CharData must not contain `]]>`, so raw `]]>` cannot be placed within the body text (it
+/// should be written as `]]&gt;`). Although it is the parser's responsibility to detect `]]>` in the Text, to ensure
+/// that it is not split into fragments during scanning, if the `rest` ends with `]]` or `]`, it is required not to
+/// include them in the fragment. If `rest` is `"]"` or `"]]"`, this function returns [`Scan::Pending`] to avoid
+/// returning a fragment with 0-length (in other words, to prevent the progressing from stalling).
+///
+fn text_fragment(rest: &str) -> Scan {
+  let held = rest.bytes().rev().take(2).take_while(|&b| b == b']').count();
+  match rest.len() - held {
+    0 => Scan::Pending,
+    take => Scan::Found(Token::Text, take),
   }
 }
 
-fn incomplete(rest: &str, complete: bool) -> Result<Option<(Token, usize)>> {
+/// Scans `&...;` to detect where the reference ends.
+///
+/// The scan simply detects the text from `&` to `;`. It is the parser's responsibility to perform strict validity
+/// checks on the reference content (entity names or numeric portions). However, an error is raised if `<`, `&`, or a
+/// space is detected in the reference.
+///
+fn scan_reference(rest: &str, complete: bool) -> Result<Scan> {
+  let unterminated = || Error::well_formedness("a reference must end with \";\"");
+  for (i, c) in rest.char_indices().skip(1) {
+    if c == ';' {
+      return Ok(Scan::Found(Token::Reference, i + 1));
+    }
+    if c == '<' || c == '&' || chars::is_whitespace(c) {
+      return Err(unterminated());
+    }
+  }
+  // The body ran out without a `;`: wait for more, or fail if the entity ends here.
+  if complete { Err(unterminated()) } else { Ok(Scan::Pending) }
+}
+
+fn incomplete(token: Token, rest: &str, complete: bool) -> Result<Scan> {
   if complete {
-    return Err(Error::well_formedness(format!("the entity ends inside {}", clip(rest, 20))));
+    let message = format!("the entity has ended within {}: {}", token.describe(), clip(rest, 20));
+    return Err(Error::well_formedness(message));
   }
-  Ok(None)
+  Ok(Scan::Pending)
 }
 
-/// Shortens text for an error message, on a character boundary.
+/// For error messages, truncate `s` to `max_chars` characters and enclose `s` in quotes.
+///
+/// If the length of `s` exceeds `max_chars`, an ellipsis `...` is shown to indicate that there are omitted characters
+/// following the first `max_chars` characters (e.g., `"abc..."`).
+///
 fn clip(s: &str, max_chars: usize) -> String {
   match s.char_indices().nth(max_chars) {
-    Some((i, _)) => format!("{:?}...", &s[..i]),
+    Some((end, _)) => format!("{:?}", format!("{}…", &s[..end])),
     None => format!("{s:?}"),
   }
 }
@@ -204,12 +310,29 @@ fn clip(s: &str, max_chars: usize) -> String {
 mod tests {
   use super::*;
 
+  const FRAG: usize = 8 * 1024;
+  const UNBOUNDED: Bounds = Bounds {
+    max_reference: None,
+    max_comment: None,
+    max_cdata: None,
+    max_pi: None,
+    max_tag: None,
+    max_doctype: None,
+    text_fragment_len: FRAG,
+  };
+
   fn complete(text: &str) -> (Token, usize) {
-    scan(text, true).expect("scans").expect("is complete")
+    match scan(text, true, &UNBOUNDED).expect("scans") {
+      Scan::Found(token, len) => (token, len),
+      Scan::Pending => panic!("{text:?} is not a complete token"),
+    }
   }
 
   fn partial(text: &str) -> Option<(Token, usize)> {
-    scan(text, false).expect("scans")
+    match scan(text, false, &UNBOUNDED).expect("scans") {
+      Scan::Found(token, len) => Some((token, len)),
+      Scan::Pending => None,
+    }
   }
 
   #[test]
@@ -239,7 +362,7 @@ mod tests {
   #[test]
   fn a_partial_token_at_the_end_of_the_entity_is_an_error() {
     for text in ["<", "<a", "<!-- c", "<?pi", "<![CDATA[x", "<!D"] {
-      assert!(scan(text, true).is_err(), "{text:?} should fail at end of entity");
+      assert!(scan(text, true, &UNBOUNDED).is_err(), "{text:?} should fail at end of entity");
     }
   }
 
@@ -265,13 +388,58 @@ mod tests {
   }
 
   #[test]
-  fn a_run_of_text_is_only_taken_whole() {
-    // Without a following `<` or `&` the run may still grow, so nothing is taken yet.
+  fn a_short_run_of_text_is_held_until_it_is_whole() {
+    // Without a following `<` or `&` a short run may still grow, so nothing is taken yet.
     assert_eq!(partial("hello"), None);
     assert_eq!(partial("a]]"), None);
     // At the end of the entity there is nothing more to wait for.
     assert_eq!(complete("hello"), (Token::Text, 5));
     assert_eq!(complete("a]]"), (Token::Text, 3));
+  }
+
+  #[test]
+  fn a_long_run_of_text_is_emitted_in_fragments() {
+    // A run shorter than the threshold is still held whole while it might grow.
+    assert_eq!(partial(&"a".repeat(FRAG - 1)), None);
+    // A run that reaches the threshold is emitted without waiting for a following `<` or `&`, so an
+    // endless run cannot make the stream buffer without limit.
+    assert_eq!(partial(&"a".repeat(FRAG)), Some((Token::Text, FRAG)));
+    // A `<` still bounds the fragment when one is present.
+    let bounded = format!("{}<a/>", "a".repeat(FRAG));
+    assert_eq!(partial(&bounded), Some((Token::Text, FRAG)));
+  }
+
+  #[test]
+  fn the_text_fragment_threshold_is_configurable() {
+    // A smaller threshold fragments a shorter run; below it, the run is still held.
+    let bounds = Bounds::default().with_text_fragment_len(16);
+    assert_eq!(scan(&"a".repeat(15), false, &bounds).unwrap(), Scan::Pending);
+    assert_eq!(scan(&"a".repeat(16), false, &bounds).unwrap(), Scan::Found(Token::Text, 16));
+  }
+
+  #[test]
+  fn a_tiny_fragment_len_never_emits_an_empty_text_token() {
+    // With a 1-byte threshold, a run of only `]` must not fragment into a zero-length token (which would
+    // make the parser loop): the trailing `]` are held, so nothing is emitted until more arrives.
+    let bounds = Bounds::default().with_text_fragment_len(1);
+    assert_eq!(scan("]", false, &bounds).unwrap(), Scan::Pending);
+    assert_eq!(scan("]]", false, &bounds).unwrap(), Scan::Pending);
+    // Once the run is long enough to hold two and still emit one, it makes progress.
+    assert_eq!(scan("]]]", false, &bounds).unwrap(), Scan::Found(Token::Text, 1));
+    // At the end of input the whole run is taken, since no `>` can follow.
+    assert_eq!(scan("]]", true, &bounds).unwrap(), Scan::Found(Token::Text, 2));
+  }
+
+  #[test]
+  fn a_text_fragment_never_ends_inside_a_forbidden_sequence() {
+    // Up to two trailing `]` are held back, so a `>` in the next feed cannot complete `]]>` across the
+    // split. The fragment stops before them.
+    let one = format!("{}]", "a".repeat(FRAG));
+    assert_eq!(partial(&one), Some((Token::Text, FRAG)));
+    let two = format!("{}]]", "a".repeat(FRAG));
+    assert_eq!(partial(&two), Some((Token::Text, FRAG)));
+    // A run of only `]` still makes progress, since at most two are ever held.
+    assert_eq!(partial(&"]".repeat(FRAG + 2)), Some((Token::Text, FRAG)));
   }
 
   #[test]
@@ -283,19 +451,55 @@ mod tests {
     assert_eq!(partial("&am"), None);
     assert_eq!(partial("&"), None);
     // A '<' or a second '&' before the ';' is a bare ampersand, not a reference.
-    assert!(scan("&amp cd", false).is_err());
-    assert!(scan("&foo<", false).is_err());
+    assert!(scan("&amp cd", false, &UNBOUNDED).is_err());
+    assert!(scan("&foo<", false, &UNBOUNDED).is_err());
+  }
+
+  #[test]
+  fn scan_delimits_a_reference_but_leaves_its_content_to_the_parser() {
+    // A reference is delimited at its ';', whatever the content — the parser validates the name or the
+    // character-reference digits.
+    assert_eq!(complete("&#65;"), (Token::Reference, 5));
+    assert_eq!(complete("&#x41;"), (Token::Reference, 6));
+    assert_eq!(complete("&amp;"), (Token::Reference, 5));
+    // A wrong-radix digit, an uppercase `X`, or an invalid name is still delimited as a reference here.
+    assert_eq!(complete("&#4a;"), (Token::Reference, 5));
+    assert_eq!(complete("&#X58;"), (Token::Reference, 6));
+    assert_eq!(complete("&123;"), (Token::Reference, 5));
+  }
+
+  #[test]
+  fn a_reference_is_bounded_only_when_max_reference_is_set() {
+    // By default nothing bounds a reference: an unterminated one just waits for more input.
+    let long = format!("&{}", "a".repeat(1000));
+    assert_eq!(partial(&long), None);
+    // With a bound, a reference that grows past it is rejected before its `;` arrives.
+    let bounds = Bounds::default().with_max_reference(64);
+    let err = scan(&long, false, &bounds).unwrap_err();
+    assert!(err.to_string().contains("Bounds::max_reference"), "{err}");
   }
 
   #[test]
   fn a_stray_less_than_inside_a_tag_is_rejected() {
-    assert!(scan("<a <b>", false).is_err());
+    assert!(scan("<a <b>", false, &UNBOUNDED).is_err());
   }
 
   #[test]
   fn unknown_markup_is_rejected_once_it_is_long_enough_to_tell() {
-    assert!(scan("<!x", false).is_err());
-    assert!(scan("<!-x", false).is_err());
-    assert!(scan("<![CD@TA[", false).is_err());
+    assert!(scan("<!x", false, &UNBOUNDED).is_err());
+    assert!(scan("<!-x", false, &UNBOUNDED).is_err());
+    assert!(scan("<![CD@TA[", false, &UNBOUNDED).is_err());
+  }
+
+  #[test]
+  fn clip_quotes_and_marks_only_a_real_cut() {
+    // Shorter than the limit: quoted whole, no ellipsis.
+    assert_eq!(clip("hello", 20), "\"hello\"");
+    // Exactly the limit: still whole, no ellipsis.
+    assert_eq!(clip("hello", 5), "\"hello\"");
+    // Longer: cut to the limit, with the ellipsis inside the quotes.
+    assert_eq!(clip("hello!", 5), "\"hello…\"");
+    // The cut lands on a character boundary.
+    assert_eq!(clip("あいうえお", 2), "\"あい…\"");
   }
 }

@@ -1,11 +1,16 @@
 //! The sans-I/O parser core.
 //!
-//! [`Parser`] is fed bytes and asked to make progress. It reads no files and opens no
-//! sockets, so the same core serves a blocking reader, an async reader and an in-memory
-//! slice, and can stop between two tokens without holding a thread.
+//! [`Parser`] takes bytes through [`feed`](Parser::feed) and yields one step at a time through
+//! [`advance`](Parser::advance), which returns a [`Progress`] telling the caller what to do next. The parser reads no
+//! files and opens no sockets, so the same core drives a blocking reader, an async reader, and an in-memory slice, and
+//! it can stop between two tokens without holding a thread.
 //!
-//! Values are reached through accessors that borrow from the parser rather than through
-//! events that own their data, so nothing is allocated per event once the buffers have grown.
+//! The caller reads an event's data through accessors that borrow from the parser rather than through events that own
+//! their data, so once the buffers have grown, the parser allocates nothing per event.
+//!
+//! This is the low level; [`Reader`](crate::Reader) wraps it with the I/O and entity-resolution loop that most callers
+//! want.
+//!
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -16,57 +21,214 @@ use xylogue_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLN
 #[cfg(feature = "xml-base")]
 use xylogue_core::uri::UriReference;
 
-use crate::config::ParserConfig;
+use crate::config::{Bounds, ParserConfig};
 use crate::dtd::{self, Dtd, GeneralEntity};
 use crate::entity::{Entity, EntityKind, EntityStack, Limits};
 use crate::event::Event;
 use crate::namespace::NamespaceScope;
 use crate::resolve::{EntityRequest, RequestKind};
-use crate::scan::{Token, scan};
+use crate::scan::{Scan, Token, scan};
 use crate::stream::CharStream;
 
 /// What a call to [`Parser::advance`] achieved.
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Progress {
-  /// An event is available; read it through the parser's accessors.
+  /// The parser produced an event. Read its data through the accessors the [`EventKind`] names; the values belong to
+  /// this event only, and the next [`advance`](Parser::advance) clears them.
+  ///
   Event(EventKind),
-  /// More bytes are needed before anything can be decided.
+  /// The parser needs more bytes to decide the next step. The driver supplies them with [`feed`](Parser::feed), setting
+  /// `last` on the final chunk, then calls again.
+  ///
   NeedMoreInput,
-  /// An external entity must be resolved before parsing can continue. Read the request from
-  /// [`Parser::pending_entity`], then call [`Parser::provide_entity`] or
-  /// [`Parser::decline_entity`]. A blocking driver does this through a
-  /// [`UriResolver`](crate::resolve::UriResolver); most callers use a [`Reader`](crate::Reader)
-  /// and never see this variant.
+  /// An external entity must be resolved before parsing can continue.
+  ///
+  /// Only external entities stop the parser here: an external general entity referenced in content, the external DTD
+  /// subset, and an external parameter entity. Internal entities and character or predefined references (`&amp;`,
+  /// `&#65;`) are resolved in place without an event.
+  ///
+  /// The driver reads the request (its name, identifiers, and [`RequestKind`]) with
+  /// [`Parser::pending_entity`], fetches its bytes, gives the parser exactly one answer, then calls
+  /// [`advance`](Parser::advance) again:
+  ///
+  /// - The driver streams a general entity with [`begin_entity`](Parser::begin_entity) then [`feed`](Parser::feed) in
+  ///   chunks, which bounds memory, or hands it over whole with [`provide_entity`](Parser::provide_entity).
+  /// - The external subset and an external parameter entity have no streaming form, so the driver supplies them through
+  ///   [`provide_entity`](Parser::provide_entity) only.
+  /// - The driver refuses an entity it cannot fetch with [`decline_entity`](Parser::decline_entity).
+  ///
+  /// A blocking driver does all this through a [`UriResolver`](crate::resolve::UriResolver); most callers use a
+  /// [`Reader`](crate::Reader) and never see this variant.
+  ///
   NeedEntity,
-  /// The document is finished.
+  /// The document is complete; no more events follow, and the driver stops.
+  ///
   Eof,
 }
 
-/// The kind of event the parser is reporting.
+/// The kind of event the parser is reporting, carried by [`Progress::Event`].
+///
+/// It names only the kind, carrying none of the event's data and so no borrow of the parser; that is what lets
+/// [`advance`](Parser::advance) report it by value while the caller stays free to [`feed`](Parser::feed) more input. The
+/// data is read separately through [`Parser::event_ref`], whose [`EventRef`] variant matches the kind named here, and
+/// each variant below points at that counterpart. Those borrowed values are current only until the next
+/// [`advance`](Parser::advance).
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EventKind {
-  /// The XML declaration; see [`Parser::version`] and its neighbours.
+  /// The XML declaration: its version, encoding, and standalone flag are in [`EventRef::XmlDeclaration`].
+  ///
   XmlDeclaration,
-  /// A document type declaration. Its content is not interpreted until phase 2.
+  /// A document type declaration: its verbatim text is [`EventRef::Doctype`], and its parsed root name and external
+  /// identifiers are on the parser ([`doctype_name`](Parser::doctype_name),
+  /// [`doctype_public_id`](Parser::doctype_public_id), [`doctype_system_id`](Parser::doctype_system_id)). The internal
+  /// subset is parsed into the DTD rather than reported here.
+  ///
   Doctype,
-  /// The start of an element, or a whole empty element.
+  /// The start of an element, or a whole empty element: its name and attributes are in [`EventRef::StartElement`].
+  ///
   StartElement,
-  /// The end of an element, including the implied end of an empty element.
+  /// The end of an element, including the implied end of an empty element: its name is in [`EventRef::EndElement`].
+  ///
   EndElement,
-  /// Character data.
+  /// Character data, in [`EventRef::Text`].
+  ///
+  /// One run of character data is not always one event: a long run is delivered as several adjacent `Text` events so
+  /// it is not buffered without bound, and a reference or entity boundary within a run also splits it. A consumer that
+  /// wants one maximal text node coalesces adjacent `Text` events, as the DOM tree builder does.
+  ///
   Text,
-  /// The content of a CDATA section, reported separately from text because the DOM and the
+  /// The content of a CDATA section, in [`EventRef::CData`]. Reported separately from text because the DOM and the
   /// serializer both need to know where the section boundaries were.
+  ///
   CData,
-  /// A comment, without its delimiters.
+  /// A comment without its delimiters, in [`EventRef::Comment`].
+  ///
   Comment,
-  /// A processing instruction; see [`Parser::target`].
+  /// A processing instruction: its target and data are in [`EventRef::ProcessingInstruction`].
+  ///
   ProcessingInstruction,
 }
 
-/// The value of `xml:space` in effect.
+/// The current event's data, as an enum that borrows it from the parser. Each variant provides only the data specific
+/// to that event type.
+///
+/// [`Parser::event_ref`] returns it after [`advance`](Parser::advance) reports [`Progress::Event`]. Match it for the
+/// kind that was reported, or, to reach across kinds without a `match`, use [`name`](Self::name), [`text`](Self::text),
+/// and [`attributes`](Self::attributes). The borrows are valid only until the next [`advance`](Parser::advance); an
+/// event that must outlive the call can be copied into the owned [`Event`] with [`Event::capture`].
+///
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum EventRef<'a> {
+  /// The XML declaration.
+  XmlDeclaration {
+    /// The version, always `1.x`.
+    version: &'a str,
+    /// The encoding the declaration named, which need not be the one actually in use; it is the value as written, not
+    /// normalized. [`Parser::encoding`] reports the encoding that actually decoded the bytes.
+    encoding: Option<&'a str>,
+    /// The standalone declaration, if there was one.
+    standalone: Option<bool>,
+  },
+  /// A document type declaration, the whole `<!DOCTYPE ...>` text held verbatim; its parsed pieces are on the parser
+  /// ([`doctype_name`](Parser::doctype_name) and the rest).
+  Doctype(&'a str),
+  /// The start of an element, or a whole empty element.
+  StartElement {
+    /// The element's name.
+    name: QName,
+    /// The attributes, in document order, namespace declarations included.
+    attributes: Attributes<'a>,
+    /// The `xml:space` in effect inside this element.
+    xml_space: XmlSpace,
+    /// The `xml:lang` in effect inside this element, if any.
+    xml_lang: Option<&'a str>,
+  },
+  /// The end of an element, including the implied end of an empty one.
+  EndElement {
+    /// The element's name.
+    name: QName,
+  },
+  /// Character data, with references expanded. One run may arrive as several adjacent `Text` events.
+  Text(&'a str),
+  /// The content of a CDATA section: everything between `<![CDATA[` and `]]>`, with no reference expansion and nothing
+  /// trimmed.
+  CData(&'a str),
+  /// A comment's text: everything between `<!--` and `-->`, verbatim.
+  Comment(&'a str),
+  /// A processing instruction.
+  ProcessingInstruction {
+    /// The target: the name right after `<?`, ending at the first whitespace, or at `?>` when there is no data.
+    target: &'a str,
+    /// Everything after the target and the whitespace separating it, up to `?>`: the separating whitespace is dropped,
+    /// nothing else is trimmed, and it is empty when the instruction is only a target.
+    data: &'a str,
+    /// Where `data` begins in the source, so a position inside foreign-language data maps back to the document. It is
+    /// the anchor the separator whitespace would otherwise have hidden.
+    data_location: &'a Location,
+  },
+}
+
+impl<'a> EventRef<'a> {
+  /// Which kind of event this is.
+  #[must_use]
+  pub const fn kind(&self) -> EventKind {
+    match self {
+      Self::XmlDeclaration { .. } => EventKind::XmlDeclaration,
+      Self::Doctype(_) => EventKind::Doctype,
+      Self::StartElement { .. } => EventKind::StartElement,
+      Self::EndElement { .. } => EventKind::EndElement,
+      Self::Text(_) => EventKind::Text,
+      Self::CData(_) => EventKind::CData,
+      Self::Comment(_) => EventKind::Comment,
+      Self::ProcessingInstruction { .. } => EventKind::ProcessingInstruction,
+    }
+  }
+
+  /// The element's name for a start or end element, or `None` for other kinds.
+  ///
+  /// For a start element it is also in the [`name`](Self::StartElement) field, and for an end element in the
+  /// [`name`](Self::EndElement) field; this reaches whichever of the two applies without a `match`.
+  ///
+  #[must_use]
+  pub const fn name(&self) -> Option<QName> {
+    match self {
+      Self::StartElement { name, .. } | Self::EndElement { name } => Some(*name),
+      _ => None,
+    }
+  }
+
+  /// The character data of a text, CDATA, or comment event, or `None` for other kinds.
+  ///
+  /// It does not cover a processing instruction's data or a `DOCTYPE`'s body, which are not character data; read those
+  /// from the [`data`](Self::ProcessingInstruction) field and the [`Doctype`](Self::Doctype) variant.
+  ///
+  #[must_use]
+  pub const fn text(&self) -> Option<&'a str> {
+    match self {
+      Self::Text(text) | Self::CData(text) | Self::Comment(text) => Some(text),
+      _ => None,
+    }
+  }
+
+  /// The attributes of a start element, in document order and namespace declarations included, or an empty view for
+  /// other kinds.
+  ///
+  #[must_use]
+  pub fn attributes(&self) -> Attributes<'a> {
+    match self {
+      Self::StartElement { attributes, .. } => *attributes,
+      _ => Attributes { attributes: &[], text: "" },
+    }
+  }
+}
+
+/// The `xml:space` handling in effect, taken from the nearest element in scope that set it; see [`Parser::xml_space`].
+///
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum XmlSpace {
   /// No `xml:space` is in scope, or the nearest one says `default`.
@@ -76,38 +238,105 @@ pub enum XmlSpace {
   Preserve,
 }
 
-/// One attribute of the current start tag.
+/// One attribute of the current start element, borrowed from the parser and valid only until the next
+/// [`advance`](Parser::advance); [`Attributes`] yields these.
+///
 #[derive(Clone, Copy, Debug)]
 pub struct AttributeRef<'a> {
   /// The attribute's name. An unprefixed attribute is in no namespace, never the default one.
+  ///
   pub name: QName,
-  /// The normalized value.
+  /// The value after attribute-value normalization (XML 1.0 §3.3.3), and the tokenized collapse the DTD applies when
+  /// the attribute has a tokenized type.
+  ///
   pub value: &'a str,
   /// True if this attribute is a namespace declaration (`xmlns` or `xmlns:p`).
+  ///
   pub declares_namespace: bool,
 }
 
+/// The attributes of a start element, a borrowing view that yields [`AttributeRef`]. [`EventRef::StartElement`] carries
+/// one; iterate it with [`iter`](Self::iter) or index it with [`get`](Self::get).
+#[derive(Clone, Copy, Debug)]
+pub struct Attributes<'a> {
+  attributes: &'a [Attribute],
+  text: &'a str,
+}
+
+impl<'a> Attributes<'a> {
+  /// How many attributes there are, namespace declarations included.
+  #[must_use]
+  pub const fn len(&self) -> usize {
+    self.attributes.len()
+  }
+
+  /// Whether there are no attributes.
+  #[must_use]
+  pub const fn is_empty(&self) -> bool {
+    self.attributes.is_empty()
+  }
+
+  /// The attribute at `index`, or `None` if `index` is out of range.
+  #[must_use]
+  pub fn get(&self, index: usize) -> Option<AttributeRef<'a>> {
+    self.attributes.get(index).map(|a| AttributeRef {
+      name: a.name,
+      value: &self.text[a.value.clone()],
+      declares_namespace: a.declares_namespace,
+    })
+  }
+
+  /// Iterates the attributes in document order.
+  pub fn iter(&self) -> impl Iterator<Item = AttributeRef<'a>> {
+    let (attributes, text) = (self.attributes, self.text);
+    (0..attributes.len()).filter_map(move |i| {
+      attributes.get(i).map(|a| AttributeRef {
+        name: a.name,
+        value: &text[a.value.clone()],
+        declares_namespace: a.declares_namespace,
+      })
+    })
+  }
+}
+
+/// One attribute of the current start tag, stored internally; [`AttributeRef`] is the borrowed view handed to callers.
+///
 #[derive(Clone, Debug)]
 struct Attribute {
   name: QName,
+  /// The normalized value is a byte range into the parser's `attribute_text` buffer, so every value shares one
+  /// allocation that the parser reuses across elements rather than each owning a `String`.
+  ///
   value: Range<usize>,
   declares_namespace: bool,
 }
 
+/// An element whose start tag has been read but whose end tag has not: the state the parser keeps while it is open.
+///
 #[derive(Debug)]
 struct OpenElement {
+  /// The element's expanded name, reported when it closes.
+  ///
   name: QName,
+  /// The element's name as written, a range into `self.names`, compared against the end tag's raw name.
+  ///
   lexical: Range<usize>,
+  /// The namespace-scope position to roll back to when the element closes, dropping the bindings it declared.
+  ///
   namespace_mark: usize,
+  /// The `xml:space` in effect within the element.
+  ///
   xml_space: XmlSpace,
+  /// The `xml:lang` in effect within the element, if any.
+  ///
   xml_lang: Option<NameId>,
-  /// The base URI in effect within this element: the enclosing base, resolved with an
-  /// `xml:base` attribute if the tag carried one (XML Base).
+  /// The base URI in effect within this element: the enclosing base, resolved with an `xml:base` attribute if the tag
+  /// carried one (XML Base).
+  ///
   #[cfg(feature = "xml-base")]
   base: Option<UriReference>,
-  /// The entity depth at which the start tag was read. An end tag must be read at the same
-  /// depth, so that an element cannot start in one entity and end in another (WFC: the tags
-  /// of an element must lie within one entity).
+  /// The entity depth at which the start tag was read. An end tag must be read at the same depth, so an element cannot
+  /// start in one entity and end in another (WFC: an element's tags must lie within one entity).
   entity_depth: usize,
 }
 
@@ -118,6 +347,25 @@ struct Held {
   token: Token,
   text: String,
   at: Location,
+}
+
+/// The result of looking for a text declaration at the start of an external entity.
+///
+/// An external entity may open with `<?xml ... ?>` (the `TextDecl` production). The stream reads it to choose the
+/// encoding but leaves it in the character input, so the parser steps over a [`Present`](TextDecl::Present) span
+/// rather than report it as a processing instruction. [`NeedMore`](TextDecl::NeedMore) arises only while an entity
+/// arrives in pieces and its start has not fully landed.
+///
+enum TextDecl {
+  /// The entity does not open with a text declaration.
+  ///
+  None,
+  /// The entity opens with a text declaration this many bytes long; the parser steps over it.
+  ///
+  Present(usize),
+  /// The input read so far is too little to decide; the parser requests more.
+  ///
+  NeedMore,
 }
 
 /// Where in the document the parser is.
@@ -132,6 +380,9 @@ enum Phase {
 }
 
 /// An XML 1.0 parser that holds no I/O.
+///
+/// One parser drives one document: feed its bytes, drive [`advance`](Self::advance) to [`Progress::Eof`], then drop it.
+/// It is not reset or reused for a second document.
 ///
 /// # Examples
 ///
@@ -178,6 +429,7 @@ pub struct Parser {
   stack: EntityStack,
   pool: NamePool,
   config: ParserConfig,
+  bounds: Bounds,
   space_name: NameId,
   lang_name: NameId,
   /// The interned local name `base`, for spotting `xml:base` attributes.
@@ -219,16 +471,28 @@ pub struct Parser {
   pending_text_at: Location,
   /// A markup token scanned while `pending_text` still had to be flushed first.
   held: Option<Held>,
-  /// Entities being expanded into an attribute value, for recursion detection.
+  /// Entity references being expanded into an attribute value, to detect a repeated recursion and its depth.
   expanding: Vec<NameId>,
   /// An external entity the parser has stopped to have resolved, if any.
   pending_entity: Option<EntityRequest>,
+  /// True while a just-begun external entity may still open with a text declaration that has to be stepped over before
+  /// its content is read. Set by [`Parser::begin_entity`], cleared once the declaration is stripped or ruled out. At
+  /// most one entity is in this state at a time, since an entity's declaration is handled before any reference within
+  /// it opens another.
+  ///
+  entity_text_decl_pending: bool,
   /// The end of an empty element, owed to the caller on the next call.
   end_pending: bool,
+  /// The kind of the current event, or `None` before the first one and after the last.
   kind: Option<EventKind>,
   /// Scratch holding the token being interpreted; reused between tokens.
   token: String,
+  /// Where the current token begins, so the event's location and an error's location both point at its start rather
+  /// than at wherever reading has since reached.
   token_at: Location,
+  /// Where the current processing instruction's data begins, past the target and the whitespace that separates it, so
+  /// a handler can map a position inside foreign-language data back to the document.
+  pi_data_at: Location,
   /// Lexical names of the open elements, so an end tag can be compared with its start tag.
   names: String,
   text: String,
@@ -236,6 +500,9 @@ pub struct Parser {
   attributes: Vec<Attribute>,
   attribute_text: String,
   version: String,
+  /// The XML declaration names the encoding. The stream layer sniffed the encoding from the bytes and is already
+  /// decoding with it, so this copy is read only to report the declaration, never to pick a codec here.
+  ///
   declared_encoding: Option<String>,
   standalone: Option<bool>,
   xml_space: XmlSpace,
@@ -252,15 +519,21 @@ impl Default for Parser {
 }
 
 impl Parser {
-  /// Creates a parser for a document whose encoding is determined from its bytes.
+  /// Creates a parser that sniffs the document's encoding from its bytes, with default limits and no system identifier.
+  ///
+  /// Use [`with_document`](Self::with_document) to set the system identifier, pin the encoding, or change the limits.
+  ///
   #[must_use]
   pub fn new() -> Self {
     Self::with_document(Entity::document(CharStream::new()), Limits::default())
   }
 
-  /// Creates a parser over a prepared document entity.
+  /// Creates a parser over a prepared document entity, bounded by `limits`.
   ///
-  /// Use this when the system identifier, the encoding or the limits are known in advance.
+  /// Use this when you know the system identifier, encoding, or limits in advance. The document stream's system
+  /// identifier becomes the base URI and the origin of error locations; an encoding set with
+  /// [`CharStream::with_encoding`] pins decoding instead of sniffing it; and `limits` caps the whole-document work
+  /// (see [`Limits`]).
   ///
   /// # Examples
   ///
@@ -287,6 +560,7 @@ impl Parser {
       stack: EntityStack::new(document, limits),
       pool,
       config: ParserConfig::default(),
+      bounds: Bounds::default(),
       space_name,
       lang_name,
       #[cfg(feature = "xml-base")]
@@ -312,10 +586,12 @@ impl Parser {
       held: None,
       expanding: Vec::new(),
       pending_entity: None,
+      entity_text_decl_pending: false,
       end_pending: false,
       kind: None,
       token: String::new(),
       token_at: Location::unknown(),
+      pi_data_at: Location::unknown(),
       names: String::new(),
       text: String::new(),
       name: QName::new(None, None, NameId::EMPTY),
@@ -331,10 +607,10 @@ impl Parser {
     }
   }
 
-  /// Replaces the parser's configuration.
+  /// Replaces the parser's configuration; set it before parsing begins.
   ///
-  /// Set it before parsing begins. The options it carries — `xml:base`, `xml:id` — take effect
-  /// only where the matching Cargo feature is compiled in; see [`ParserConfig`].
+  /// Its options (`xml:base`, `xml:id`) take effect only where the matching Cargo feature is compiled in; see
+  /// [`ParserConfig`].
   ///
   /// # Examples
   ///
@@ -348,46 +624,108 @@ impl Parser {
     self.config = config;
   }
 
-  /// The parser's configuration.
+  /// The configuration in effect; change it with [`set_config`](Self::set_config).
+  ///
   #[must_use]
   pub const fn config(&self) -> &ParserConfig {
     &self.config
   }
 
+  /// Sets the per-token byte-length bounds the scanner enforces; set them before parsing begins.
+  ///
+  /// The default [`Bounds`] already caps each markup token generously. [`Bounds::unlimited`] lifts those caps for
+  /// trusted input, and a tighter value rejects a single token that grows past its limit in input that is not. These
+  /// bound one token at a time; whole-document work such as nesting depth and entity expansion is capped by [`Limits`]
+  /// instead.
+  ///
+  pub fn set_bounds(&mut self, bounds: Bounds) {
+    self.bounds = bounds;
+  }
+
+  /// The per-token byte-length bounds in effect; change them with [`set_bounds`](Self::set_bounds).
+  ///
+  #[must_use]
+  pub const fn bounds(&self) -> &Bounds {
+    &self.bounds
+  }
+
   /// Fixes the encoding of the document, skipping detection.
   ///
-  /// Use this when the encoding is dictated from outside the document — a transport header, or a
-  /// caller who simply knows it — instead of the byte-order mark and declaration the document
-  /// would otherwise be sniffed for. It must be called before the first [`feed`](Self::feed);
-  /// [`CharStream::use_encoding`] describes the detail, the byte-order mark caveat included.
+  /// Use this when the encoding is dictated from outside the document, such as a transport header, instead of the
+  /// byte-order mark and declaration the document would otherwise be sniffed for. The caller must call it before the
+  /// first [`feed`](Self::feed); [`CharStream::use_encoding`] covers the detail, the byte-order mark caveat included.
   ///
   /// # Errors
   ///
   /// See [`CharStream::use_encoding`]: an unknown or unavailable encoding, or a call made after
   /// bytes have already been fed.
+  ///
   pub fn set_encoding(&mut self, encoding: &str) -> Result<()> {
     self.stack.current_mut().stream_mut().use_encoding(encoding)
   }
 
   /// Supplies bytes of the document, or of whatever entity is innermost.
   ///
+  /// The parser appends the bytes to the entity now being read: the document until an entity is streamed, then that
+  /// entity's own bytes between [`begin_entity`](Self::begin_entity) and its exhaustion. The caller sets `last` on the
+  /// final chunk of that entity; feeding again after `last` is a usage error.
+  ///
   /// # Errors
   ///
   /// See [`EntityStack::feed`].
+  ///
   pub fn feed(&mut self, bytes: &[u8], last: bool) -> Result<()> {
     self.stack.feed(bytes, last)
   }
 
-  /// Advances to the next event.
+  /// Clears the per-event output so no accessor reports a value an earlier event left behind; each event's handler
+  /// then sets what it reports. Document-level state (the XML declaration and `DOCTYPE` metadata) is not per-event
+  /// and stays in place.
+  ///
+  fn reset_event_fields(&mut self) {
+    self.kind = None;
+    self.name = QName::new(None, None, NameId::EMPTY);
+    self.attributes.clear();
+    self.attribute_text.clear();
+    self.text.clear();
+  }
+
+  /// Advances parsing by one step and reports what it achieved.
+  ///
+  /// Each call returns a [`Progress`] that says what to do before calling `advance` again; the loop ends at
+  /// [`Eof`](Progress::Eof).
+  ///
+  /// - [`Event`](Progress::Event) carries the [`EventKind`]. Read the event's data through [`event_ref`](Self::event_ref),
+  ///   whose [`EventRef`] variant matches that kind (for example, [`EventRef::StartElement`] carries a start element's
+  ///   name and attributes); its values belong to this event only.
+  /// - [`NeedMoreInput`](Progress::NeedMoreInput): supply more bytes with [`feed`](Self::feed), setting its `last`
+  ///   flag on the final chunk, then call again.
+  /// - [`NeedEntity`](Progress::NeedEntity): an external entity must be resolved; that variant documents the full
+  ///   read-fetch-answer protocol and how to choose among [`begin_entity`](Self::begin_entity),
+  ///   [`provide_entity`](Self::provide_entity), and [`decline_entity`](Self::decline_entity), then call again.
+  /// - [`Eof`](Progress::Eof): the document is complete; stop.
+  ///
+  /// Every call first clears the previous event's fields (name, attributes, text), so an accessor never reports a
+  /// value left by an earlier event; the accessors that do not belong to the current event read empty. The
+  /// document-level accessors (the XML declaration and `DOCTYPE` metadata) are not per-event and stay readable
+  /// throughout.
+  ///
+  /// A [`Reader`](crate::Reader) runs this loop and resolves entities through a
+  /// [`UriResolver`](crate::resolve::UriResolver), so most callers never call `advance` directly.
   ///
   /// # Errors
   ///
-  /// Returns [`Error::WellFormedness`] or [`Error::Namespace`] for a document that
-  /// breaks the rules, and passes on decoding and limit errors.
+  /// Returns [`Error::WellFormedness`] or [`Error::Namespace`] for a document that breaks the rules, and passes on
+  /// decoding and limit errors.
+  ///
   pub fn advance(&mut self) -> Result<Progress> {
     if self.dtd_active {
       return self.drive_dtd();
     }
+    // Each event reports only through its own accessors, so clear the last event's before producing this one; a value
+    // left over must not be read as this event's. This runs after the DTD-driving return above, whose `Doctype` text
+    // was set on an earlier call and has to survive.
+    self.reset_event_fields();
     if self.end_pending {
       self.end_pending = false;
       let open = self.open.pop().expect("an empty element was left open");
@@ -409,18 +747,35 @@ impl Parser {
         continue;
       }
 
+      // A freshly-begun external entity may open with a text declaration, which is stepped over
+      // before its content is read. It can straddle feeds, so this may request more input.
+      if self.entity_text_decl_pending {
+        let last = !self.stack.current().stream().can_be_fed();
+        let rem = self.stack.current().stream().remainder();
+        match self.text_declaration_span(rem, last).map_err(|e| e.at(self.stack.location()))? {
+          TextDecl::NeedMore => return Ok(Progress::NeedMoreInput),
+          TextDecl::None => self.entity_text_decl_pending = false,
+          TextDecl::Present(len) => {
+            self.entity_text_decl_pending = false;
+            self.stack.current_mut().stream_mut().advance(len);
+          }
+        }
+        continue;
+      }
+
       let scanned = {
         let stream = self.stack.current().stream();
         let rest = stream.remainder();
+        let no_more_input = !stream.can_be_fed();
         if rest.is_empty() {
-          if !stream.is_complete() {
+          if !no_more_input {
             return Ok(Progress::NeedMoreInput);
           }
           None
         } else {
-          match scan(rest, stream.is_complete()).map_err(|e| e.at(self.stack.location()))? {
-            Some(found) => Some(found),
-            None => return Ok(Progress::NeedMoreInput),
+          match scan(rest, no_more_input, &self.bounds).map_err(|e| e.at(self.stack.location()))? {
+            Scan::Found(token, len) => Some((token, len)),
+            Scan::Pending => return Ok(Progress::NeedMoreInput),
           }
         }
       };
@@ -439,6 +794,8 @@ impl Parser {
       };
 
       let at = self.stack.location();
+      // Copy the token out of the stream into `token`, then take it, so the handlers can borrow `self` while reading it;
+      // the text and reference arms move the buffer back afterwards to reuse its capacity.
       self.token.clear();
       self.token.push_str(&self.stack.current().stream().remainder()[..len]);
       self.stack.current_mut().stream_mut().advance(len);
@@ -449,12 +806,13 @@ impl Parser {
           let outcome = self.accumulate_text(&text, &at);
           self.token = text;
           outcome?;
-          None
+          self.flush_if_full()?
         }
         Token::Reference => {
           let outcome = self.reference(&text, &at);
           self.token = text;
-          outcome?
+          outcome?;
+          self.flush_if_full()?
         }
         _ => {
           // Markup ends a text run: flush the text first and hold the markup for next time.
@@ -480,15 +838,16 @@ impl Parser {
     }
   }
 
-  /// What is left to do once a token has been interpreted and yielded no event of its own: a
-  /// DTD waiting to be parsed, or an entity waiting to be fetched.
+  /// What is left to do once a token has been interpreted and yielded no event of its own: a DTD waiting to be parsed,
+  /// or an entity waiting to be fetched.
   ///
-  /// Both ways into `interpret` have to ask. A token that arrives with text before it is held
-  /// back while that text is flushed and interpreted on the next turn of the loop, and when that
-  /// path did not ask, a `<!DOCTYPE>` written after so much as a newline had its DTD left
-  /// unparsed — so the next token was scanned first and the `Doctype` event came out *after* the
-  /// root element's start tag. Everything downstream believed it: a validator built when the
-  /// DOCTYPE arrived never saw the root element open, and unbalanced its stack on the way out.
+  /// Both ways into `interpret` have to call this. A token that arrives with text before it is held back while that
+  /// text is flushed and interpreted on the next turn of the loop, and when that path did not call it, a `<!DOCTYPE>`
+  /// written
+  /// after so much as a newline had its DTD left unparsed — so the next token was scanned first and the `Doctype`
+  /// event came out *after* the root element's start tag. Everything downstream believed it: a validator built when
+  /// the DOCTYPE arrived never saw the root element open, and unbalanced its stack on the way out.
+  ///
   fn outstanding(&mut self) -> Option<Result<Progress>> {
     if self.dtd_active {
       return Some(self.drive_dtd());
@@ -500,9 +859,10 @@ impl Parser {
   }
 
   /// Checks that the document is allowed to end here.
+  ///
   fn finish(&mut self) -> Result<Progress> {
     if let Some(open) = self.open.last() {
-      let message = format!("element <{}> is never closed", &self.names[open.lexical.clone()]);
+      let message = format!("element <{}> is not closed", &self.names[open.lexical.clone()]);
       return Err(self.error(Error::well_formedness, message));
     }
     if self.phase == Phase::Prolog {
@@ -512,10 +872,23 @@ impl Parser {
     Ok(Progress::Eof)
   }
 
-  /// Interprets one token, returning the event to report, if any.
+  /// Interprets one scanned token, reporting the event it yields, if any.
+  ///
+  /// `token` is the kind the scanner settled on, and it selects the handler. Only markup reaches here: a start or end
+  /// tag, a comment, a CDATA section, a processing instruction, or a `DOCTYPE`. `advance` accumulates text and
+  /// references itself, so they never arrive here.
+  ///
+  /// `text` is that token's source as scanned, delimiters and all (`<a x="1">`, `<!-- c -->`, `<?t d?>`,
+  /// `<![CDATA[...]]>`, `<!DOCTYPE ...>`); each handler strips its own. It is borrowed, so interpreting allocates
+  /// nothing for it.
+  ///
+  /// A returned `Some(kind)` is an event to report. `None` means the token was interpreted but yields no event here: a
+  /// `<!DOCTYPE>` sets DTD parsing in motion and reports `Doctype` only once that finishes.
+  ///
   fn interpret(&mut self, token: Token, text: &str) -> Result<Option<EventKind>> {
     if !matches!(token, Token::StartTag | Token::EndTag) {
-      // Everything else inherits the context of the enclosing element.
+      // A start or end tag sets its own context in its handler; every other token (comment, CDATA, PI, DOCTYPE)
+      // inherits the enclosing element's xml:space, xml:lang, and base URI so the accessors report them for this event.
       self.xml_space = self.open.last().map_or(XmlSpace::Default, |e| e.xml_space);
       self.xml_lang = self.open.last().and_then(|e| e.xml_lang);
       #[cfg(feature = "xml-base")]
@@ -540,13 +913,17 @@ impl Parser {
   }
 
   /// Splits `<?...?>` into the XML declaration and ordinary processing instructions.
+  ///
   fn processing_instruction(&mut self, text: &str) -> Result<Option<EventKind>> {
+    debug_assert!(text.starts_with("<?") && text.ends_with("?>"));
     let body = &text[2..text.len() - 2];
     let target_len = body.find(chars::is_whitespace).unwrap_or(body.len());
     let (target, data) = body.split_at(target_len);
 
     if target.eq_ignore_ascii_case("xml") {
-      // Only a genuine declaration, at the very start of the document entity, is allowed.
+      // The stream leaves the XML declaration in the character input (it read it only to sniff the encoding), so it
+      // arrives here as a `<?xml...?>` token. Only a genuine declaration, at the very start of the document entity, is
+      // allowed.
       if target != "xml" || self.token_at.offset != 0 || self.stack.depth() > 1 {
         let message = format!("\"{target}\" is a reserved target");
         return Err(self.error(Error::well_formedness, message));
@@ -559,27 +936,47 @@ impl Parser {
       return Err(self.error(Error::well_formedness, message));
     }
     self.name = QName::new(None, None, self.pool.intern(target));
+    let trimmed = data.trim_start_matches(chars::is_whitespace);
+    // The source position of the data, so a handler can map a position inside foreign-language data (a `<?php ... ?>`,
+    // say) back to the document. The data begins at `text.len() - "?>".len() - trimmed.len()`; walk the token start
+    // over everything before it (`<?`, the target, and the dropped separating whitespace) to find where it is.
+    let mut at = self.token_at.clone();
+    for c in text[..text.len() - 2 - trimmed.len()].chars() {
+      at.advance(c);
+    }
+    self.pi_data_at = at;
     self.text.clear();
-    self.text.push_str(data.trim_start_matches(chars::is_whitespace));
+    self.text.push_str(trimmed);
     Ok(Some(EventKind::ProcessingInstruction))
   }
 
   /// Reads the pseudo-attributes of the XML declaration.
+  ///
   fn xml_declaration(&mut self, data: &str) -> Result<()> {
+    debug_assert!(data.is_empty() || data.starts_with(chars::is_whitespace));
     let mut rest = data;
     let mut seen: Vec<&str> = Vec::new();
     while !rest.trim_start_matches(chars::is_whitespace).is_empty() {
-      // `<?xml version="1.0"encoding="UTF-8"?>` is not a declaration: the production puts an
-      // `S` between the pseudo-attributes, not an optional one.
+      // `<?xml version="1.0"encoding="UTF-8"?>` is not a declaration: the production puts an `S` between the
+      // pseudo-attributes, not an optional one.
       if whitespace_len(rest) == 0 {
         let message = "the XML declaration needs whitespace between its parts";
         return Err(self.error(Error::well_formedness, message));
       }
-      let (name, value, tail) = self.pseudo_attribute(rest)?;
+      let (name, value, tail) = self.pseudo_attribute(rest, "XML declaration")?;
+      // A repeat of any pseudo-attribute is rejected up front. `seen` only ever holds the three known names, so an
+      // unknown one never matches here and falls to the `other` arm below to be named as unknown.
+      if seen.contains(&name) {
+        let message = format!("the XML declaration has more than one {name}");
+        return Err(self.error(Error::well_formedness, message));
+      }
+      // Dispatch on the name first, then check its position, so a misplaced `version`/`encoding`/`standalone` is told
+      // apart from a name that is not a pseudo-attribute at all.
       match name {
-        "version" if seen.is_empty() => {
-          // `VersionNum ::= '1.' [0-9]+`, so a stray space or character is not merely an
-          // unsupported version but a malformed declaration.
+        "version" => {
+          // No position guard is needed: version heads the declaration, and a later one is caught as a repeat above.
+          // `VersionNum ::= '1.' [0-9]+`, so a stray space or character is not merely an unsupported version but a
+          // malformed declaration.
           let digits = value.strip_prefix("1.").filter(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
           if digits.is_none() {
             let message = format!("{value:?} is not an XML version; it must be \"1.\" followed by digits");
@@ -587,7 +984,13 @@ impl Parser {
           }
           self.version = value.to_owned();
         }
-        "encoding" if seen == ["version"] => {
+        "encoding" => {
+          // `XMLDecl ::= '<?xml' VersionInfo EncodingDecl? SDDecl? ...`, so encoding sits right after version and
+          // ahead of any standalone; `seen == ["version"]` is the only spot the production allows.
+          if seen != ["version"] {
+            let message = "encoding must come after version and before standalone in the XML declaration";
+            return Err(self.error(Error::well_formedness, message));
+          }
           if !chars::is_enc_name(value) {
             let message = format!(
               "{value:?} is not an encoding name; it must start with a letter and hold only letters, digits, \".\", \"_\" and \"-\""
@@ -596,7 +999,12 @@ impl Parser {
           }
           self.declared_encoding = Some(value.to_owned());
         }
-        "standalone" if !seen.is_empty() && !seen.contains(&"standalone") => {
+        "standalone" => {
+          // `SDDecl` trails `VersionInfo` (and an optional `EncodingDecl`), so version must already be in place.
+          if !seen.contains(&"version") {
+            let message = "standalone must come after version in the XML declaration";
+            return Err(self.error(Error::well_formedness, message));
+          }
           self.standalone = match value {
             "yes" => Some(true),
             "no" => Some(false),
@@ -607,7 +1015,9 @@ impl Parser {
           };
         }
         other => {
-          let message = format!("{other:?} is out of place in the XML declaration");
+          let message = format!(
+            "{other:?} is not a pseudo-attribute of the XML declaration; only version, encoding and standalone are allowed"
+          );
           return Err(self.error(Error::well_formedness, message));
         }
       }
@@ -620,9 +1030,12 @@ impl Parser {
     Ok(())
   }
 
-  /// Reads one `name = "value"` of the XML declaration, returning it and what follows.
-  fn pseudo_attribute<'t>(&self, rest: &'t str) -> Result<(&'t str, &'t str, &'t str)> {
-    let malformed = |what: &str| self.error(Error::well_formedness, format!("the XML declaration {what}"));
+  /// Reads one `name = "value"` of the XML or text declaration, returning it and what follows.
+  ///
+  /// `decl` names the enclosing declaration for the error message, since both share this pseudo-attribute syntax.
+  ///
+  fn pseudo_attribute<'t>(&self, rest: &'t str, decl: &str) -> Result<(&'t str, &'t str, &'t str)> {
+    let malformed = |what: &str| self.error(Error::well_formedness, format!("the {decl} {what}"));
     let rest = rest.trim_start_matches(chars::is_whitespace);
     let name_len = rest.find(|c: char| c == '=' || chars::is_whitespace(c)).unwrap_or(rest.len());
     let (name, rest) = rest.split_at(name_len);
@@ -636,32 +1049,66 @@ impl Parser {
     Ok((name, &rest[..end], &rest[end + quote.len_utf8()..]))
   }
 
-  /// Consumes and checks a leading text declaration on an external entity's stream.
+  /// Consumes and checks a leading text declaration on a fully-read external entity's stream.
   ///
-  /// `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`: the encoding is required, the
-  /// version optional and, if present, first, and — unlike the XML declaration — there is no
-  /// standalone. The stream already read it to choose the encoding; this checks its shape and
-  /// steps over it so it does not reach the parser as a processing instruction.
+  /// This is the whole-buffer path, used when the entity's bytes arrive all at once. The incremental driver uses
+  /// [`text_declaration_span`](Self::text_declaration_span) directly.
+  ///
   fn strip_text_declaration(&self, stream: &mut CharStream) -> Result<()> {
-    let remainder = stream.remainder();
-    let Some(after) = remainder.strip_prefix("<?xml") else { return Ok(()) };
-    // `<?xmlfoo` is not a declaration; a real one is followed by whitespace.
-    if !after.starts_with(chars::is_whitespace) {
-      return Ok(());
-    }
     let at = stream.location();
-    let malformed = |what: &str| Error::well_formedness(format!("the text declaration {what}")).at(at.clone());
-    let end = remainder.find("?>").ok_or_else(|| malformed("is not closed by \"?>\""))?;
-    let mut rest = &remainder[5..end];
+    let len = match self.text_declaration_span(stream.remainder(), true).map_err(|e| e.at(at))? {
+      TextDecl::Present(len) => len,
+      TextDecl::None => return Ok(()),
+      TextDecl::NeedMore => {
+        return Err(Error::internal("a completed entity still requested more of its text declaration"));
+      }
+    };
+    stream.advance(len);
+    Ok(())
+  }
 
+  /// Measures a leading text declaration on an external entity, without consuming it.
+  ///
+  /// `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`: the encoding is required, the version optional and, if
+  /// present, first, and — unlike the XML declaration — there is no standalone. The stream already read it to choose
+  /// the encoding; this checks its shape and reports how many bytes to step over so it does not reach the parser as a
+  /// processing instruction. `last` is true once the entity has been read to its end; while it is false and the
+  /// declaration is not yet complete, [`TextDecl::NeedMore`] requests more input. Errors carry no location; the caller
+  /// adds one.
+  ///
+  fn text_declaration_span(&self, rem: &str, last: bool) -> Result<TextDecl> {
+    const HEAD: &str = "<?xml";
+    // Too little read to tell `<?xml` from a shorter prefix, or its following character apart.
+    if !last && rem.len() <= HEAD.len() && HEAD.starts_with(rem) {
+      return Ok(TextDecl::NeedMore);
+    }
+    let Some(after) = rem.strip_prefix(HEAD) else { return Ok(TextDecl::None) };
+    // `<?xmlfoo` is not a declaration; a real one is followed by whitespace.
+    match after.chars().next() {
+      None if !last => return Ok(TextDecl::NeedMore),
+      Some(c) if chars::is_whitespace(c) => {}
+      _ => return Ok(TextDecl::None),
+    }
+    let malformed = |what: &str| Error::well_formedness(format!("the text declaration {what}"));
+    let Some(end) = rem.find("?>") else {
+      return if last { Err(malformed("is not closed by \"?>\"")) } else { Ok(TextDecl::NeedMore) };
+    };
+    let mut rest = &rem[HEAD.len()..end];
     let mut seen: Vec<&str> = Vec::new();
     while !rest.trim_start_matches(chars::is_whitespace).is_empty() {
-      let (name, _value, tail) = self.pseudo_attribute(rest).map_err(|_| malformed("is malformed"))?;
+      let (name, _value, tail) = self.pseudo_attribute(rest, "text declaration")?;
+      // Dispatch on the name first, so a misplaced or repeated version/encoding is told apart from a name that is not a
+      // pseudo-attribute at all.
+      if seen.contains(&name) {
+        return Err(malformed(&format!("has more than one {name}")));
+      }
       match name {
+        // `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`, so version, when present, comes before encoding.
         "version" if seen.is_empty() => {}
-        "encoding" if seen.is_empty() || seen == ["version"] => {}
+        "version" => return Err(malformed("has version after encoding")),
+        "encoding" => {}
         "standalone" => return Err(malformed("may not have a standalone declaration")),
-        _ => return Err(malformed("has its parts out of order or repeated")),
+        other => return Err(malformed(&format!("has {other:?}, which is not one of version or encoding"))),
       }
       seen.push(name);
       rest = tail;
@@ -669,11 +1116,11 @@ impl Parser {
     if !seen.contains(&"encoding") {
       return Err(malformed("has no encoding"));
     }
-    stream.advance(end + 2);
-    Ok(())
+    Ok(TextDecl::Present(end + 2))
   }
 
   fn comment(&mut self, text: &str) -> Result<EventKind> {
+    debug_assert!(text.starts_with("<!--") && text.ends_with("-->"));
     let body = &text[4..text.len() - 3];
     if let Some(i) = body.find("--") {
       let message = "a comment may not contain \"--\"; use \"-\" or end the comment here";
@@ -691,6 +1138,7 @@ impl Parser {
   }
 
   fn doctype(&mut self, text: &str) -> Result<Option<EventKind>> {
+    debug_assert!(text.starts_with("<!DOCTYPE") && text.ends_with('>'));
     if self.phase != Phase::Prolog {
       let message = "the document type declaration must come before the root element";
       return Err(self.error(Error::well_formedness, message));
@@ -719,9 +1167,18 @@ impl Parser {
     self.dtd_external_id = if external.is_empty() {
       None
     } else if external.starts_with("SYSTEM") || external.starts_with("PUBLIC") {
-      Some(parse_external_id(external).ok_or_else(|| {
+      let (public_id, system_id, tail) = parse_external_id(external).ok_or_else(|| {
         self.error(Error::well_formedness, format!("{external:?} is not a valid external identifier"))
-      })?)
+      })?;
+      let extra = tail.trim_start_matches(chars::is_whitespace);
+      if !extra.is_empty() {
+        // `extra` is a subslice of `text`, so their pointer difference is its byte offset within the token, which
+        // points the error at the first stray character rather than at the whole declaration.
+        let index = extra.as_ptr() as usize - text.as_ptr() as usize;
+        let message = "the document type declaration has content after the external identifier";
+        return Err(self.error_at(Error::well_formedness, message, text, index));
+      }
+      Some((public_id, system_id))
     } else {
       let message = format!("{external:?} is not a valid external identifier in the document type declaration");
       return Err(self.error(Error::well_formedness, message));
@@ -778,6 +1235,7 @@ impl Parser {
   }
 
   fn cdata(&mut self, text: &str) -> Result<EventKind> {
+    debug_assert!(text.starts_with("<![CDATA[") && text.ends_with("]]>"));
     if self.phase != Phase::Content {
       return Err(self.error(Error::well_formedness, "a CDATA section may only appear inside the root element"));
     }
@@ -786,10 +1244,16 @@ impl Parser {
     Ok(EventKind::CData)
   }
 
-  /// Adds a run of character data to the pending text.
+  /// Appends one fragment of character data to the current text run in `pending_text`, recording where the run begins.
   ///
-  /// A `Text` token holds no references — the scanner splits before every `&` — so this is
-  /// raw character data, checked for the one sequence it may not contain.
+  /// `text` is plain character data: the scanner ends a `Text` token before every `&` and `<`, so no reference or
+  /// markup is inside it.
+  ///
+  /// Before appending, this rejects the fragment if it contains `]]>`, the one sequence character data may not hold
+  /// (XML 1.0 §2.4). Checking each fragment on its own is enough because the scanner never lets a `]]>` straddle two
+  /// of them: the scanner holds back a run ending in a trailing `]` or `]]` while more input may follow, rather than
+  /// emit a token that would split the `]]>`.
+  ///
   fn accumulate_text(&mut self, text: &str, at: &Location) -> Result<()> {
     if let Some(i) = text.find("]]>") {
       self.token_at = at.clone();
@@ -803,10 +1267,23 @@ impl Parser {
     Ok(())
   }
 
-  /// Emits the accumulated text as an event, or nothing when there is none to emit.
+  /// Flushes the pending text as a `Text` event once it reaches [`Bounds::text_fragment_len`], returning `None` while
+  /// it is still shorter.
   ///
-  /// Whitespace between the prolog's declarations and around the root element is discarded;
-  /// any other text there is an error.
+  /// The parser calls this after each text or reference fragment, so it emits a long run in pieces rather than buffer
+  /// it without bound. This is why one run can span several `Text` events; [`EventKind::Text`] covers coalescing them.
+  ///
+  fn flush_if_full(&mut self) -> Result<Option<EventKind>> {
+    if self.pending_text.len() >= self.bounds.text_fragment_len { self.flush_text() } else { Ok(None) }
+  }
+
+  /// Emits the pending text run as a `Text` event, or returns `None` when there is nothing to report.
+  ///
+  /// Inside the root element, this moves the run into the `text` field, from where [`EventRef::Text`] borrows it, and
+  /// reports a `Text` event. The prolog and
+  /// epilog allow only whitespace, so there this discards a whitespace-only run and returns `None` but rejects any
+  /// other text, pointing the error at its first non-whitespace character. An empty run also returns `None`.
+  ///
   fn flush_text(&mut self) -> Result<Option<EventKind>> {
     if self.pending_text.is_empty() {
       return Ok(None);
@@ -816,10 +1293,13 @@ impl Parser {
         self.pending_text.clear();
         return Ok(None);
       }
+      // Point at the first non-whitespace character, the one actually out of place, not the leading whitespace the run
+      // may open with.
       self.token_at = self.pending_text_at.clone();
+      let offending = self.pending_text.find(|c: char| !chars::is_whitespace(c)).unwrap_or(0);
       let place = if self.phase == Phase::Prolog { "before" } else { "after" };
       let message = format!("text may not appear {place} the root element");
-      return Err(self.error(Error::well_formedness, message));
+      return Err(self.error_at(Error::well_formedness, message, &self.pending_text, offending));
     }
     std::mem::swap(&mut self.text, &mut self.pending_text);
     self.pending_text.clear();
@@ -827,9 +1307,15 @@ impl Parser {
     Ok(Some(EventKind::Text))
   }
 
-  /// Handles a reference in content: `&#..;` and the predefined entities join the text run,
-  /// while a general entity is expanded by reading its replacement in place.
+  /// Handles a reference token (`&...;`) in content. A reference yields no event of its own, so this returns `None`.
+  ///
+  /// A character reference (`&#..;`) or a predefined entity (`&lt;`, `&gt;`, `&amp;`, `&apos;`, `&quot;`) resolves to a
+  /// character that this appends to the current text run. For a general-entity reference, the parser begins reading the
+  /// entity's replacement in place (see [`push_general_entity`](Self::push_general_entity)). The parser rejects a
+  /// reference outside the root element.
+  ///
   fn reference(&mut self, text: &str, at: &Location) -> Result<Option<EventKind>> {
+    debug_assert!(text.starts_with('&') && text.ends_with(';'));
     if self.phase != Phase::Content {
       self.token_at = at.clone();
       let message = "a reference may not appear outside the root element";
@@ -843,18 +1329,22 @@ impl Parser {
       self.pending_text.push(c);
       return Ok(None);
     }
-    // A general entity: begin reading its replacement where the reference stood. The pending
-    // text is deliberately not flushed, so character data on either side of an entity whose
-    // replacement is itself text coalesces into one node, as the data model wants. Markup in
-    // the replacement flushes it in the ordinary way.
+    // A general entity: begin reading its replacement where the reference stood. The pending text is deliberately not
+    // flushed, so character data on either side of an entity whose replacement is itself text coalesces into one node,
+    // as the data model wants. Markup in the replacement flushes it normally.
     let name = self.pool.intern(body);
     self.push_general_entity(name, at)?;
     Ok(None)
   }
 
-  /// Resolves `body` to a character if it is a character or predefined reference; returns
-  /// `None` for a general-entity reference, which the caller resolves against the DTD.
+  /// Resolves `body` (the text between `&` and `;`) to the character a reference denotes.
+  ///
+  /// A character reference (`#..`) or one of the five predefined entities (`lt`, `gt`, `amp`, `apos`, `quot`) gives
+  /// `Some(char)`. A general-entity name gives `None`, which the caller resolves against the DTD. Anything else is an
+  /// error. `token` is the whole `&...;`, used only for the error message.
+  ///
   fn character_or_predefined(&self, body: &str, token: &str, at: &Location) -> Result<Option<char>> {
+    debug_assert!(token.starts_with('&') && token.ends_with(';'));
     let c = match body {
       _ if body.starts_with('#') => return self.character_reference(body, token, at).map(Some),
       "lt" => '<',
@@ -871,8 +1361,14 @@ impl Parser {
     Ok(Some(c))
   }
 
-  /// Parses `#dd`/`#xhh` into the character it denotes.
+  /// Parses `body`, a `#dd` decimal or `#xhh` hexadecimal character reference, into the character it denotes.
+  ///
+  /// This rejects an empty or non-digit form, and a code point XML does not allow as a character (XML 1.0 §2.2).
+  /// `token` is the whole `&...;`, used only for the error message.
+  ///
   fn character_reference(&self, body: &str, token: &str, at: &Location) -> Result<char> {
+    debug_assert!(token.starts_with('&') && token.ends_with(';'));
+    debug_assert!(body.starts_with('#'));
     let error = |message: String| Error::well_formedness(message).at(at.clone());
     let digits = &body[1..];
     let (digits, radix) = match digits.strip_prefix('x') {
@@ -892,12 +1388,19 @@ impl Parser {
     })
   }
 
-  /// Suspends the current entity and begins reading a general entity's replacement text.
+  /// Handles a general-entity reference in content, dispatching based on how the DTD declared the entity.
+  ///
+  /// For an internal entity, the parser pushes its replacement onto the entity stack and reads it in place, so it
+  /// reports no event. For an external entity, the parser stops with [`Progress::NeedEntity`] for a driver to resolve.
+  /// It rejects an unparsed entity, an undeclared one, and, in a standalone document, one that only the external subset
+  /// declared (WFC: Entity Declared). This is the content path; an attribute value expands entities inline instead
+  /// (`expand_at`).
+  ///
   fn push_general_entity(&mut self, name: NameId, at: &Location) -> Result<()> {
     self.token_at = at.clone();
     let display = self.pool.resolve(name).to_owned();
-    // WFC: Entity Declared, standalone form. A standalone document may not reference an entity
-    // that only the external subset declares.
+    // WFC: Entity Declared, standalone form. A standalone document may not reference an entity that only the external
+    // subset declares.
     if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(name)) {
       let message = format!(
         "entity \"{display}\" is declared in the external subset, which a standalone document may not depend on"
@@ -916,8 +1419,8 @@ impl Parser {
         Err(self.error(Error::well_formedness, message))
       }
       Some(GeneralEntity::External { public_id, system_id }) => {
-        // Stop and ask for it. A driver resolves it and calls `provide_entity`, or
-        // `decline_entity`; `advance` sees the request and returns `Progress::NeedEntity`.
+        // Stop and request it. A driver resolves it and calls `provide_entity`, or `decline_entity`; `advance` sees
+        // the request and returns `Progress::NeedEntity`.
         let base = self.stack.document().base_uri().map(ToString::to_string);
         self.pending_entity =
           Some(EntityRequest::new(Some(display), public_id, system_id, base, RequestKind::GeneralEntity));
@@ -944,6 +1447,7 @@ impl Parser {
   }
 
   fn start_tag(&mut self, text: &str) -> Result<EventKind> {
+    debug_assert!(text.starts_with('<') && !text.starts_with("</") && text.ends_with('>'));
     match self.phase {
       Phase::Prolog => self.phase = Phase::Content,
       Phase::Content => {}
@@ -951,12 +1455,13 @@ impl Parser {
         return Err(self.error(Error::well_formedness, "a document may have only one root element"));
       }
     }
-    let limit = self.stack.limits().max_element_depth;
-    if self.open.len() >= limit {
-      let message = format!(
-        "elements are nested more than {limit} deep; raise Limits::max_element_depth if the document is trusted"
-      );
-      return Err(self.error(Error::limit, message));
+    if let Some(limit) = self.stack.limits().max_element_depth {
+      if self.open.len() >= limit {
+        let message = format!(
+          "elements are nested more than {limit} deep; raise Limits::max_element_depth if the document is trusted"
+        );
+        return Err(self.error(Error::limit, message));
+      }
     }
     let empty = text.ends_with("/>");
     let body = &text[1..text.len() - if empty { 2 } else { 1 }];
@@ -1002,6 +1507,7 @@ impl Parser {
   }
 
   fn end_tag(&mut self, text: &str) -> Result<EventKind> {
+    debug_assert!(text.starts_with("</") && text.ends_with('>'));
     let name = text[2..text.len() - 1].trim_end_matches(chars::is_whitespace);
     let Some(open) = self.open.last() else {
       let message = format!("</{name}> closes an element that was never opened");
@@ -1335,8 +1841,9 @@ impl Parser {
 
   /// Expands references into `out`.
   ///
-  /// With `attribute` set, the normalization of XML 1.0 §3.3.3 applies: whitespace written
-  /// literally becomes a space, while whitespace written as a character reference is kept.
+  /// With `attribute` set, the normalization of XML 1.0 §3.3.3 applies: whitespace written literally becomes a space,
+  /// while whitespace written as a character reference is kept.
+  ///
   fn expand_at(&mut self, text: &str, out: &mut String, attribute: bool, token: &str, base: usize) -> Result<()> {
     let mut rest = text;
     let mut done = 0;
@@ -1361,6 +1868,7 @@ impl Parser {
   }
 
   /// Expands one reference, given its text between `&` and `;`.
+  ///
   fn expand_reference(&mut self, body: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
     if let Some(digits) = body.strip_prefix('#') {
       // `CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';'`. The `x` is lower case only,
@@ -1408,6 +1916,7 @@ impl Parser {
   ///
   /// The replacement is processed recursively, so a `<` in it, or a reference to an external
   /// or unparsed entity, is caught here where XML 1.0 §3.3.1 forbids it.
+  ///
   fn expand_general_in_attribute(&mut self, name: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
     let id = self.pool.intern(name);
     if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(id)) {
@@ -1418,15 +1927,20 @@ impl Parser {
     let entity = self.dtd.as_ref().and_then(|dtd| dtd.general_entity(id)).cloned();
     match entity {
       Some(GeneralEntity::Internal { value }) => {
-        if self.expanding.contains(&id) {
-          let message = format!("entity \"{name}\" refers to itself");
+        if let Some(cycle) = self.expanding.iter().position(|&e| e == id) {
+          // Trace the loop: from where this entity first opened, round through the others, back to it.
+          let path = self.entity_chain(&self.expanding[cycle..], name);
+          let message = format!("entity \"{name}\" refers to itself ({path})");
           return Err(self.error_at(Error::well_formedness, message, token, at));
         }
-        if self.expanding.len() >= self.stack.limits().max_depth {
-          let limit = self.stack.limits().max_depth;
-          let message =
-            format!("entities are nested more than {limit} deep; raise Limits::max_depth if the document is trusted");
-          return Err(Error::limit(message).at(self.token_at.clone()));
+        if let Some(limit) = self.stack.limits().max_depth {
+          if self.expanding.len() >= limit {
+            let path = self.entity_chain(&self.expanding, name);
+            let message = format!(
+              "entities are nested more than {limit} deep ({path}); raise Limits::max_depth if the document is trusted"
+            );
+            return Err(Error::limit(message).at(self.token_at.clone()));
+          }
         }
         self.expanding.push(id);
         // The replacement stands where a literal value would, so it normalizes the same way.
@@ -1446,73 +1960,73 @@ impl Parser {
     }
   }
 
-  /// The kind of the current event, or `None` before the first one and after the last.
-  #[must_use]
-  pub const fn event(&self) -> Option<EventKind> {
-    self.kind
+  /// Renders an entity nesting path `ids` ending at `last` for debug or message purpose, abbreviating the middle when
+  /// it is long.
+  ///
+  fn entity_chain(&self, ids: &[NameId], last: &str) -> String {
+    let mut chain: Vec<&str> = ids.iter().map(|&id| self.pool.resolve(id)).collect();
+    chain.push(last);
+    if chain.len() > 12 {
+      format!("{} -> ... -> {}", chain[..6].join(" -> "), chain[chain.len() - 6..].join(" -> "))
+    } else {
+      chain.join(" -> ")
+    }
   }
 
-  /// The name of the current element, or the target of a processing instruction.
+  /// The current event as a borrowed [`EventRef`], or `None` when there is no current event.
+  ///
+  /// It carries the same data as the individual accessors, matched as one enum instead of read field by field. The
+  /// borrows last only until the next [`advance`](Self::advance). Call it after `advance` reports [`Progress::Event`].
   #[must_use]
-  pub const fn name(&self) -> QName {
-    self.name
+  pub fn event_ref(&self) -> Option<EventRef<'_>> {
+    Some(match self.kind? {
+      EventKind::XmlDeclaration => EventRef::XmlDeclaration {
+        version: &self.version,
+        encoding: self.declared_encoding.as_deref(),
+        standalone: self.standalone,
+      },
+      EventKind::Doctype => EventRef::Doctype(&self.text),
+      EventKind::StartElement => EventRef::StartElement {
+        name: self.name,
+        attributes: Attributes { attributes: &self.attributes, text: &self.attribute_text },
+        xml_space: self.xml_space,
+        xml_lang: self.xml_lang.map(|l| self.pool.resolve(l)),
+      },
+      EventKind::EndElement => EventRef::EndElement { name: self.name },
+      EventKind::Text => EventRef::Text(&self.text),
+      EventKind::CData => EventRef::CData(&self.text),
+      EventKind::Comment => EventRef::Comment(&self.text),
+      EventKind::ProcessingInstruction => {
+        EventRef::ProcessingInstruction { target: self.local_name(), data: &self.text, data_location: &self.pi_data_at }
+      }
+    })
   }
 
-  /// The local part of [`name`](Self::name).
+  /// The local part of the current element or processing-instruction name.
+  ///
   #[must_use]
   pub fn local_name(&self) -> &str {
     self.pool.resolve(self.name.local())
   }
 
-  /// The prefix of [`name`](Self::name), if it has one.
+  /// The prefix of the current element name, if it has one.
+  ///
   #[must_use]
   pub fn prefix(&self) -> Option<&str> {
     self.name.prefix.map(|p| self.pool.resolve(p))
   }
 
-  /// The namespace name of [`name`](Self::name), if it is in one.
+  /// The namespace name of the current element, if it is in one.
+  ///
   #[must_use]
   pub fn namespace_uri(&self) -> Option<&str> {
     self.name.namespace().map(|n| self.pool.resolve(n))
   }
 
-  /// The target of the current processing instruction.
-  #[must_use]
-  pub fn target(&self) -> &str {
-    self.local_name()
-  }
-
-  /// The text of the current event: character data, the content of a CDATA section, a comment
-  /// body, the data of a processing instruction, or a whole document type declaration.
-  #[must_use]
-  pub fn text(&self) -> &str {
-    &self.text
-  }
-
-  /// How many attributes the current start tag has, namespace declarations included.
-  #[must_use]
-  pub fn attribute_count(&self) -> usize {
-    self.attributes.len()
-  }
-
-  /// The attribute at `index`.
-  #[must_use]
-  pub fn attribute(&self, index: usize) -> Option<AttributeRef<'_>> {
-    self.attributes.get(index).map(|a| AttributeRef {
-      name: a.name,
-      value: &self.attribute_text[a.value.clone()],
-      declares_namespace: a.declares_namespace,
-    })
-  }
-
-  /// The attributes of the current start tag, in document order.
-  pub fn attributes(&self) -> impl Iterator<Item = AttributeRef<'_>> + '_ {
-    (0..self.attributes.len()).filter_map(|i| self.attribute(i))
-  }
-
   /// The value of the attribute with this expanded name, if the current tag has it.
   ///
   /// Pass `None` for `namespace` to look for an unprefixed attribute.
+  ///
   #[must_use]
   pub fn attribute_value(&self, namespace: Option<&str>, local: &str) -> Option<&str> {
     let namespace = match namespace {
@@ -1524,12 +2038,14 @@ impl Parser {
   }
 
   /// The value of `xml:space` in effect for the current event.
+  ///
   #[must_use]
   pub const fn xml_space(&self) -> XmlSpace {
     self.xml_space
   }
 
   /// The value of `xml:lang` in effect for the current event.
+  ///
   #[must_use]
   pub fn xml_lang(&self) -> Option<&str> {
     self.xml_lang.map(|l| self.pool.resolve(l))
@@ -1537,11 +2053,12 @@ impl Parser {
 
   /// The base URI in effect for the current event (XML Base), if one is known.
   ///
-  /// It is the entity's system identifier as overridden by the `xml:base` attributes in scope,
-  /// resolved to an absolute (or the most resolved) URI. `None` when nothing establishes a base
-  /// — no system identifier and no `xml:base` — or when [`ParserConfig::xml_base`] is off.
+  /// It is the entity's system identifier as overridden by the `xml:base` attributes in scope, resolved to an absolute
+  /// (or the most resolved) URI. `None` when nothing establishes a base — no system identifier and no `xml:base` — or
+  /// when [`ParserConfig::xml_base`] is off.
   ///
   /// Available only with the `xml-base` feature.
+  ///
   #[cfg(feature = "xml-base")]
   #[must_use]
   pub fn base_uri(&self) -> Option<String> {
@@ -1550,11 +2067,11 @@ impl Parser {
 
   /// The normalized `xml:id` of the current start element, if it carried one (xml:id).
   ///
-  /// Tokenized normalization has been applied, so the value is already trimmed and collapsed.
-  /// Whether it is a valid `NCName` and unique in the document is checked by the validation
-  /// layer, which reuses the ID machinery for it.
+  /// Tokenized normalization has been applied, so the value is already trimmed and collapsed. Whether it is a valid
+  /// `NCName` and unique in the document is checked by the validation layer, which reuses the ID machinery for it.
   ///
   /// Available only with the `xml-id` feature, and `None` when [`ParserConfig::xml_id`] is off.
+  ///
   #[cfg(feature = "xml-id")]
   #[must_use]
   pub fn xml_id(&self) -> Option<&str> {
@@ -1568,66 +2085,103 @@ impl Parser {
       .map(|a| &self.attribute_text[a.value.clone()])
   }
 
-  /// The version from the XML declaration, or an empty string if there was none.
+  /// The encoding actually applied to the bytes, once the stream has settled on one.
+  ///
+  /// The stream picks it from a byte-order mark, then the declaration, then the UTF-8 default, unless
+  /// [`set_encoding`](Self::set_encoding) pinned it, and reports the codec's canonical name. `None` until enough of the
+  /// input has been read to decide.
+  ///
+  /// This is the encoding that decoded the document, which may differ from the one the declaration named
+  /// ([`EventRef::XmlDeclaration`]'s `encoding`): a byte-order mark or a pinned encoding overrides the declaration, and
+  /// the declaration's value is taken verbatim, so the declared `"utf-8"` decodes as the canonical `"UTF-8"`. Here the
+  /// caller pins UTF-8, so the declaration's `UTF-16` is only what was named, not what decodes the document:
+  ///
+  /// ```
+  /// # use xylogue_parser::{CharStream, Entity, EventKind, EventRef, Limits, Parser, Progress};
+  /// let document = Entity::document(CharStream::with_encoding("UTF-8").unwrap());
+  /// let mut parser = Parser::with_document(document, Limits::default());
+  /// parser.feed("<?xml version='1.0' encoding='UTF-16'?><a/>".as_bytes(), true).unwrap();
+  /// while !matches!(parser.advance().unwrap(), Progress::Event(EventKind::XmlDeclaration)) {}
+  /// let Some(EventRef::XmlDeclaration { encoding, .. }) = parser.event_ref() else { unreachable!() };
+  /// assert_eq!(encoding, Some("UTF-16")); // what the declaration named
+  /// assert_eq!(parser.encoding(), Some("UTF-8")); // what actually decodes the bytes
+  /// ```
   #[must_use]
-  pub fn version(&self) -> &str {
-    &self.version
+  pub fn encoding(&self) -> Option<&str> {
+    self.stack.document().stream().encoding()
   }
 
-  /// The encoding named by the XML declaration, which need not be the one actually in use.
-  #[must_use]
-  pub fn declared_encoding(&self) -> Option<&str> {
-    self.declared_encoding.as_deref()
-  }
-
-  /// The value of the standalone declaration, if there was one.
-  #[must_use]
-  pub const fn standalone(&self) -> Option<bool> {
-    self.standalone
-  }
-
-  /// How deeply elements are nested; 0 outside the root element.
+  /// How deeply elements are nested; 0 represents outside the root element.
+  ///
   #[must_use]
   pub fn depth(&self) -> usize {
     self.open.len()
   }
 
-  /// The current position.
+  /// The parser's current position, which sits at the end of the event just reported.
+  ///
+  /// For where the current event *begins*, use [`event_location`](Self::event_location).
+  ///
   #[must_use]
   pub fn location(&self) -> Location {
     self.stack.location()
   }
 
+  /// The source position where the current event begins.
+  ///
+  /// This is the start of the event's markup, the natural "location" of the event as an object. It differs from
+  /// [`location`](Self::location), which is the parser's current position, at the end of the event just read.
+  ///
+  #[must_use]
+  pub fn event_location(&self) -> Location {
+    self.token_at.clone()
+  }
+
   /// The pool holding every name the parser has seen.
+  ///
   #[must_use]
   pub const fn pool(&self) -> &NamePool {
     &self.pool
   }
 
-  /// The document type definition, once a `DOCTYPE` has been read; `None` before that, or if
-  /// the document has no `DOCTYPE`.
+  /// The document type definition, once a `DOCTYPE` has been read; `None` before that, or if the document has no
+  /// `DOCTYPE`.
   ///
-  /// This is what a validator reads: the declared elements, attributes, entities and
-  /// notations. It becomes available with the [`Doctype`](EventKind::Doctype) event.
+  /// This is what a validator reads: the declared elements, attributes, entities and notations. It becomes available
+  /// with the [`Doctype`](EventKind::Doctype) event.
+  ///
   #[must_use]
   pub const fn dtd(&self) -> Option<&Dtd> {
     self.dtd.as_ref()
   }
 
-  /// The root element name the `DOCTYPE` declared, interned in [`pool`](Self::pool). A
-  /// validator checks the document's root element against it.
+  /// The root element name the `DOCTYPE` declared, interned in [`pool`](Self::pool), or `None` with no `DOCTYPE`.
+  ///
+  /// It is the name right after `<!DOCTYPE`: for `<!DOCTYPE greeting SYSTEM "greeting.dtd">` this is the interned
+  /// `greeting`, so [`pool`](Self::pool)`.resolve(id)` gives `"greeting"`. A valid document's root element must carry
+  /// this name, which a validator checks.
+  ///
   #[must_use]
   pub const fn doctype_name(&self) -> Option<NameId> {
     self.doctype_name
   }
 
   /// The public identifier of the `DOCTYPE`'s external subset, if it declared one with `PUBLIC`.
+  ///
+  /// For `<!DOCTYPE greeting PUBLIC "-//Example//DTD Greeting//EN" "greeting.dtd">` this is
+  /// `Some("-//Example//DTD Greeting//EN")`; the `SYSTEM` form and no external subset both give `None`.
+  ///
   #[must_use]
   pub fn doctype_public_id(&self) -> Option<&str> {
     self.doctype_public_id.as_deref()
   }
 
   /// The system identifier of the `DOCTYPE`'s external subset, if it declared one.
+  ///
+  /// It is the second literal of a `PUBLIC` identifier or the only one of a `SYSTEM` identifier: both
+  /// `<!DOCTYPE greeting SYSTEM "greeting.dtd">` and `<!DOCTYPE greeting PUBLIC "-//Example//DTD Greeting//EN"
+  /// "greeting.dtd">` give `Some("greeting.dtd")`; `None` with no external subset.
+  ///
   #[must_use]
   pub fn doctype_system_id(&self) -> Option<&str> {
     self.doctype_system_id.as_deref()
@@ -1635,28 +2189,64 @@ impl Parser {
 
   /// The external entity the parser is waiting on, after [`advance`](Self::advance) returned
   /// [`Progress::NeedEntity`].
+  ///
   #[must_use]
   pub const fn pending_entity(&self) -> Option<&EntityRequest> {
     self.pending_entity.as_ref()
   }
 
-  /// Supplies the bytes of the entity the parser asked for, and resumes.
+  /// Begins streaming an external general entity the parser requested, and resumes.
   ///
-  /// The bytes are the entity's content as retrieved, encoding and text declaration included;
-  /// the parser sniffs the encoding and strips the text declaration. The entity's replacement
-  /// is then read where the reference stood.
+  /// Unlike [`provide_entity`](Self::provide_entity), which takes the whole entity at once, this opens an empty entity
+  /// onto which the driver then feeds the bytes in chunks with [`feed`](Self::feed). The entity's text declaration is
+  /// stepped over as it arrives, and the expansion limits are charged per chunk, so a large entity is neither held
+  /// whole in memory nor read past the point a limit is exceeded.
   ///
   /// # Errors
   ///
-  /// Returns [`Error::Encoding`] if the bytes cannot be decoded, and passes on the limit
-  /// errors that guard against a hostile entity.
+  /// Returns [`Error::Internal`] if the parser is not waiting for an entity (call it only after
+  /// [`advance`](Self::advance) returned [`Progress::NeedEntity`]), or if the pending request is not a general entity;
+  /// the DTD-side kinds have no streaming form and go through [`provide_entity`](Self::provide_entity). Also passes on
+  /// the limit errors that guard against a hostile entity.
   ///
-  /// # Panics
+  pub fn begin_entity(&mut self) -> Result<()> {
+    let Some(request) = self.pending_entity.as_ref() else {
+      return Err(Error::internal("begin_entity called while the parser is not waiting for an entity"));
+    };
+    if request.kind() != RequestKind::GeneralEntity {
+      return Err(Error::internal(
+        "begin_entity is only for general entities; the DTD-side kinds go through provide_entity",
+      ));
+    }
+    let request = self.pending_entity.take().expect("a pending entity was just inspected");
+    let mut stream = CharStream::new();
+    if let Some(id) = request.resolved_uri() {
+      stream = stream.with_system_id(id);
+    }
+    let name = request.name().map(Into::into);
+    self.stack.push(Entity::new(name, EntityKind::ExternalGeneral, stream, None))?;
+    self.entity_text_decl_pending = true;
+    Ok(())
+  }
+
+  /// Supplies the entity's full content that the parser requested, then resumes.
   ///
-  /// If the parser is not waiting for an entity — call it only after
-  /// [`Progress::NeedEntity`].
+  /// The bytes are the entity's content as retrieved, its own encoding and text declaration included; the parser
+  /// sniffs the encoding and strips the text declaration, then routes the content by request kind: it reads a general
+  /// entity where the reference stood, appends the external subset to the DTD text, and splices an external parameter
+  /// entity in where `%name;` stood. Unlike [`begin_entity`](Self::begin_entity), which streams a general entity in
+  /// chunks, this takes the whole entity at once and serves every request kind.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`Error::Internal`] if the parser is not waiting for an entity (call it only after
+  /// [`advance`](Self::advance) returned [`Progress::NeedEntity`]), [`Error::Encoding`] if the bytes cannot be decoded,
+  /// and passes on the limit errors that guard against a hostile entity.
+  ///
   pub fn provide_entity(&mut self, bytes: &[u8]) -> Result<()> {
-    let request = self.pending_entity.take().expect("the parser is not waiting for an entity");
+    let Some(request) = self.pending_entity.take() else {
+      return Err(Error::internal("provide_entity called while the parser is not waiting for an entity"));
+    };
     let system_id = request.resolved_uri();
     let mut stream = CharStream::new();
     if let Some(id) = system_id {
@@ -1692,21 +2282,21 @@ impl Parser {
     }
   }
 
-  /// Reports that the entity the parser asked for could not be resolved.
+  /// Reports that the caller could not resolve the entity the parser requested.
   ///
-  /// A general or parameter entity that cannot be resolved is fatal for a well-formed
-  /// document. The external subset, which a non-validating processor need not read, is instead
-  /// skipped; a later reference to an entity that only it declared is what then fails.
+  /// The external subset is optional for a non-validating processor, so the parser skips it and continues; a later
+  /// reference to an entity declared only in that subset then fails as undeclared. A general or parameter entity
+  /// cannot be skipped, so declining one is a fatal well-formedness error.
   ///
   /// # Errors
   ///
-  /// [`Error::WellFormedness`] for a general or parameter entity.
+  /// [`Error::WellFormedness`] for a general or parameter entity that cannot be resolved. Returns [`Error::Internal`] if
+  /// the parser is not waiting for an entity.
   ///
-  /// # Panics
-  ///
-  /// If the parser is not waiting for an entity.
   pub fn decline_entity(&mut self) -> Result<()> {
-    let request = self.pending_entity.take().expect("the parser is not waiting for an entity");
+    let Some(request) = self.pending_entity.take() else {
+      return Err(Error::internal("decline_entity called while the parser is not waiting for an entity"));
+    };
     if request.kind() == RequestKind::ExternalSubset {
       self.external_subset_unread = true;
       self.dtd_pe = None;
@@ -1716,13 +2306,13 @@ impl Parser {
     Err(self.error(Error::well_formedness, format!("{what} could not be resolved")))
   }
 
-  /// Iterates over the remaining events, copying each one.
+  /// Iterates the remaining events as owned [`Event`] values, each yielded as a `Result`.
   ///
-  /// Every byte must already have been fed: an iterator has nowhere to report that it needs
-  /// more input, so [`Progress::NeedMoreInput`] becomes an error. Use [`advance`](Self::advance)
-  /// directly, or one of the readers, when the input arrives in pieces.
-  ///
-  /// Iteration stops after the first error.
+  /// The iterator cannot drive I/O, so the whole document must be in hand and self-contained: every byte fed, and no
+  /// external entity to resolve. If the parser would request either, the iterator yields an error instead, since
+  /// [`Progress::NeedMoreInput`] and [`Progress::NeedEntity`] have nowhere to go here. Use [`advance`](Self::advance)
+  /// directly, or a [`Reader`](crate::Reader) with a resolver, when input arrives in pieces or the document pulls in
+  /// external entities. Iteration stops at [`Eof`](Progress::Eof) and after the first error.
   ///
   /// # Examples
   ///
@@ -1743,7 +2333,8 @@ impl Parser {
     Events { parser: self, done: false }
   }
 
-  /// Builds the error for a prefix used without a declaration, naming the fix.
+  /// Builds the namespace error for a prefix with no binding in scope, naming the fix (add an `xmlns:` declaration).
+  ///
   fn undeclared_prefix(&self, prefix: NameId) -> Error {
     let name = self.pool.resolve(prefix);
     let message =
@@ -1751,24 +2342,24 @@ impl Parser {
     self.error(Error::namespace, message)
   }
 
-  /// Builds an error at the start of the token being interpreted.
+  /// Builds an error located at the start of the token being interpreted (`token_at`).
   ///
-  /// `build` is one of [`Error`]'s per-kind constructors, e.g. [`Error::well_formedness`].
+  /// `build` is one of [`Error`]'s per-kind constructors (for example, [`Error::well_formedness`]) and `message` is
+  /// its human-readable text.
+  ///
   fn error(&self, build: fn(String) -> Error, message: impl Into<String>) -> Error {
     build(message.into()).at(self.token_at.clone())
   }
 
-  /// Builds an error pointing at `index` within the current token.
+  /// Builds an error located `index` bytes into `token`, pointing to a specific character rather than the token start.
+  ///
+  /// It advances the token's start location over `token[..index]`, so `index` is a byte offset within `token`, at a
+  /// character boundary. `build` and `message` are as in [`error`](Self::error).
+  ///
   fn error_at(&self, build: fn(String) -> Error, message: impl Into<String>, token: &str, index: usize) -> Error {
     let mut at = self.token_at.clone();
     for c in token[..index.min(token.len())].chars() {
-      if c == '\n' {
-        at.line += 1;
-        at.column = 1;
-      } else {
-        at.column += 1;
-      }
-      at.offset += 1;
+      at.advance(c);
     }
     build(message.into()).at(at)
   }
@@ -1789,7 +2380,7 @@ impl Iterator for Events<'_> {
       return None;
     }
     match self.parser.advance() {
-      Ok(Progress::Event(_)) => Some(Ok(Event::capture(self.parser))),
+      Ok(Progress::Event(_)) => Some(Event::capture(self.parser)),
       Ok(Progress::Eof) => {
         self.done = true;
         None
@@ -1797,7 +2388,7 @@ impl Iterator for Events<'_> {
       Ok(Progress::NeedMoreInput) => {
         self.done = true;
         let message = "the document is incomplete; feed the remaining bytes before iterating, \
-                       or drive the parser with advance() so it can ask for more";
+                       or drive the parser with advance() so it can request more";
         Some(Err(Error::Internal { message: message.into() }.at(self.parser.location())))
       }
       Ok(Progress::NeedEntity) => {
@@ -1814,15 +2405,21 @@ impl Iterator for Events<'_> {
   }
 }
 
+/// Returns the byte length of the whitespace run at the start of `text`, or 0 when `text` does not start with
+/// whitespace. Callers use it to require an `S` (mandatory whitespace) between parts of a construct.
+///
 fn whitespace_len(text: &str) -> usize {
   text.len() - text.trim_start_matches(chars::is_whitespace).len()
 }
 
-/// Parses an `ExternalID` into its public and system identifiers.
+/// Parses an `ExternalID` into its public and system identifiers, and the text left after them.
 ///
-/// `ExternalID ::= 'SYSTEM' S SystemLiteral | 'PUBLIC' S PubidLiteral S SystemLiteral`.
-/// Returns `None` if it is not shaped like one.
-fn parse_external_id(text: &str) -> Option<(Option<String>, String)> {
+/// `ExternalID ::= 'SYSTEM' S SystemLiteral | 'PUBLIC' S PubidLiteral S SystemLiteral`. On success, this returns the
+/// public identifier (`None` for the `SYSTEM` form), the always-present system identifier, and the remainder after the
+/// last literal, which the caller checks is only whitespace. It returns `None` when `text` is not shaped like an
+/// `ExternalID`.
+///
+fn parse_external_id(text: &str) -> Option<(Option<String>, String, &str)> {
   fn read_literal(s: &str) -> Option<(String, &str)> {
     let s = s.trim_start_matches(chars::is_whitespace);
     let quote = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
@@ -1834,8 +2431,8 @@ fn parse_external_id(text: &str) -> Option<(Option<String>, String)> {
     if !rest.starts_with(chars::is_whitespace) {
       return None;
     }
-    let (system, _) = read_literal(rest)?;
-    Some((None, system))
+    let (system, tail) = read_literal(rest)?;
+    Some((None, system, tail))
   } else if let Some(rest) = text.strip_prefix("PUBLIC") {
     if !rest.starts_with(chars::is_whitespace) {
       return None;
@@ -1845,17 +2442,19 @@ fn parse_external_id(text: &str) -> Option<(Option<String>, String)> {
     if !after_public.starts_with(chars::is_whitespace) {
       return None;
     }
-    let (system, _) = read_literal(after_public)?;
-    Some((Some(public), system))
+    let (system, tail) = read_literal(after_public)?;
+    Some((Some(public), system, tail))
   } else {
     None
   }
 }
 
-/// Explains why `name` is not a usable element or attribute name.
+/// Explains why `name` is not a usable name; `role` (for example, `"element"` or `"attribute"`) names the kind in the
+/// message.
 ///
-/// "not a valid name" alone leaves the author hunting; naming the offending character, or the
-/// extra colon, usually points straight at the typo.
+/// A bare "not a valid name" leaves the author hunting, so this points to the offending character or the extra colon,
+/// which usually helps find the typo.
+///
 fn bad_qname(name: &str, role: &str) -> String {
   if name.is_empty() {
     return format!("this {role} has no name");
@@ -1873,11 +2472,19 @@ fn bad_qname(name: &str, role: &str) -> String {
   }
 }
 
-/// Applies attribute-value normalization to literal text.
+/// Normalizes one literal fragment of an attribute value per XML 1.0 §3.3.3: a tab or newline becomes a space.
+///
+/// The stream has already folded CR and CRLF to LF (end-of-line handling), and a space needs no change, so only tabs
+/// and newlines remain. This folds literal whitespace only; whitespace written as a character reference (`&#9;`) never
+/// reaches here, because the caller resolves references separately, which is what keeps it a tab. With `attribute`
+/// false, this returns `text` untouched, since text content keeps its whitespace.
+///
 fn normalize(text: &str, attribute: bool) -> Cow<'_, str> {
   if !attribute || !text.contains(['\t', '\n']) {
     return Cow::Borrowed(text);
   }
+  // A literal tab or newline in an attribute value is uncommon, so this path is rarely taken; the second scan that
+  // `replace` makes over the string is not worth avoiding, while the common case above returns borrowed after one scan.
   Cow::Owned(text.replace(['\t', '\n'], " "))
 }
 
@@ -1886,33 +2493,38 @@ mod tests {
   use super::*;
 
   /// Renders one event compactly, so tests can assert on a whole document at once.
-  fn render(parser: &Parser, kind: EventKind) -> String {
-    match kind {
-      EventKind::XmlDeclaration => {
-        let mut s = format!("?xml {}", parser.version());
-        if let Some(encoding) = parser.declared_encoding() {
+  fn render(parser: &Parser, event: EventRef) -> String {
+    match event {
+      EventRef::XmlDeclaration { version, encoding, standalone } => {
+        let mut s = format!("?xml {version}");
+        if let Some(encoding) = encoding {
           s.push_str(&format!(" {encoding}"));
         }
-        if let Some(standalone) = parser.standalone() {
+        if let Some(standalone) = standalone {
           s.push_str(if standalone { " standalone" } else { " not-standalone" });
         }
         s
       }
-      EventKind::Doctype => format!("!doctype {}", parser.text()),
-      EventKind::StartElement => {
-        let mut s = format!("<{}", qualified(parser, parser.name()));
-        for attribute in parser.attributes() {
+      EventRef::Doctype(text) => format!("!doctype {text}"),
+      EventRef::StartElement { name, attributes, .. } => {
+        let mut s = format!("<{}", qualified(parser, name));
+        for attribute in attributes.iter() {
           s.push_str(&format!(" {}={}", qualified(parser, attribute.name), attribute.value));
         }
         s.push('>');
         s
       }
-      EventKind::EndElement => format!("</{}>", qualified(parser, parser.name())),
-      EventKind::Text => format!("t:{}", parser.text()),
-      EventKind::CData => format!("c:{}", parser.text()),
-      EventKind::Comment => format!("!:{}", parser.text()),
-      EventKind::ProcessingInstruction => format!("?{} {}", parser.target(), parser.text()),
+      EventRef::EndElement { name } => format!("</{}>", qualified(parser, name)),
+      EventRef::Text(text) => format!("t:{text}"),
+      EventRef::CData(text) => format!("c:{text}"),
+      EventRef::Comment(text) => format!("!:{text}"),
+      EventRef::ProcessingInstruction { target, data, .. } => format!("?{target} {data}"),
     }
+  }
+
+  /// The character data of the current text, CDATA, or comment event, for the tests that collect a run by hand.
+  fn text_of(parser: &Parser) -> &str {
+    parser.event_ref().and_then(|e| e.text()).expect("the current event is character data")
   }
 
   /// `{namespace}local`, so namespace resolution is visible in the trace.
@@ -1931,10 +2543,10 @@ mod tests {
     let mut events = Vec::new();
     loop {
       match parser.advance()? {
-        Progress::Event(kind) => events.push(render(&parser, kind)),
+        Progress::Event(_) => events.push(render(&parser, parser.event_ref().expect("a current event"))),
         Progress::Eof => return Ok(events),
         Progress::NeedMoreInput => {
-          assert!(fed <= bytes.len(), "asked for input after everything was fed");
+          assert!(fed <= bytes.len(), "requested input after everything was fed");
           let end = (fed + chunk).min(bytes.len());
           parser.feed(&bytes[fed..end], end == bytes.len())?;
           fed = end;
@@ -1967,6 +2579,84 @@ mod tests {
       );
     }
     whole
+  }
+
+  /// Drives the parser over `xml`, streaming any general entity named in `entities` in
+  /// `chunk`-byte pieces through `begin_entity` + `feed`, exactly as the streaming driver will.
+  /// A stack of byte sources mirrors the parser's entity stack: the innermost source feeds the
+  /// innermost entity.
+  fn trace_streaming_in_chunks(xml: &str, entities: &[(&str, &str)], chunk: usize) -> Result<Vec<String>> {
+    let mut parser = Parser::with_document(Entity::document(CharStream::new()), Limits::default());
+    let mut sources: Vec<(Vec<u8>, usize)> = vec![(xml.as_bytes().to_vec(), 0)];
+    let mut events = Vec::new();
+    loop {
+      match parser.advance()? {
+        Progress::Event(_) => events.push(render(&parser, parser.event_ref().expect("a current event"))),
+        Progress::Eof => return Ok(events),
+        Progress::NeedMoreInput => {
+          let (bytes, at) = sources.last_mut().expect("a source for the innermost entity");
+          let end = at.saturating_add(chunk).min(bytes.len());
+          let last = end == bytes.len();
+          parser.feed(&bytes[*at..end], last)?;
+          *at = end;
+          if last {
+            sources.pop();
+          }
+        }
+        Progress::NeedEntity => {
+          let name = parser.pending_entity().and_then(|r| r.name()).expect("a named general entity").to_owned();
+          match entities.iter().find(|(n, _)| *n == name) {
+            Some((_, content)) => {
+              parser.begin_entity()?;
+              sources.push((content.as_bytes().to_vec(), 0));
+            }
+            None => parser.decline_entity()?,
+          }
+        }
+      }
+    }
+  }
+
+  /// Streams the entities and asserts the result does not depend on how the bytes are split.
+  fn trace_streaming(xml: &str, entities: &[(&str, &str)]) -> Result<Vec<String>> {
+    let whole = trace_streaming_in_chunks(xml, entities, usize::MAX)?;
+    for chunk in [1, 2, 3, 7] {
+      let split =
+        trace_streaming_in_chunks(xml, entities, chunk).unwrap_or_else(|e| panic!("failed at chunk size {chunk}: {e}"));
+      assert_eq!(split, whole, "chunk size {chunk} changed the result");
+    }
+    Ok(whole)
+  }
+
+  #[test]
+  fn a_streamed_external_entity_is_read_in_chunks() {
+    let xml = "<!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]><a>&e;</a>";
+    let events = trace_streaming(xml, &[("e", "<b>in</b>")]).unwrap();
+    assert_eq!(events, ["!doctype <!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]>", "<a>", "<b>", "t:in", "</b>", "</a>"]);
+  }
+
+  #[test]
+  fn a_streamed_entity_text_declaration_is_stripped_across_feeds() {
+    // The text declaration can straddle any feed boundary; it must be stepped over, not surface
+    // as a processing instruction, whatever the chunk size.
+    let xml = "<!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]><a>&e;</a>";
+    let entity = "<?xml version='1.0' encoding='UTF-8'?><b>in</b>";
+    let events = trace_streaming(xml, &[("e", entity)]).unwrap();
+    assert_eq!(events, ["!doctype <!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]>", "<a>", "<b>", "t:in", "</b>", "</a>"]);
+  }
+
+  #[test]
+  fn a_malformed_text_declaration_names_what_is_wrong() {
+    let xml = "<!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]><a>&e;</a>";
+    let bad = |decl: &str| trace_streaming(xml, &[("e", &format!("{decl}<b/>"))]).unwrap_err().message().to_owned();
+    // A name that is not a pseudo-attribute is reported as such, not as a misordering.
+    assert!(bad("<?xml version='1.0' bogus='x'?>").contains("not one of version or encoding"));
+    // A known pseudo-attribute misplaced or repeated is reported specifically.
+    assert!(bad("<?xml encoding='UTF-8' version='1.0'?>").contains("version after encoding"));
+    assert!(bad("<?xml encoding='UTF-8' encoding='UTF-8'?>").contains("more than one encoding"));
+    assert!(bad("<?xml version='1.0' encoding='UTF-8' standalone='yes'?>").contains("standalone"));
+    // The pseudo-attribute parser's own reason survives, named for the text declaration, not overwritten as "malformed".
+    assert_eq!(bad("<?xml version=1.0?>"), "the text declaration has an unquoted value");
   }
 
   #[test]
@@ -2137,10 +2827,86 @@ mod tests {
   }
 
   #[test]
+  fn rejects_content_after_the_doctype_external_id() {
+    let err = error("<!DOCTYPE r SYSTEM 'a.dtd' junk><r/>");
+    assert!(err.message().contains("content after the external identifier"), "{}", err.message());
+    // The error points at the stray content, not at the whole declaration.
+    assert_eq!(err.location().column, 28);
+  }
+
+  #[test]
+  fn each_event_clears_the_previous_events_accessors() {
+    let document = Entity::document(CharStream::with_encoding("UTF-8").unwrap());
+    let mut parser = Parser::with_document(document, Limits::default());
+    parser.feed("<a x='1'>hi</a>".as_bytes(), true).unwrap();
+    assert_eq!(parser.advance().unwrap(), Progress::Event(EventKind::StartElement));
+    assert_eq!(parser.local_name(), "a");
+    assert_eq!(parser.event_ref().unwrap().attributes().len(), 1);
+    // The start tag's name must not linger into the following text event; its attributes cannot, since a `Text`
+    // event is not the variant that carries them.
+    assert_eq!(parser.advance().unwrap(), Progress::Event(EventKind::Text));
+    assert_eq!(text_of(&parser), "hi");
+    assert!(parser.event_ref().unwrap().attributes().is_empty());
+    assert_eq!(parser.local_name(), "", "the start tag's name leaked into the text event");
+  }
+
+  #[test]
+  fn event_ref_gives_the_current_event_as_a_borrowed_enum() {
+    let document = Entity::document(CharStream::with_encoding("UTF-8").unwrap());
+    let mut parser = Parser::with_document(document, Limits::default());
+    parser.feed("<a x='1'>hi</a>".as_bytes(), true).unwrap();
+
+    assert_eq!(parser.advance().unwrap(), Progress::Event(EventKind::StartElement));
+    let EventRef::StartElement { name, attributes, .. } = parser.event_ref().unwrap() else {
+      panic!("expected a start element");
+    };
+    assert_eq!(parser.pool().resolve(name.local()), "a");
+    assert_eq!(attributes.len(), 1);
+    assert_eq!(attributes.get(0).unwrap().value, "1");
+
+    assert_eq!(parser.advance().unwrap(), Progress::Event(EventKind::Text));
+    assert!(matches!(parser.event_ref(), Some(EventRef::Text("hi"))));
+
+    // No current event before the first advance or after the last one.
+    assert_eq!(parser.advance().unwrap(), Progress::Event(EventKind::EndElement));
+    assert_eq!(parser.advance().unwrap(), Progress::Eof);
+    assert!(parser.event_ref().is_none());
+  }
+
+  #[test]
+  fn a_too_deep_entity_chain_in_an_attribute_names_the_path() {
+    let xml = "<!DOCTYPE a [<!ENTITY e0 'x'><!ENTITY e1 '&e0;'><!ENTITY e2 '&e1;'><!ENTITY e3 '&e2;'>]><a v='&e3;'/>";
+    let document = Entity::document(CharStream::with_encoding("UTF-8").unwrap());
+    let mut parser = Parser::with_document(document, Limits::default().with_max_depth(2));
+    parser.feed(xml.as_bytes(), true).unwrap();
+    let error = loop {
+      match parser.advance() {
+        Ok(Progress::Eof) => panic!("expected a depth-limit error"),
+        Ok(Progress::NeedEntity) => parser.decline_entity().unwrap(),
+        Ok(_) => {}
+        Err(error) => break error,
+      }
+    };
+    let message = error.message();
+    assert!(message.contains("nested more than 2 deep"), "{message}");
+    // The message traces the nesting path that tripped the limit.
+    assert!(message.contains("e3 -> e2 -> e1"), "{message}");
+  }
+
+  #[test]
+  fn a_cyclic_entity_in_an_attribute_names_the_loop() {
+    // `a` and `b` refer to each other, so expanding either in an attribute loops.
+    let xml = "<!DOCTYPE d [<!ENTITY a '&b;'><!ENTITY b '&a;'>]><d v='&a;'/>";
+    let message = error(xml).message().to_owned();
+    assert!(message.contains("refers to itself"), "{message}");
+    assert!(message.contains("a -> b -> a"), "{message}");
+  }
+
+  #[test]
   fn rejects_mismatched_and_stray_end_tags() {
     assert!(error("<a></b>").message().contains("does not close"));
     assert!(error("<a/></a>").message().contains("never opened"));
-    assert!(error("<a>").message().contains("never closed"));
+    assert!(error("<a>").message().contains("not closed"));
     assert!(matches!(error("<a></a></a>"), Error::WellFormedness { .. }));
   }
 
@@ -2151,6 +2917,9 @@ mod tests {
     assert!(error("<a/><b/>").message().contains("only one root"));
     assert!(error("text<a/>").message().contains("before the root"));
     assert!(error("<a/>text").message().contains("after the root"));
+    // The error points at the first non-whitespace character, past the leading whitespace of the run.
+    assert_eq!(error("  x<a/>").location().column, 3);
+    assert_eq!(error("<a/>\n\ny").location().line, 3);
   }
 
   #[test]
@@ -2211,8 +2980,26 @@ mod tests {
     assert!(error("<?XML version='1.0'?><a/>").message().contains("reserved"));
     assert!(error("<?xml?><a/>").message().contains("no version"));
     assert!(error("<?xml version='2.0'?><a/>").message().contains("not an XML version"));
-    assert!(error("<?xml encoding='UTF-8' version='1.0'?><a/>").message().contains("out of place"));
     assert!(error("<?xml version='1.0' standalone='maybe'?><a/>").message().contains("standalone"));
+    // A misplaced version/encoding/standalone reports its position, not that the name is unknown.
+    assert!(error("<?xml encoding='UTF-8' version='1.0'?><a/>").message().contains("encoding must come after version"));
+    assert!(
+      error("<?xml version='1.0' standalone='yes' encoding='UTF-8'?><a/>").message().contains("encoding must come")
+    );
+    assert!(
+      error("<?xml standalone='yes' version='1.0'?><a/>").message().contains("standalone must come after version")
+    );
+    assert!(error("<?xml version='1.0' version='1.0'?><a/>").message().contains("more than one version"));
+    assert!(
+      error("<?xml version='1.0' encoding='UTF-8' encoding='UTF-8'?><a/>").message().contains("more than one encoding")
+    );
+    assert!(
+      error("<?xml version='1.0' standalone='yes' standalone='no'?><a/>")
+        .message()
+        .contains("more than one standalone")
+    );
+    // A name that is not a pseudo-attribute says so, rather than blaming its position.
+    assert!(error("<?xml version='1.0' encdng='UTF-8'?><a/>").message().contains("not a pseudo-attribute"));
   }
 
   #[test]
@@ -2232,7 +3019,7 @@ mod tests {
   fn messages_say_what_to_do_next() {
     let cases: [(&str, &str); 8] = [
       ("<a>&nosuch;</a>", "write \"&amp;nosuch;\""),
-      ("<a>Tom & Jerry</a>", "write \"&amp;\""),
+      ("<a>Tom & Jerry</a>", "a reference must end with \";\""),
       ("<a>]]></a>", "write \"]]&gt;\""),
       ("<a b='<'/>", "write \"&lt;\""),
       ("<p:a/>", "add an xmlns:p attribute"),
@@ -2275,7 +3062,7 @@ mod tests {
     assert_eq!(parser.attribute_value(Some("urn:p"), "y"), Some("2"));
     assert_eq!(parser.attribute_value(None, "y"), None, "the prefix is not ignored");
     assert_eq!(parser.attribute_value(Some("urn:none"), "x"), None);
-    assert_eq!(parser.attribute_count(), 3);
+    assert_eq!(parser.event_ref().unwrap().attributes().len(), 3);
   }
 
   #[test]
@@ -2289,7 +3076,7 @@ mod tests {
     let mut fed = 0;
     loop {
       match parser.advance().unwrap() {
-        Progress::Event(EventKind::Text) => text.push_str(parser.text()),
+        Progress::Event(EventKind::Text) => text.push_str(text_of(&parser)),
         Progress::Eof => break,
         Progress::NeedMoreInput => {
           let end = (fed + 1).min(xml.len());
@@ -2300,6 +3087,38 @@ mod tests {
       }
     }
     assert_eq!(text, "one & two");
+  }
+
+  #[test]
+  fn a_long_text_run_is_delivered_in_bounded_fragments() {
+    // Fed in pieces, a run longer than the fragmentation threshold must come out as more than one Text
+    // event, so neither the stream nor the parser buffers the whole run. The pieces still concatenate
+    // to the original.
+    let mut parser =
+      Parser::with_document(Entity::document(CharStream::with_encoding("UTF-8").unwrap()), Limits::default());
+    let body = "x".repeat(30_000);
+    let xml = format!("<a>{body}</a>");
+    let bytes = xml.as_bytes();
+    let mut text = String::new();
+    let mut text_events = 0;
+    let mut fed = 0;
+    loop {
+      match parser.advance().unwrap() {
+        Progress::Event(EventKind::Text) => {
+          text.push_str(text_of(&parser));
+          text_events += 1;
+        }
+        Progress::Eof => break,
+        Progress::NeedMoreInput => {
+          let end = (fed + 1000).min(bytes.len());
+          parser.feed(&bytes[fed..end], end == bytes.len()).unwrap();
+          fed = end;
+        }
+        _ => {}
+      }
+    }
+    assert_eq!(text, body);
+    assert!(text_events > 1, "a long run must be split into fragments, got {text_events}");
   }
 
   #[test]
@@ -2324,7 +3143,7 @@ mod tests {
     let mut text = None;
     while let Progress::Event(kind) = parser.advance().unwrap() {
       if kind == EventKind::Text {
-        text = Some(parser.text().to_owned());
+        text = Some(text_of(&parser).to_owned());
       }
     }
     assert_eq!(text.as_deref(), Some("é"));

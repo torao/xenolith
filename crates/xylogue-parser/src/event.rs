@@ -1,20 +1,27 @@
-//! Events that own what they hold.
+//! Events that own their data.
 //!
-//! The cursor API of [`Parser`] borrows from the parser, which costs nothing but means an
-//! event cannot outlive the call that produced it and cannot be collected into a `Vec`. An
-//! [`Event`] is the same information, copied. Reach for it when the borrow is in the way, and
-//! stay with the cursor when it is not.
+//! You can read what the parser produces in two ways. Driving [`Parser::advance`] and reading the current event
+//! through [`Parser::event_ref`], whose [`EventRef`] borrows the parser, copies nothing, but that value borrows the
+//! parser, so the next [`advance`](Parser::advance) invalidates it, and it cannot be stored or collected.
+//!
+//! An [`Event`] is one event copied into an owned value, through [`Event::capture`] or the [`events`](Parser::events)
+//! iterator. It can outlive the call, go into a `Vec`, and be compared or sent elsewhere. Use it when you need to keep
+//! events; stay with the borrowing accessors when you handle each one in place.
+//!
 
+use xylogue_core::error::{Error, Result};
 use xylogue_core::name::QName;
 
-use crate::parser::{EventKind, Parser, XmlSpace};
+use crate::parser::{EventKind, EventRef, Parser, XmlSpace};
 
-/// An attribute, with its value copied out of the parser.
+/// An attribute with its value owned; the copied counterpart of [`AttributeRef`](crate::AttributeRef).
+///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attribute {
-  /// The attribute's name. An unprefixed attribute is in no namespace.
+  /// The attribute's name. An unprefixed attribute is in no namespace, never the default one.
   pub name: QName,
-  /// The normalized value.
+  /// The value after attribute-value normalization (XML 1.0 §3.3.3), and the tokenized collapse the DTD applies when
+  /// the attribute has a tokenized type.
   pub value: String,
   /// True if this attribute is a namespace declaration (`xmlns` or `xmlns:p`).
   pub declares_namespace: bool,
@@ -47,7 +54,7 @@ pub enum Event {
     /// The standalone declaration, if there was one.
     standalone: Option<bool>,
   },
-  /// A document type declaration, kept verbatim until phase 2 interprets it.
+  /// A document type declaration, the whole `<!DOCTYPE ...>` text held verbatim.
   Doctype(String),
   /// The start of an element.
   StartElement {
@@ -65,55 +72,58 @@ pub enum Event {
     /// The element's name.
     name: QName,
   },
-  /// Character data, with references expanded.
+  /// Character data, with references expanded. One run may arrive as several adjacent `Text` events; a consumer that
+  /// wants one maximal node coalesces them.
   Text(String),
-  /// The content of a CDATA section.
+  /// The content of a CDATA section: everything between `<![CDATA[` and `]]>`, with no reference expansion and nothing
+  /// trimmed.
   CData(String),
-  /// A comment, without its delimiters.
+  /// A comment's text: everything between `<!--` and `-->`, verbatim.
   Comment(String),
   /// A processing instruction.
   ProcessingInstruction {
-    /// The target.
+    /// The target: the name right after `<?`, ending at the first whitespace, or at `?>` when there is no data.
     target: String,
-    /// Everything after the target and the whitespace following it.
+    /// Everything after the target and the whitespace separating it, up to `?>`: the separating whitespace is dropped,
+    /// nothing else is trimmed, and it is empty when the instruction is only a target.
     data: String,
   },
 }
 
 impl Event {
-  /// Copies the parser's current event.
+  /// Copies the parser's current event into an owned [`Event`].
   ///
-  /// # Panics
+  /// Call this while driving [`Parser::advance`] yourself to keep the current event past the next call. It is the
+  /// primitive the [`events`](Parser::events) iterator is built on; reach for it directly when that iterator will not
+  /// do, for instance, when you feed the input in pieces or resolve external entities as you go.
   ///
-  /// If the parser has no current event, which is the case before the first call to
+  /// # Examples
+  ///
+  /// ```
+  /// use xylogue_parser::{Event, Parser, Progress};
+  ///
+  /// let mut parser = Parser::new();
+  /// parser.feed(b"<a>hi</a>", true)?;
+  ///
+  /// let mut events = Vec::new();
+  /// while let Progress::Event(_) = parser.advance()? {
+  ///   events.push(Event::capture(&parser)?);
+  /// }
+  /// assert_eq!(events.len(), 3);
+  /// assert_eq!(events[1].text(), Some("hi"));
+  /// # Ok::<(), xylogue_core::Error>(())
+  /// ```
+  ///
+  /// # Errors
+  ///
+  /// Returns [`Error::Internal`] if the parser has no current event, which is the case before the first
   /// [`Parser::advance`] and after it reports [`Progress::Eof`](crate::Progress::Eof).
-  #[must_use]
-  pub fn capture(parser: &Parser) -> Self {
-    let kind = parser.event().expect("the parser has no current event to capture");
-    match kind {
-      EventKind::XmlDeclaration => Self::XmlDeclaration {
-        version: parser.version().to_owned(),
-        encoding: parser.declared_encoding().map(ToOwned::to_owned),
-        standalone: parser.standalone(),
-      },
-      EventKind::Doctype => Self::Doctype(parser.text().to_owned()),
-      EventKind::StartElement => Self::StartElement {
-        name: parser.name(),
-        attributes: parser
-          .attributes()
-          .map(|a| Attribute { name: a.name, value: a.value.to_owned(), declares_namespace: a.declares_namespace })
-          .collect(),
-        xml_space: parser.xml_space(),
-        xml_lang: parser.xml_lang().map(ToOwned::to_owned),
-      },
-      EventKind::EndElement => Self::EndElement { name: parser.name() },
-      EventKind::Text => Self::Text(parser.text().to_owned()),
-      EventKind::CData => Self::CData(parser.text().to_owned()),
-      EventKind::Comment => Self::Comment(parser.text().to_owned()),
-      EventKind::ProcessingInstruction => {
-        Self::ProcessingInstruction { target: parser.target().to_owned(), data: parser.text().to_owned() }
-      }
-    }
+  ///
+  pub fn capture(parser: &Parser) -> Result<Self> {
+    parser
+      .event_ref()
+      .map(Into::into)
+      .ok_or_else(|| Error::internal("capture called while the parser has no current event"))
   }
 
   /// Which kind of event this is.
@@ -131,7 +141,7 @@ impl Event {
     }
   }
 
-  /// The element name, for a start or end element.
+  /// The element's name for a start or end element, or `None` for other kinds.
   #[must_use]
   pub const fn name(&self) -> Option<QName> {
     match self {
@@ -140,10 +150,9 @@ impl Event {
     }
   }
 
-  /// The character data of a text, CDATA or comment event.
+  /// The character data of a text, CDATA, or comment event, or `None` for other kinds.
   ///
-  /// Note that this does not cover the data of a processing instruction or the body of a
-  /// document type declaration, which are not character data.
+  /// It does not cover a processing instruction's data or a `DOCTYPE`'s body, which are not character data.
   #[must_use]
   pub fn text(&self) -> Option<&str> {
     match self {
@@ -152,12 +161,41 @@ impl Event {
     }
   }
 
-  /// The attributes of a start element.
+  /// The attributes of a start element, or an empty slice for other kinds.
   #[must_use]
   pub fn attributes(&self) -> &[Attribute] {
     match self {
       Self::StartElement { attributes, .. } => attributes,
       _ => &[],
+    }
+  }
+}
+
+impl From<EventRef<'_>> for Event {
+  /// Copies a borrowed [`EventRef`] into an owned [`Event`]; this is how [`capture`](Event::capture) owns the current
+  /// event.
+  fn from(event: EventRef<'_>) -> Self {
+    match event {
+      EventRef::XmlDeclaration { version, encoding, standalone } => {
+        Self::XmlDeclaration { version: version.to_owned(), encoding: encoding.map(ToOwned::to_owned), standalone }
+      }
+      EventRef::Doctype(text) => Self::Doctype(text.to_owned()),
+      EventRef::StartElement { name, attributes, xml_space, xml_lang } => Self::StartElement {
+        name,
+        attributes: attributes
+          .iter()
+          .map(|a| Attribute { name: a.name, value: a.value.to_owned(), declares_namespace: a.declares_namespace })
+          .collect(),
+        xml_space,
+        xml_lang: xml_lang.map(ToOwned::to_owned),
+      },
+      EventRef::EndElement { name } => Self::EndElement { name },
+      EventRef::Text(text) => Self::Text(text.to_owned()),
+      EventRef::CData(text) => Self::CData(text.to_owned()),
+      EventRef::Comment(text) => Self::Comment(text.to_owned()),
+      EventRef::ProcessingInstruction { target, data, .. } => {
+        Self::ProcessingInstruction { target: target.to_owned(), data: data.to_owned() }
+      }
     }
   }
 }
@@ -237,7 +275,7 @@ mod tests {
     parser.feed(xml.as_bytes(), true).unwrap();
     let mut borrowed = Vec::new();
     while let Progress::Event(_) = parser.advance().unwrap() {
-      borrowed.push(Event::capture(&parser));
+      borrowed.push(Event::capture(&parser).unwrap());
     }
     assert_eq!(owned, borrowed);
   }

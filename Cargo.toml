@@ -47,8 +47,14 @@ thiserror = "2"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 icu_collator = "2"
 icu_locale_core = "2"
+# The runtime-agnostic async-read trait for the `async` driver. Traits only, no executor, so the
+# runtime stays the caller's business.
+futures-io = { version = "0.3", default-features = false, features = ["std"] }
 # Only `AsyncRead` is needed; the runtime is the caller's business.
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+# Adapts tokio's own `AsyncRead` to `futures_io::AsyncRead` for the `tokio` convenience
+# constructors; only pulled in by the `tokio` feature.
+tokio-util = { version = "0.7", default-features = false, features = ["compat"] }
 # Benchmarking. Default features off: the plotting and the parallel sampler pull in a great deal
 # for a number this does not need prettier.
 criterion = { version = "0.5", default-features = false }

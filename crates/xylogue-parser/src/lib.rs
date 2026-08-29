@@ -1,8 +1,8 @@
 //! XML 1.0 parsing for xylogue.
 //!
-//! The parser holds no I/O of its own. It is fed bytes and asked to make progress, so the
+//! The parser holds no I/O of its own. It is fed bytes and driven to make progress, so the
 //! same core drives a blocking reader, an async reader, or an in-memory slice, and can stop
-//! mid-document to ask for an entity that someone else fetches. See `ROADMAP.md`, decision 7.
+//! mid-document to request an entity that someone else fetches.
 //!
 //! It reads the DTD in full — internal subset, external subset, and internal and external
 //! parameter entities: general entities are resolved in content and attributes, declared
@@ -22,17 +22,22 @@
 //! let mut reader = Reader::with_system_id("<doc>text</doc>".as_bytes(), "file:///doc.xml");
 //! while let Some(kind) = reader.advance()? {
 //!   if kind == EventKind::Text {
-//!     assert_eq!(reader.parser().text(), "text");
+//!     assert_eq!(reader.parser().event_ref().and_then(|e| e.text()), Some("text"));
 //!   }
 //! }
 //! # Ok::<(), xylogue_core::Error>(())
 //! ```
 //!
-//! The rest exists underneath it:
+//! That pull loop is the usual choice. For the push style, with the parser calling you, implement a
+//! [`Handler`](sax::Handler) and let [`parse`](sax::parse) drive it; see the [`sax`] module. Both run the same parser,
+//! so it is a choice of shape, not capability: reach for [`sax`] when your code is a handler that dispatches on the
+//! event kind, or when porting a Java SAX `ContentHandler`, and stay with [`Reader`] otherwise.
+//!
+//! The other items sit beneath it:
 //!
 //! - [`Parser`] — the core: feed it bytes, call [`advance`](Parser::advance), read the event
-//!   through the accessors. Drive this directly to control where the bytes come from.
-//! - [`AsyncReader`] — the same, over [`tokio::io::AsyncRead`], behind the `tokio` feature.
+//!   through [`event_ref`](Parser::event_ref). Drive this directly to control where the bytes come from.
+//! - [`AsyncReader`] — the same, over [`futures_io::AsyncRead`], behind the `async` feature.
 //! - [`Event`] — an event that owns its data, for when the borrow is in the way.
 //! - [`resolve`] — [`resolve::UriResolver`] and the request the parser hands out when it needs
 //!   an external entity; give a resolver to a reader with `with_resolver`.
@@ -43,10 +48,10 @@
 //!
 //! # Borrowed or owned
 //!
-//! The accessors on [`Parser`] borrow from its buffers, so an event is readable only until
-//! the next [`advance`](Parser::advance) and cannot be collected. That costs nothing per
-//! event, which matters for a large document. When events need to outlive the call — to be
-//! collected, compared or sent elsewhere — [`Event::capture`] copies one, and
+//! The [`EventRef`] from [`Parser::event_ref`] borrows the parser's buffers, so an event is
+//! readable only until the next [`advance`](Parser::advance) and cannot be collected. That costs
+//! nothing per event, which matters for a large document. When events need to outlive the call — to
+//! be collected, compared or sent elsewhere — [`Event::capture`] copies one, and
 //! [`Reader::events`] gives an iterator of them.
 //!
 //! # Feeding the parser by hand
@@ -72,15 +77,18 @@
 //! let stream = stack.current_mut().stream_mut();
 //! assert_eq!(stream.remainder(), "<doc/>");
 //! stream.advance("<doc/>".len());
-//! assert!(stream.is_exhausted());
+//! assert!(stream.is_fully_read());
 //! # Ok::<(), xylogue_core::Error>(())
 //! ```
 //!
 //! # Feature flags
 //!
 //! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
-//! - `tokio`: [`AsyncReader`], over `tokio`'s `AsyncRead`. Off by default; only
-//!   `tokio`'s `io-util` is pulled in, and the runtime remains the caller's choice.
+//! - `async`: the runtime-agnostic [`AsyncReader`], over `futures_io::AsyncRead`. Off by
+//!   default; an application can drive it with any executor and supply its own async I/O.
+//! - `tokio`: adapters that bridge `tokio`'s own `AsyncRead` to the async driver, chiefly
+//!   [`AsyncEntityReader::from_tokio`](resolve::AsyncEntityReader::from_tokio). Enables `async`;
+//!   off by default.
 //! - `xml-base`: per-node base URI computation from `xml:base` and the entity's system
 //!   identifier (XML Base); read it with [`Parser::base_uri`].
 //! - `xml-id`: `xml:id` as an ID-typed attribute, with tokenized normalization; read it with
@@ -88,8 +96,7 @@
 
 //! # Specifications
 //!
-//! Implemented from these documents, at the versions linked — the dated URLs, so that what was
-//! read while writing this can still be found:
+//! Implemented from these documents. The links are dated so the exact version read can be found:
 //!
 //! - [XML 1.0 (Fifth Edition)] — W3C Recommendation 26 November 2008. The whole of the parser:
 //!   documents, the DTD, entities, and the well-formedness constraints.
@@ -109,7 +116,7 @@
 //! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
 //! [W3C XML Conformance Test Suite]: https://www.w3.org/XML/Test/
 
-#[cfg(feature = "tokio")]
+#[cfg(feature = "async")]
 pub mod async_reader;
 pub mod config;
 pub mod dtd;
@@ -123,15 +130,15 @@ pub mod sax;
 mod scan;
 pub mod stream;
 
-#[cfg(feature = "tokio")]
+#[cfg(feature = "async")]
 pub use async_reader::{AsyncReader, NoResolver};
-pub use config::ParserConfig;
+pub use config::{Bounds, ParserConfig};
 pub use dtd::Dtd;
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
-pub use parser::{AttributeRef, EventKind, Events, Parser, Progress, XmlSpace};
+pub use parser::{AttributeRef, Attributes, EventKind, EventRef, Events, Parser, Progress, XmlSpace};
 pub use reader::{Reader, ReaderEvents};
-#[cfg(feature = "tokio")]
-pub use resolve::AsyncUriResolver;
+#[cfg(feature = "async")]
+pub use resolve::{AsyncEntityReader, AsyncUriResolver};
 pub use resolve::{EntityRequest, RequestKind, UriResolver};
 pub use stream::CharStream;

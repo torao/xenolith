@@ -1,9 +1,51 @@
-//! Entities and the stack of entities being read.
+//! Entities and the entity stack currently being read.
 //!
-//! An XML document is a tree of entities, not a single stream: a reference may suspend the
-//! current entity, read another to its end, and resume. Positions, base URIs and the limits
-//! that keep expansion bounded are all properties of the *innermost* entity, which is why the
-//! stack exists from the first phase rather than arriving with DTD support.
+//! XML documents may reference multiple external entities internally through entity references. This module implements
+//! the functionality to read XML documents as a tree of entities. This structure forms a path from the document entity
+//! to the entity currently being read at any given point in the reading process, and this module maintains this path
+//! as a stack. The current position, the base URI, and the scope of the boundaries are determined by the entity
+//! currently being read (in other words, the top or innermost of the stack).
+//!
+//! # The physical structure of entities
+//!
+//! An XML document has two distinct structures. One is the logical structure formed by nested elements. This is the
+//! *tree* that many people picture, and it is what the DOM represents. The other is the physical reference structure
+//! formed by entities, and this module implements the latter. An entity is a unit of storage (the document itself, an
+//! external resource, a run of replacement text specified in the DTD), and the content of one entity is inserted into
+//! another via references such as `&e;`. This structure differs from the DOM, and a single element may contain multiple
+//! entities. Similar to a function call, reading delves deeply into the referenced entity, and once reading that entity
+//! is complete, it returns to the referring one.
+//!
+//! For example, suppose a book has been split into separate files for each chapter, resulting in the following three
+//! entities: `book.xml` is a document entity, and `chapter1.xml` and `chapter2.xml` are external entities.
+//!
+//! `book.xml`:
+//!
+//! ```xml
+//! <!DOCTYPE book [
+//!   <!ENTITY chapter1 SYSTEM "chapter1.xml">
+//!   <!ENTITY chapter2 SYSTEM "chapter2.xml">
+//! ]>
+//! <book>
+//!   &chapter1;
+//!   &chapter2;
+//! </book>
+//! ```
+//!
+//! `chapter1.xml` (and `chapter2.xml` likewise):
+//!
+//! ```xml
+//! <chapter>
+//!   <title>Introduction</title>
+//! </chapter>
+//! ```
+//!
+//! The logical structure (the DOM) is a single tree with `book` as the root, under which each `chapter` is placed.
+//! The physical structure consists of three entities: `book.xml`, `chapter1.xml`, and `chapter2.xml`. The tag of
+//! `book` element is located in `book.xml`, but its child element, `chapter`, is located in two other files and is
+//! incorporated into `book.xml` via the references `&chapter1;` and `&chapter2;`. Therefore, a single `book` element
+//! spans three entities, and a single DOM tree is composed of all three of them.
+//!
 
 use std::sync::Arc;
 
@@ -13,46 +55,75 @@ use xylogue_core::uri::UriReference;
 use crate::stream::CharStream;
 
 /// What kind of entity is being read.
+///
+/// XML entities are classified into four categories along two independent axes × tow categories. In addition to these,
+/// there are two types of nameless entities that serve as the foundation for parsing rather than being invoked by
+/// reference.
+///
+/// 1. The location where they are referenced:
+///    1. general entities, referenced within the document body using `&name;`.
+///    2. parameter entities, referenced *only* within the DTD using `%name;`.
+/// 2. The location of their content:
+///    1. internal entities, where the replacement text is written directly in the declaration.
+///    2. external entities, which refer to a separate resource (such as a file or URL).
+/// 3. The document entity, which represents the entire document.
+/// 4. the external subset, which is the external DTD referenced by the `DOCTYPE`.
+///
+/// The internal subset (`[ ... ]` within the `DOCTYPE`) is not an independent entity, but rather a part of the document
+/// entity.
+///
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntityKind {
-  /// The document entity: the outermost one, where parsing starts.
+  /// Document entity. The outermost entity and the starting point for parsing. It is placed at the bottom of the entity
+  /// stack and is never popped. It has no name.
   Document,
-  /// The external DTD subset.
+  /// External DTD subset. The external DTD file referenced by the `DOCTYPE` element using the `SYSTEM ID` or `PUBLIC
+  /// ID`. It has no name.
   ExternalSubset,
-  /// A general entity whose replacement text was given in its declaration.
+  /// Internal general entity. A general entity whose replacement text is specified directly within the declaration.
+  /// Referenced in the document body as `&name;`. A general entity whose replacement text was given in its declaration.
+  /// Example: `<!ENTITY name "replacement text">`
   InternalGeneral,
-  /// A general entity read from a separate resource.
+  /// External general entity. A general entity whose content is loaded from a separate resource. Referenced in the
+  /// document body as `&name;`. Example: `<!ENTITY name SYSTEM "chap1.xml">`
   ExternalGeneral,
-  /// A parameter entity whose replacement text was given in its declaration.
+  /// Internal parameter entity. A parameter entity for which the replacement text is specified directly within the
+  /// declaration. Referenced only within the DTD as `%name;`. Example: `<!ENTITY % name "replacement text">`
   InternalParameter,
-  /// A parameter entity read from a separate resource.
+  /// External parameter entity. A parameter entity whose content is loaded from a separate resource. Referenced only
+  /// within the DTD as `%name;`. Example: `<!ENTITY % name SYSTEM "common.dtd">`
   ExternalParameter,
 }
 
 impl EntityKind {
-  /// True if the entity has its own resource, and therefore its own base URI.
+  /// True if the entity has its own resource and, therefore, its own base URI.
+  ///
   #[must_use]
   pub const fn is_external(self) -> bool {
     matches!(self, Self::Document | Self::ExternalSubset | Self::ExternalGeneral | Self::ExternalParameter)
   }
 
-  /// True if the entity is a parameter entity, which is only referenced inside the DTD.
+  /// True if the entity is a parameter entity and is referenced only within the DTD.
+  ///
   #[must_use]
   pub const fn is_parameter(self) -> bool {
     matches!(self, Self::InternalParameter | Self::ExternalParameter)
   }
 
-  /// True if the entity counts against the expansion budget.
+  /// True if the entity is included in the count for expansion.
   ///
-  /// The document entity and the external subset are read once, however large; only entities
-  /// pulled in by a reference can be multiplied by an attacker.
+  /// To prevent lengthy expansion attacks in malicious XML documents, the parser imposes a limit on the number of
+  /// expansions. This function determines whether the target entity should be counted toward this expansion limit.
+  /// Document entities and external subsets are excluded from the count because they are read only once, regardless
+  /// of their size.
+  ///
   #[must_use]
   pub const fn is_expansion(self) -> bool {
     !matches!(self, Self::Document | Self::ExternalSubset)
   }
 }
 
-/// One entity being read.
+/// One entity currently being read.
 ///
 /// # Examples
 ///
@@ -80,9 +151,10 @@ impl Entity {
 
   /// Creates an entity.
   ///
-  /// `inherited_base` is the base URI of the entity in which this one was *declared*. It is
-  /// used only for internal entities, which have no resource of their own; an external entity
-  /// takes its base URI from its own system identifier.
+  /// `inherited_base` is the base URI of the entity in which this entity is *declared*. This is used only for *internal
+  /// entities* that do not have their own resources. For external entities, this value is ignored, and their base URI
+  /// is derived from the system identifier associated with the `stream`.
+  ///
   #[must_use]
   pub fn new(
     name: Option<Arc<str>>,
@@ -95,44 +167,48 @@ impl Entity {
     Self { name, kind, stream, base_uri }
   }
 
-  /// The entity's name, or `None` for the document entity and the external subset.
+  /// The name of this entity. Or `None` for document entities and external subsets.
+  ///
   #[must_use]
   pub fn name(&self) -> Option<&Arc<str>> {
     self.name.as_ref()
   }
 
-  /// What kind of entity this is.
+  /// The type of this entity.
   #[must_use]
   pub const fn kind(&self) -> EntityKind {
     self.kind
   }
 
-  /// The base URI against which relative references inside this entity resolve.
+  /// The base URI used to resolve relative references within this entity.
   ///
-  /// This is the entity's own URI, or, for an internal entity, that of the entity in which it
-  /// was declared. `xml:base` attributes are applied later, on the tree.
+  /// For an external entity, this is the entity's own URI; for an internal entity, it is the URI of the entity in which
+  /// it is declared. Note that `xml:base` attribute is unrelated to this and is applied separately at
+  /// a later stage as the base URI for content in the DOM (such as `<a href="../index.html">`, etc.).
+  ///
   #[must_use]
   pub fn base_uri(&self) -> Option<&UriReference> {
     self.base_uri.as_ref()
   }
 
   /// The character stream.
+  ///
   #[must_use]
   pub fn stream(&self) -> &CharStream {
     &self.stream
   }
 
-  /// The character stream, mutably.
+  /// The mutable character stream.
   pub fn stream_mut(&mut self) -> &mut CharStream {
     &mut self.stream
   }
 }
 
-/// Bounds on how much work a document may cause.
+/// The maximum amount of work a document may trigger during parsing and entity resolution.
 ///
-/// Defaults are generous enough for real documents and tight enough that the classic
-/// expansion attacks fail. Every limit can be raised, and [`Limits::unlimited`] removes them
-/// for trusted input.
+/// Each field is `Some(n)` for a limit of `n`, or `None` for no limit. The [default values](Limits::default) are set
+/// generous enough for actual documents and tight enough that the classic expansion attacks fail. Each limit can be
+/// relaxed or tightened, and specifying [`Limits::unlimited`] for trusted input removes these restrictions.
 ///
 /// # Examples
 ///
@@ -140,67 +216,69 @@ impl Entity {
 /// use xylogue_parser::Limits;
 ///
 /// let limits = Limits::default().with_max_depth(8);
-/// assert_eq!(limits.max_depth, 8);
-/// assert_eq!(Limits::unlimited().max_expansions, u32::MAX);
+/// assert_eq!(limits.max_depth, Some(8));
+/// assert_eq!(Limits::unlimited().max_expansions, None);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
-  /// Maximum number of entities open at once, the document entity included.
-  pub max_depth: usize,
-  /// Maximum number of entity expansions in one document.
-  pub max_expansions: u32,
-  /// Maximum number of characters all expansions may produce in total.
-  pub max_expansion_chars: u64,
+  /// Maximum number of entities, including the document entity, that can be opened simultaneously during reading.
+  pub max_depth: Option<usize>,
+  /// Maximum number of entity expansions in a single document.
+  pub max_expansions: Option<u32>,
+  /// Maximum total number of characters generated by all expansions.
+  pub max_expansion_chars: Option<u64>,
   /// Maximum nesting depth of elements.
   ///
-  /// Deep nesting costs memory in the parser and, more sharply, in anything that walks the
-  /// resulting tree recursively.
-  pub max_element_depth: usize,
+  /// As nesting depth increases, the parser's memory consumption increases; this impact is particularly noticeable
+  /// during operations that recursively manipulate the generated tree structure.
+  pub max_element_depth: Option<usize>,
 }
 
 impl Default for Limits {
+  /// Protective defaults: generous for real documents, tight enough that the classic expansion attacks fail.
   fn default() -> Self {
-    Self { max_depth: 64, max_expansions: 100_000, max_expansion_chars: 64 * 1024 * 1024, max_element_depth: 1024 }
+    Self {
+      max_depth: Some(64),
+      max_expansions: Some(100_000),
+      max_expansion_chars: Some(64 * 1024 * 1024),
+      max_element_depth: Some(1024),
+    }
   }
 }
 
 impl Limits {
-  /// Limits that permit anything; only for input that is known to be trustworthy.
+  /// Limits with every restriction removed. This applies only to input that has been verified as trustworthy.
+  ///
   #[must_use]
   pub const fn unlimited() -> Self {
-    Self {
-      max_depth: usize::MAX,
-      max_expansions: u32::MAX,
-      max_expansion_chars: u64::MAX,
-      max_element_depth: usize::MAX,
-    }
+    Self { max_depth: None, max_expansions: None, max_expansion_chars: None, max_element_depth: None }
   }
 
   /// Returns a copy with [`max_depth`](Self::max_depth) set.
   #[must_use]
   pub const fn with_max_depth(mut self, max_depth: usize) -> Self {
-    self.max_depth = max_depth;
+    self.max_depth = Some(max_depth);
     self
   }
 
   /// Returns a copy with [`max_expansions`](Self::max_expansions) set.
   #[must_use]
   pub const fn with_max_expansions(mut self, max_expansions: u32) -> Self {
-    self.max_expansions = max_expansions;
+    self.max_expansions = Some(max_expansions);
     self
   }
 
   /// Returns a copy with [`max_expansion_chars`](Self::max_expansion_chars) set.
   #[must_use]
   pub const fn with_max_expansion_chars(mut self, max_expansion_chars: u64) -> Self {
-    self.max_expansion_chars = max_expansion_chars;
+    self.max_expansion_chars = Some(max_expansion_chars);
     self
   }
 
   /// Returns a copy with [`max_element_depth`](Self::max_element_depth) set.
   #[must_use]
   pub const fn with_max_element_depth(mut self, max_element_depth: usize) -> Self {
-    self.max_element_depth = max_element_depth;
+    self.max_element_depth = Some(max_element_depth);
     self
   }
 }
@@ -227,7 +305,7 @@ impl Limits {
 ///
 /// // Reading it to the end resumes the document entity.
 /// stack.current_mut().stream_mut().advance_chars(4);
-/// assert!(stack.current().stream().is_exhausted());
+/// assert!(stack.current().stream().is_fully_read());
 /// stack.pop();
 /// assert_eq!(stack.depth(), 1);
 /// # Ok::<(), xylogue_core::Error>(())
@@ -241,19 +319,20 @@ pub struct EntityStack {
 }
 
 impl EntityStack {
-  /// Creates a stack holding just the document entity.
+  /// Creates a stack holding only the document entity.
+  ///
   #[must_use]
   pub fn new(document: Entity, limits: Limits) -> Self {
     Self { entities: vec![document], limits, expansions: 0, expansion_chars: 0 }
   }
 
-  /// Suspends the current entity and begins reading `entity`.
+  /// Suspends reading from the current entity and begins reading from the `entity`.
   ///
   /// # Errors
   ///
-  /// Returns [`Error::WellFormedness`] if the entity is already open, which is the
-  /// well-formedness constraint "No Recursion", and [`Error::Limit`] if a bound in
-  /// [`Limits`] would be exceeded.
+  /// Returns [`Error::WellFormedness`] if the entity specified is already being read on this stack. This corresponds
+  /// to the "No Recursion" Well-formedness constraint. Additionally, returns [`Error::Limit`] if the limits specified
+  /// in [`Limits`] is exceeded.
   ///
   /// # Examples
   ///
@@ -274,38 +353,44 @@ impl EntityStack {
   /// # Ok::<(), xylogue_core::Error>(())
   /// ```
   pub fn push(&mut self, entity: Entity) -> Result<()> {
+    // Check that there are no circular references.
     if let Some(name) = entity.name() {
       if self.is_open(name) {
         let open: Vec<&str> = self.entities.iter().filter_map(|e| e.name().map(|n| &**n)).collect();
-        let message = format!("entity \"{name}\" refers to itself, through {}", open.join(" -> "));
+        let message =
+          format!("entity \"{name}\" recursively references itself, through the path {}", open.join(" -> "));
         return Err(Error::well_formedness(message).at(self.location()));
       }
     }
-    if self.entities.len() >= self.limits.max_depth {
-      let limit = self.limits.max_depth;
-      return Err(self.limit_exceeded(format!(
-        "{limit} entities are already open; raise Limits::max_depth if the document is trusted"
-      )));
-    }
-    if entity.kind().is_expansion() {
-      self.expansions += 1;
-      if self.expansions > self.limits.max_expansions {
-        let limit = self.limits.max_expansions;
+    // Check whether the stack depth exceeds the maximum value.
+    if let Some(max) = self.limits.max_depth {
+      if self.entities.len() >= max {
         return Err(self.limit_exceeded(format!(
-          "the document expands more than {limit} entities; raise Limits::max_expansions if it is trusted"
+          "the maximum entity read depth {max} has been reached; increase Limits::max_depth if the document is correct"
         )));
       }
-      // An internal entity arrives with its replacement text already decoded, so charge for
-      // what it holds now; `feed` charges for whatever it grows by later.
-      self.charge_expansion(entity.stream().chars_decoded())?;
+    }
+    if entity.kind().is_expansion() {
+      if let Some(max) = self.limits.max_expansions {
+        if self.expansions >= max {
+          return Err(self.limit_exceeded(format!(
+            "the document expands more than {max} entities; increase Limits::max_expansions if it is correct"
+          )));
+        }
+      }
+      self.expansions += 1;
+      // An internal entity arrives with its replacement text already decoded, so its already-decoded characters are
+      // counted here; `feed` counts whatever is added later.
+      self.count_expansion_chars(entity.stream().chars_decoded())?;
     }
     self.entities.push(entity);
     Ok(())
   }
 
-  /// Finishes the innermost entity and resumes the one that referenced it.
+  /// Terminates the innermost entity and resumes execution of the entity that was referencing it.
   ///
-  /// Returns `None` when only the document entity is left, which is never popped.
+  /// Returns `None` if only the last document entity remains on the stack. This entity will never be popped.
+  ///
   pub fn pop(&mut self) -> Option<Entity> {
     if self.entities.len() <= 1 {
       return None;
@@ -313,32 +398,34 @@ impl EntityStack {
     self.entities.pop()
   }
 
-  /// Supplies bytes to the innermost entity.
+  /// Feeds bytes to the innermost entity.
   ///
   /// # Errors
   ///
-  /// Whatever [`CharStream::feed`] returns, plus [`Error::Limit`] if the expansion budget
-  /// is exhausted.
+  /// In addition to the error returned by [`CharStream::feed`], [`Error::Limit`] is also returned if the expansion
+  /// limit is exceeded.
+  ///
   pub fn feed(&mut self, bytes: &[u8], last: bool) -> Result<()> {
-    let before = self.current().stream().chars_decoded();
     let counts = self.current().kind().is_expansion();
-    self.current_mut().stream_mut().feed(bytes, last)?;
+    let grew = self.current_mut().stream_mut().feed(bytes, last)? as u64;
     if counts {
-      let grew = self.current().stream().chars_decoded() - before;
-      self.charge_expansion(grew)?;
+      self.count_expansion_chars(grew)?;
     }
     Ok(())
   }
 
-  /// Adds `chars` to the expansion budget.
-  fn charge_expansion(&mut self, chars: u64) -> Result<()> {
+  /// Adds `chars` to the cumulative count of expanded characters, and returns [`Error::Limit`] if the total exceeds
+  /// [`Limits::max_expansion_chars`].
+  ///
+  fn count_expansion_chars(&mut self, chars: u64) -> Result<()> {
     self.expansion_chars = self.expansion_chars.saturating_add(chars);
-    if self.expansion_chars > self.limits.max_expansion_chars {
-      let limit = self.limits.max_expansion_chars;
-      return Err(self.limit_exceeded(format!(
-        "entity expansion has produced more than {limit} characters; \
-         raise Limits::max_expansion_chars if the document is trusted"
-      )));
+    if let Some(max) = self.limits.max_expansion_chars {
+      if self.expansion_chars > max {
+        return Err(self.limit_exceeded(format!(
+          "entity expansion has produced more than {max} characters; \
+           increase Limits::max_expansion_chars if the document is correct"
+        )));
+      }
     }
     Ok(())
   }
@@ -516,7 +603,7 @@ mod tests {
   }
 
   #[test]
-  fn the_document_entity_is_not_charged_to_the_expansion_budget() {
+  fn the_document_entity_is_not_counted_toward_the_expansion_limit() {
     let mut stack = EntityStack::new(
       Entity::document(CharStream::with_encoding("UTF-8").unwrap()),
       Limits::default().with_max_expansion_chars(4),

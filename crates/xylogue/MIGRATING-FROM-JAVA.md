@@ -15,7 +15,7 @@ is what the code does.
 | `org.w3c.dom.Document`, `Node`, `Element` | [`dom::Document`](xylogue_dom::Document) and a `Copy` [`NodeId`](xylogue_dom::NodeId) |
 | `org.w3c.dom.DOMException` | [`dom::DomException`](xylogue_dom::DomException) |
 | `javax.xml.stream.XMLStreamReader` (StAX) | [`parser::Reader`](xylogue_parser::Reader) |
-| `org.xml.sax.ContentHandler` + `SAXParser` | [`parser::sax::Handler`](xylogue_parser::sax::Handler) + [`sax::drive`](xylogue_parser::sax::drive) |
+| `org.xml.sax.ContentHandler` + `SAXParser` | [`parser::sax::Handler`](xylogue_parser::sax::Handler) + [`sax::parse`](xylogue_parser::sax::parse) |
 | `org.xml.sax.EntityResolver` | [`parser::resolve::UriResolver`](xylogue_parser::resolve::UriResolver) |
 | `setValidating(true)`, `javax.xml.validation` | [`validate::validate`](xylogue_validate::validate), [`Validator`](xylogue_validate::Validator) |
 | `javax.xml.stream.XMLStreamWriter` | [`serialize::XmlWriter`](xylogue_serialize::XmlWriter) |
@@ -83,7 +83,9 @@ let mut reader = Reader::new("<doc>one<i>two</i></doc>".as_bytes());
 let mut text = String::new();
 while let Some(kind) = reader.advance()? {
   if kind == EventKind::Text {
-    text.push_str(reader.parser().text());
+    if let Some(chars) = reader.parser().event_ref().and_then(|e| e.text()) {
+      text.push_str(chars);
+    }
   }
 }
 assert_eq!(text, "onetwo");
@@ -113,8 +115,10 @@ class Titles extends DefaultHandler {
 ```
 
 ```rust
-use xylogue::parser::sax::{Handler, drive};
-use xylogue::parser::{Parser, Reader};
+use std::convert::Infallible;
+
+use xylogue::parser::sax::{CharactersEvent, Handler, StartElementEvent, parse};
+use xylogue::parser::Reader;
 
 #[derive(Default)]
 struct Titles {
@@ -123,19 +127,22 @@ struct Titles {
 }
 
 impl Handler for Titles {
-  fn start_element(&mut self, parser: &Parser) {
-    self.in_title = parser.local_name() == "title";
+  type Error = Infallible;
+  fn start_element(&mut self, event: StartElementEvent<'_>) -> Result<(), Infallible> {
+    self.in_title = event.pool.resolve(event.name.local()) == "title";
+    Ok(())
   }
-  fn characters(&mut self, text: &str) {
+  fn characters(&mut self, event: CharactersEvent<'_>) -> Result<(), Infallible> {
     if self.in_title {
-      self.found.push(text.to_owned());
+      self.found.push(event.text.to_owned());
     }
+    Ok(())
   }
 }
 
 let mut reader = Reader::new("<books><title>Dune</title><title>Emma</title></books>".as_bytes());
 let mut titles = Titles::default();
-drive(&mut reader, &mut titles)?;
+parse(&mut reader, &mut titles)?;
 
 assert_eq!(titles.found, ["Dune", "Emma"]);
 # Ok::<(), xylogue::Error>(())

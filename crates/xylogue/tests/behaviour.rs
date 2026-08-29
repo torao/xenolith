@@ -152,6 +152,11 @@ fn item(reference: &'static str, question: &'static str, specification: impl Int
   Item { reference, question, specification: specification.into(), observed: Vec::new() }
 }
 
+/// Renders an optional limit as its number, or "unlimited" when there is none.
+fn limit_value<T: std::fmt::Display>(limit: Option<T>) -> String {
+  limit.map_or_else(|| "unlimited".to_string(), |n| n.to_string())
+}
+
 impl Item {
   fn observe(mut self, label: &str, value: impl Into<String>) -> Self {
     self.observed.push(format!("{label} => {}", value.into()));
@@ -367,10 +372,10 @@ fn chosen_by_this_implementation() -> Vec<Item> {
       "how much entity expansion is allowed before a document is refused",
       "lets an implementation impose limits, and says nothing about what they should be",
     )
-    .observe("max nested entity depth", xylogue::parser::Limits::default().max_depth.to_string())
-    .observe("max expansions", xylogue::parser::Limits::default().max_expansions.to_string())
-    .observe("max expanded characters", xylogue::parser::Limits::default().max_expansion_chars.to_string())
-    .observe("max element nesting depth", xylogue::parser::Limits::default().max_element_depth.to_string())
+    .observe("max nested entity depth", limit_value(xylogue::parser::Limits::default().max_depth))
+    .observe("max expansions", limit_value(xylogue::parser::Limits::default().max_expansions))
+    .observe("max expanded characters", limit_value(xylogue::parser::Limits::default().max_expansion_chars))
+    .observe("max element nesting depth", limit_value(xylogue::parser::Limits::default().max_element_depth))
     .observe("these are", "raisable through Limits, and removable with Limits::unlimited()"),
     item("DOM Level 3 Core", "how many nodes one document may hold", "does not say; the DOM has no stated bound")
       .observe("this build allows", format!("{} nodes, the range of the u32 handle", u32::MAX))
