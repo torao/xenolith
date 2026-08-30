@@ -1,0 +1,28 @@
+[package]
+# The crate is named for what it is, the binary for what one types. `cargo install xenolith-cli`
+# puts `xenolith` on the path; the library keeps the plain name for `use xenolith::…`.
+name = "xenolith-cli"
+description = "Command-line XML tools: transform, xpath, validate and format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities", "text-processing"]
+
+[[bin]]
+name = "xenolith"
+path = "src/main.rs"
+
+[dependencies]
+# The whole library, with everything on: a command-line tool has no reason to leave a capability
+# out, and someone reaching for it wants it to just work.
+xenolith = { workspace = true, features = ["encodings", "parse", "icu", "exslt", "xinclude", "xml-base", "xml-id"] }
+xenolith-validate = { workspace = true, features = ["encodings", "xml-id"] }
+# Argument parsing. Only this binary depends on it, so nobody using the library pays for it.
+clap = { workspace = true }
+
+[lints]
+workspace = true

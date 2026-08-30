@@ -27,10 +27,10 @@ mise.toml
 /xmlconf/
 /xmlts*.tar.gz
 
-# The OASIS/Xalan XSLT 1.0 suite, cloned on demand (see xylogue-xslt/tests/conformance.rs)
+# The OASIS/Xalan XSLT 1.0 suite, cloned on demand (see xenolith-xslt/tests/conformance.rs)
 /xslt-conformance/
 
-# What a fuzzing run produces. The seed corpus is in crates/xylogue-fuzz/corpus and is kept;
+# What a fuzzing run produces. The seed corpus is in crates/xenolith-fuzz/corpus and is kept;
 # what libFuzzer collects on top of it is a working set, and a crash is copied into the seeds.
 /fuzz/target/
 /fuzz/corpus/

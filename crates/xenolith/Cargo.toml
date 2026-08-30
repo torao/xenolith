@@ -1,0 +1,75 @@
+[package]
+name = "xenolith"
+description = "A native Rust implementation of XML processing and XSLT 1.0, aiming for parity with Java's XML APIs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+# The facade is the whole of it, so it is the one crate every category is true of: it decodes
+# character encodings, and XSLT is a template language — a listing of 773 crates where a native
+# Rust XSLT processor is worth being visible.
+categories = ["parser-implementations", "text-processing", "encoding", "template-engine"]
+
+[features]
+default = ["encodings", "parse", "icu", "exslt"]
+# EXSLT extension functions for XSLT: xenolith::exslt. Inter-crate dependencies have their
+# default features off (see the feature policy in ROADMAP.md), so the modules are named here —
+# without this the crate would be present with nothing in it, and every EXSLT call would fail.
+exslt = [
+  "dep:xenolith-exslt",
+  "xenolith-exslt/common",
+  "xenolith-exslt/dates",
+  "xenolith-exslt/math",
+  "xenolith-exslt/regexp",
+  "xenolith-exslt/sets",
+  "xenolith-exslt/strings",
+]
+# Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it, a text sort
+# compares by Unicode code point; see `tests/behaviour.rs`.
+icu = ["xenolith-xslt/icu"]
+# Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
+encodings = [
+  "xenolith-core/encodings",
+  "xenolith-parser/encodings",
+  "xenolith-validate/encodings",
+  "xenolith-dom/encodings",
+  "xenolith-xinclude?/encodings",
+  "xenolith-xslt/encodings",
+]
+# Build a DOM from parsed XML: xenolith::dom::build.
+parse = ["xenolith-dom/parse"]
+# XInclude processing: xenolith::xinclude. A resource-fetching layer, so opt-in.
+xinclude = ["dep:xenolith-xinclude"]
+# The asynchronous reader, over tokio's AsyncRead.
+tokio = ["xenolith-parser/tokio"]
+# Per-node base URI computation from xml:base and the entity's system id (XML Base).
+xml-base = ["xenolith-parser/xml-base"]
+# xml:id as an ID-typed attribute, and its NCName/uniqueness checking in validation.
+xml-id = ["xenolith-parser/xml-id", "xenolith-validate/xml-id"]
+
+[dependencies]
+xenolith-core = { workspace = true }
+xenolith-parser = { workspace = true }
+xenolith-validate = { workspace = true }
+xenolith-dom = { workspace = true }
+xenolith-serialize = { workspace = true }
+xenolith-xdm = { workspace = true }
+xenolith-xpath = { workspace = true }
+xenolith-xslt = { workspace = true }
+xenolith-xinclude = { workspace = true, optional = true }
+xenolith-exslt = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+# The end-to-end benchmarks: the facade is where every layer is reachable at once, which is what
+# a caller's own numbers look like. `cargo test --benches` runs each once, so they cannot rot.
+[[bench]]
+name = "pipeline"
+harness = false
+
+[lints]
+workspace = true

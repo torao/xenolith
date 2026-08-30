@@ -10,7 +10,7 @@
 #
 # Needs a nightly toolchain and cargo-fuzz. On Windows the libFuzzer runtime does not load, so
 # run it under WSL or on Linux; the properties themselves are checked everywhere by
-# `cargo test -p xylogue-fuzz`.
+# `cargo test -p xenolith-fuzz`.
 set -euo pipefail
 
 seconds="${1:-60}"
@@ -33,7 +33,7 @@ targets="parse_document build_and_serialize validate_document compile_expression
 
 for target in $targets; do
   mkdir -p "$root/fuzz/corpus/$target"
-  cp "$root/crates/xylogue-fuzz/corpus/$(seeds_for "$target")"/* "$root/fuzz/corpus/$target/"
+  cp "$root/crates/xenolith-fuzz/corpus/$(seeds_for "$target")"/* "$root/fuzz/corpus/$target/"
   echo "===== $target ====="
   (cd "$root" && cargo "+$toolchain" fuzz run "$target" -- -max_total_time="$seconds" -print_final_stats=1)
 done

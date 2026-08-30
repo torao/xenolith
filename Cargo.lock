@@ -1059,33 +1059,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
-name = "xylogue"
+name = "xenolith"
 version = "0.0.0"
 dependencies = [
  "criterion",
- "xylogue-core",
- "xylogue-dom",
- "xylogue-exslt",
- "xylogue-parser",
- "xylogue-serialize",
- "xylogue-validate",
- "xylogue-xdm",
- "xylogue-xinclude",
- "xylogue-xpath",
- "xylogue-xslt",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-exslt",
+ "xenolith-parser",
+ "xenolith-serialize",
+ "xenolith-validate",
+ "xenolith-xdm",
+ "xenolith-xinclude",
+ "xenolith-xpath",
+ "xenolith-xslt",
 ]
 
 [[package]]
-name = "xylogue-cli"
+name = "xenolith-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
- "xylogue",
- "xylogue-validate",
+ "xenolith",
+ "xenolith-validate",
 ]
 
 [[package]]
-name = "xylogue-core"
+name = "xenolith-core"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
@@ -1093,41 +1093,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "xylogue-dom"
+name = "xenolith-dom"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-parser",
+ "xenolith-core",
+ "xenolith-parser",
 ]
 
 [[package]]
-name = "xylogue-exslt"
+name = "xenolith-exslt"
 version = "0.0.0"
 dependencies = [
  "regex",
- "xylogue-core",
- "xylogue-dom",
- "xylogue-xdm",
- "xylogue-xpath",
- "xylogue-xslt",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-xdm",
+ "xenolith-xpath",
+ "xenolith-xslt",
 ]
 
 [[package]]
-name = "xylogue-fuzz"
+name = "xenolith-fuzz"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
- "xylogue-parser",
- "xylogue-serialize",
- "xylogue-validate",
- "xylogue-xdm",
- "xylogue-xpath",
- "xylogue-xslt",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-parser",
+ "xenolith-serialize",
+ "xenolith-validate",
+ "xenolith-xdm",
+ "xenolith-xpath",
+ "xenolith-xslt",
 ]
 
 [[package]]
-name = "xylogue-parser"
+name = "xenolith-parser"
 version = "0.0.0"
 dependencies = [
  "futures-io",
@@ -1135,65 +1135,65 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
- "xylogue-core",
+ "xenolith-core",
 ]
 
 [[package]]
-name = "xylogue-serialize"
+name = "xenolith-serialize"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
+ "xenolith-core",
+ "xenolith-dom",
 ]
 
 [[package]]
-name = "xylogue-validate"
+name = "xenolith-validate"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-parser",
+ "xenolith-core",
+ "xenolith-parser",
 ]
 
 [[package]]
-name = "xylogue-xdm"
+name = "xenolith-xdm"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
+ "xenolith-core",
+ "xenolith-dom",
 ]
 
 [[package]]
-name = "xylogue-xinclude"
+name = "xenolith-xinclude"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
- "xylogue-serialize",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-serialize",
 ]
 
 [[package]]
-name = "xylogue-xpath"
+name = "xenolith-xpath"
 version = "0.0.0"
 dependencies = [
  "proptest",
- "xylogue-core",
- "xylogue-dom",
- "xylogue-xdm",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-xdm",
 ]
 
 [[package]]
-name = "xylogue-xslt"
+name = "xenolith-xslt"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
  "icu_collator",
  "icu_locale_core",
- "xylogue-core",
- "xylogue-dom",
- "xylogue-parser",
- "xylogue-serialize",
- "xylogue-xdm",
- "xylogue-xpath",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-parser",
+ "xenolith-serialize",
+ "xenolith-xdm",
+ "xenolith-xpath",
 ]
 
 [[package]]

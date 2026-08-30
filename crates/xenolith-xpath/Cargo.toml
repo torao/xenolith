@@ -1,0 +1,25 @@
+[package]
+name = "xenolith-xpath"
+description = "XPath 1.0 for xenolith: the lexer, the parser, and the expression tree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+xenolith-core = { workspace = true }
+xenolith-xdm = { workspace = true }
+
+[dev-dependencies]
+xenolith-dom = { workspace = true, features = ["parse"] }
+proptest = "1"
+
+[lints]
+workspace = true

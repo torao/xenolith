@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 # The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
 # rather than by every `cargo build --workspace`. The properties they check are in
-# `crates/xylogue-fuzz`, which is a member and is tested like everything else.
+# `crates/xenolith-fuzz`, which is a member and is tested like everything else.
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -11,7 +11,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/torao/xylogue"
+repository = "https://github.com/torao/xenolith"
 authors = ["TAKAMI Torao"]
 # crates.io allows five keywords, and its search already reads the description — so these are
 # spent on the terms that earn a listing page of their own rather than on repeating the blurb.
@@ -24,18 +24,18 @@ categories = ["parser-implementations", "text-processing"]
 [workspace.dependencies]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
-xylogue-core = { version = "0.0.0", path = "crates/xylogue-core", default-features = false }
-xylogue-parser = { version = "0.0.0", path = "crates/xylogue-parser", default-features = false }
-xylogue-validate = { version = "0.0.0", path = "crates/xylogue-validate", default-features = false }
-xylogue-dom = { version = "0.0.0", path = "crates/xylogue-dom", default-features = false }
-xylogue-serialize = { version = "0.0.0", path = "crates/xylogue-serialize", default-features = false }
-xylogue-xinclude = { version = "0.0.0", path = "crates/xylogue-xinclude", default-features = false }
-xylogue-xdm = { version = "0.0.0", path = "crates/xylogue-xdm", default-features = false }
-xylogue-xpath = { version = "0.0.0", path = "crates/xylogue-xpath", default-features = false }
-xylogue-xslt = { version = "0.0.0", path = "crates/xylogue-xslt", default-features = false }
-xylogue-exslt = { version = "0.0.0", path = "crates/xylogue-exslt", default-features = false }
-xylogue = { version = "0.0.0", path = "crates/xylogue", default-features = false }
-# Argument parsing for the `xylogue` binary. No library crate depends on it.
+xenolith-core = { version = "0.0.0", path = "crates/xenolith-core", default-features = false }
+xenolith-parser = { version = "0.0.0", path = "crates/xenolith-parser", default-features = false }
+xenolith-validate = { version = "0.0.0", path = "crates/xenolith-validate", default-features = false }
+xenolith-dom = { version = "0.0.0", path = "crates/xenolith-dom", default-features = false }
+xenolith-serialize = { version = "0.0.0", path = "crates/xenolith-serialize", default-features = false }
+xenolith-xinclude = { version = "0.0.0", path = "crates/xenolith-xinclude", default-features = false }
+xenolith-xdm = { version = "0.0.0", path = "crates/xenolith-xdm", default-features = false }
+xenolith-xpath = { version = "0.0.0", path = "crates/xenolith-xpath", default-features = false }
+xenolith-xslt = { version = "0.0.0", path = "crates/xenolith-xslt", default-features = false }
+xenolith-exslt = { version = "0.0.0", path = "crates/xenolith-exslt", default-features = false }
+xenolith = { version = "0.0.0", path = "crates/xenolith", default-features = false }
+# Argument parsing for the `xenolith` binary. No library crate depends on it.
 clap = { version = "4", features = ["derive", "wrap_help"] }
 encoding_rs = "0.8"
 # Derives `Display` and `Error` for `ErrorKind`, so each variant owns its own wording and its

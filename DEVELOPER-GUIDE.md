@@ -13,37 +13,37 @@
 
 | Crate | 責務 |
 |---|---|
-| `xylogue-core` | 全層が使う語彙。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI、文字デコード |
-| `xylogue-parser` | XML 1.0 のプルパーサ。DTD（内部・外部サブセット、パラメータ実体）、実体解決、SAX 相当の push アダプタ、sans-I/O コア |
-| `xylogue-validate` | スキーマ非依存の `Validator` / `ErrorListener` と、その最初の実装である DTD 検証器 |
-| `xylogue-dom` | アリーナ木。`Vec<NodeSlot>` + `Copy` な `NodeId`。W3C DOM Level 3 Core の名前を保つ |
-| `xylogue-serialize` | DOM 部分木から整形式 XML へ。エスケープ、名前空間修復、StAX 相当の `XmlWriter` |
-| `xylogue-xinclude` | `xi:include` の展開。XPointer の framework / `element()` / `xmlns()` |
-| `xylogue-xdm` | XPath データモデル。`Model` トレイトと DOM 実装 |
-| `xylogue-xpath` | XPath 1.0。字句、構文、評価器、コア関数、拡張関数の登録機構 |
-| `xylogue-xslt` | XSLT 1.0。パターン、スタイルシート、エンジン、`xsl:output` |
-| `xylogue-exslt` | EXSLT 各モジュール。エンジンには組み込まず、拡張関数として登録する |
-| `xylogue` | ファサード。全層の再輸出と `javax.xml.transform` 相当の `transform` モジュール |
-| `xylogue-cli` | コマンドライン。実行ファイル名は `xylogue` |
-| `xylogue-fuzz` | ファジングで検査する性質と、その種コーパス |
+| `xenolith-core` | 全層が使う語彙。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI、文字デコード |
+| `xenolith-parser` | XML 1.0 のプルパーサ。DTD（内部・外部サブセット、パラメータ実体）、実体解決、SAX 相当の push アダプタ、sans-I/O コア |
+| `xenolith-validate` | スキーマ非依存の `Validator` / `ErrorListener` と、その最初の実装である DTD 検証器 |
+| `xenolith-dom` | アリーナ木。`Vec<NodeSlot>` + `Copy` な `NodeId`。W3C DOM Level 3 Core の名前を保つ |
+| `xenolith-serialize` | DOM 部分木から整形式 XML へ。エスケープ、名前空間修復、StAX 相当の `XmlWriter` |
+| `xenolith-xinclude` | `xi:include` の展開。XPointer の framework / `element()` / `xmlns()` |
+| `xenolith-xdm` | XPath データモデル。`Model` トレイトと DOM 実装 |
+| `xenolith-xpath` | XPath 1.0。字句、構文、評価器、コア関数、拡張関数の登録機構 |
+| `xenolith-xslt` | XSLT 1.0。パターン、スタイルシート、エンジン、`xsl:output` |
+| `xenolith-exslt` | EXSLT 各モジュール。エンジンには組み込まず、拡張関数として登録する |
+| `xenolith` | ファサード。全層の再輸出と `javax.xml.transform` 相当の `transform` モジュール |
+| `xenolith-cli` | コマンドライン。実行ファイル名は `xenolith` |
+| `xenolith-fuzz` | ファジングで検査する性質と、その種コーパス |
 
 `fuzz/` はワークスペース外に置く。libFuzzer のターゲットは nightly を要するため、通常のビルドに巻き込まない。
 
-この表は [`crates/xylogue/tests/guide.rs`](crates/xylogue/tests/guide.rs) が検査する。クレートを増減させた
+この表は [`crates/xenolith/tests/guide.rs`](crates/xenolith/tests/guide.rs) が検査する。クレートを増減させた
 まま表を放置すればテストが落ちる。
 
 ## Where to start reading
 
-**`xylogue-xdm` から読む。** 全クレート中で最も小さいが、この設計の中心的な主張がそこにしかない — XPath は
+**`xenolith-xdm` から読む。** 全クレート中で最も小さいが、この設計の中心的な主張がそこにしかない — XPath は
 DOM の上ではなく**データモデル**の上で動く。隣接テキストの併合、名前空間ノードの合成、文書順の全順序。ここが
 腑に落ちればエンジンの 2,000 行超が読め、落ちなければどこも読めない。
 
-以降は `xylogue-dom` → `xylogue-xpath` → `xylogue-xslt` の順。**`xylogue-parser` は最後でよい。** 最も
+以降は `xenolith-dom` → `xenolith-xpath` → `xenolith-xslt` の順。**`xenolith-parser` は最後でよい。** 最も
 難しいが、最も外部検証が効いており、実装を疑う理由ができるまで読む必要はない。
 
 各クレートの `lib.rs` 冒頭は方向づけとして書いてある。まずそこを読み、そこが指すモジュールへ進む。
 
-**テスト名は文で書いてある。** `cargo test -p xylogue-xdm -- --list` のように並べれば、その層が何を約束して
+**テスト名は文で書いてある。** `cargo test -p xenolith-xdm -- --list` のように並べれば、その層が何を約束して
 いるかを名前だけで追える。
 
 ## Invariants
@@ -88,7 +88,7 @@ CI と同じものをローカルで走らせられる。プッシュ前にこ�
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features
 cargo test --workspace --all-features
-cargo test --workspace --exclude xylogue-cli --exclude xylogue-fuzz --no-default-features
+cargo test --workspace --exclude xenolith-cli --exclude xenolith-fuzz --no-default-features
 cargo doc --workspace --no-deps --all-features
 cargo build --workspace --all-features    # MSRV 1.85 のツールチェインで
 ```
@@ -100,20 +100,20 @@ cargo build --workspace --all-features    # MSRV 1.85 のツールチェイン�
 
 ```bash
 # W3C XML 適合スイート（パーサと検証器）
-XMLCONF=xmlconf cargo test -p xylogue-parser --test conformance -- --nocapture
+XMLCONF=xmlconf cargo test -p xenolith-parser --test conformance -- --nocapture
 
 # OASIS/Xalan XSLT 適合スイート
 git clone --depth 1 https://github.com/apache/xalan-test.git xslt-conformance
-XSLTCONF=xslt-conformance cargo test -p xylogue-xslt --test conformance -- --nocapture
+XSLTCONF=xslt-conformance cargo test -p xenolith-xslt --test conformance -- --nocapture
 
 # Java との差分テスト（JDK 11 以降が要る）
-XYLOGUE_JAVA=java cargo test -p xylogue-xpath --test differential -- --nocapture
+XYLOGUE_JAVA=java cargo test -p xenolith-xpath --test differential -- --nocapture
 
 # 仕様が未規定の箇所について、この実装が何を返すかの実測レポート
-cargo test -p xylogue --all-features --test behaviour -- --nocapture
+cargo test -p xenolith --all-features --test behaviour -- --nocapture
 
 # ベンチマーク
-cargo bench -p xylogue
+cargo bench -p xenolith
 ```
 
 ファジングは nightly と cargo-fuzz を要し、**Windows では libFuzzer ランタイムが読み込めない**ため WSL か
@@ -123,7 +123,7 @@ Linux で走らせる。
 ./fuzz/short-run.sh 60
 ```
 
-検査している性質そのものは `crates/xylogue-fuzz` にあり、種コーパスを同じ性質に通すテストは stable の
+検査している性質そのものは `crates/xenolith-fuzz` にあり、種コーパスを同じ性質に通すテストは stable の
 全プラットフォームで走る。ファザーが見つけた入力は種コーパスへ追加し、以後そのテストが再発を防ぐ。
 
 **修正を入れたら、その修正を外してテストが落ちることを確かめる。** 通ることだけでは、そのテストが本当にその
@@ -135,19 +135,19 @@ Linux で走らせる。
 
 | Layer | 外部の証拠 |
 |---|---|
-| `xylogue-parser` | W3C XML 適合スイート（整形式判定） |
-| `xylogue-validate` | 同スイートの invalid 群。検出できない 8 件は理由付きで `KNOWN_DEVIATIONS` に記録 |
-| `xylogue-xpath` | JDK の `javax.xml.xpath` との差分テスト、プロパティテスト、ファジング |
-| `xylogue-xslt` | OASIS/Xalan 適合スイート |
-| `xylogue-dom` / `xylogue-serialize` | ファジングの往復性質（書いたものが読み戻せ、同じ木になる） |
-| `xylogue-xdm` / `xylogue-xinclude` / `xylogue-exslt` / `xylogue-cli` | 自前のテストのみ |
+| `xenolith-parser` | W3C XML 適合スイート（整形式判定） |
+| `xenolith-validate` | 同スイートの invalid 群。検出できない 8 件は理由付きで `KNOWN_DEVIATIONS` に記録 |
+| `xenolith-xpath` | JDK の `javax.xml.xpath` との差分テスト、プロパティテスト、ファジング |
+| `xenolith-xslt` | OASIS/Xalan 適合スイート |
+| `xenolith-dom` / `xenolith-serialize` | ファジングの往復性質（書いたものが読み戻せ、同じ木になる） |
+| `xenolith-xdm` / `xenolith-xinclude` / `xenolith-exslt` / `xenolith-cli` | 自前のテストのみ |
 
 ## Adding to the workspace
 
 **クレートを足す場合。** ワークスペースの `[workspace.dependencies]` に `default-features = false` で登録し、
-各利用側で必要な feature を名指す。ライブラリの feature を丸ごと名指すクレート（`xylogue-cli`、
-`xylogue-fuzz`）は、CI の `--no-default-features` 実行から除外する。feature の合流で最小構成が組まれなくなる
-ためである。Layout の表と `crates/xylogue/tests/guide.rs` も更新する。
+各利用側で必要な feature を名指す。ライブラリの feature を丸ごと名指すクレート（`xenolith-cli`、
+`xenolith-fuzz`）は、CI の `--no-default-features` 実行から除外する。feature の合流で最小構成が組まれなくなる
+ためである。Layout の表と `crates/xenolith/tests/guide.rs` も更新する。
 
 **XSLT の命令を足す場合。** `engine.rs` の `instruction` に分岐を足し、同じ名前を `INSTRUCTIONS` にも足す。
 `element-available()` はその配列から答える。**分岐の中身は関数呼び出しにする** — デバッグビルドでは分岐ごとの

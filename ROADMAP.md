@@ -1,4 +1,4 @@
-# xylogue ロードマップ
+# xenolith ロードマップ
 
 Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API（JAXP: DOM, SAX, StAX, javax.xml.xpath, javax.xml.transform）相当の機能セットを目標とする。
 
@@ -17,7 +17,7 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 | [XPath 1.0](https://www.w3.org/TR/1999/REC-xpath-19991116/) | W3C REC 1999-11-16 | 必須（XSLT の前提） |
 | [XSLT 1.0](https://www.w3.org/TR/1999/REC-xslt-19991116) | W3C REC 1999-11-16 | 必須（ゴール） |
 | XML Serialization (xsl:output の xml/html/text) | [XSLT 1.0 §16](https://www.w3.org/TR/1999/REC-xslt-19991116#output) | 必須 |
-| DTD 妥当性検証（Validity Constraints 全件） | [XML 1.0 §2–§5](https://www.w3.org/TR/2008/REC-xml-20081126/#sec-documents) | **必須**（決定 1、`xylogue-validate`） |
+| DTD 妥当性検証（Validity Constraints 全件） | [XML 1.0 §2–§5](https://www.w3.org/TR/2008/REC-xml-20081126/#sec-documents) | **必須**（決定 1、`xenolith-validate`） |
 | [DOM Level 3 Core](https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/) | W3C REC 2004-04-07 | インタフェースを踏襲（決定 3） |
 | [XInclude 1.0 (Second Edition)](https://www.w3.org/TR/2006/REC-xinclude-20061115/) | W3C REC 2006-11-15 | **必須**（決定 6、feature + 実行時切替） |
 | [XPointer Framework](https://www.w3.org/TR/2003/REC-xptr-framework-20030325/) / [`element()`](https://www.w3.org/TR/2003/REC-xptr-element-20030325/) / [`xmlns()`](https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/) | W3C REC 2003-03-25 | 必須（XInclude の `@xpointer` に要る） |
@@ -43,7 +43,7 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 - スクレイピング用途で意味があるのは「ブラウザと同じ木」であって「エラーを飲み込む木」ではない。WHATWG の tree construction は insertion mode が 20 以上あり、`<table>` 内の `<tbody>` 暗黙挿入や adoption agency algorithm（誤ネストした装飾要素の再構築）まで含む。**中途半端な寛容さは、ブラウザで確認した XPath が静かに違う結果を返す**という最悪の形で表面化する
 - その完全準拠版は `html5ever` が既に提供している。再実装の価値がない
 
-**HTML を扱いたい場合**: Phase 3 で DOM が入った後、`html5ever` の出力を xylogue の DOM に流し込めば、XPath / XSLT 資産はそのまま使える。パーサは strict なまま保てる。これは利用側の統合であって、本ロードマップの作業項目ではない。
+**HTML を扱いたい場合**: Phase 3 で DOM が入った後、`html5ever` の出力を xenolith の DOM に流し込めば、XPath / XSLT 資産はそのまま使える。パーサは strict なまま保てる。これは利用側の統合であって、本ロードマップの作業項目ではない。
 
 ### 非機能要件（初期から意識するもの）
 
@@ -133,7 +133,7 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 
 ### 2.2 API 層（Java パリティ）
 
-| Java | xylogue 対応 | 備考 |
+| Java | xenolith 対応 | 備考 |
 |---|---|---|
 | SAX2 `ContentHandler` ほか | `Handler` トレイト（push） | 実装は pull の上に薄く載せる |
 | StAX `XMLStreamReader` | `Reader` イテレータ（pull） | **こちらを一次 API とする** |
@@ -321,21 +321,21 @@ let doc = ParserConfig::new()
 ### クレート構成（Cargo ワークスペース）
 
 ```
-xylogue/
-├── xylogue-core/       # QName, 名前プール, URI, エラー, 文字クラス, エンコーディング
-├── xylogue-parser/     # pull パーサ, DTD の構文解析, 実体解決, 名前空間スタック
-├── xylogue-validate/   # 検証レイヤー: スキーマ非依存の Validator/ErrorListener + DTD 検証器
-├── xylogue-relaxng/    # 将来トラック: RELAX NG 検証器（微分アルゴリズム、Validator を実装、決定 8）
-├── xylogue-xsd/        # 将来トラック: XSD 検証器（Validator を実装、決定 8）
-├── xylogue-dom/        # DOM Level 3 Core（W3C IDL 準拠）のツリー
-├── xylogue-xinclude/   # XInclude + XPointer(framework/element/xmlns)。ツリー後処理
-├── xylogue-xdm/        # XPath データモデルのビュー（DOM 等の背後実装を抽象化するトレイト）
-├── xylogue-xpath/      # 字句・構文・意味解析・評価器・コア関数
-├── xylogue-serialize/  # xml/html/text シリアライザ, 名前空間修復
-├── xylogue-xslt/       # スタイルシートコンパイラ + 実行器
-├── xylogue-exslt/      # EXSLT 各モジュール（拡張関数機構の上に載る）
-├── xylogue-cli/        # xylogue transform / xylogue xpath / xylogue validate
-└── xylogue/            # ファサード（JAXP 相当の入口）
+xenolith/
+├── xenolith-core/       # QName, 名前プール, URI, エラー, 文字クラス, エンコーディング
+├── xenolith-parser/     # pull パーサ, DTD の構文解析, 実体解決, 名前空間スタック
+├── xenolith-validate/   # 検証レイヤー: スキーマ非依存の Validator/ErrorListener + DTD 検証器
+├── xenolith-relaxng/    # 将来トラック: RELAX NG 検証器（微分アルゴリズム、Validator を実装、決定 8）
+├── xenolith-xsd/        # 将来トラック: XSD 検証器（Validator を実装、決定 8）
+├── xenolith-dom/        # DOM Level 3 Core（W3C IDL 準拠）のツリー
+├── xenolith-xinclude/   # XInclude + XPointer(framework/element/xmlns)。ツリー後処理
+├── xenolith-xdm/        # XPath データモデルのビュー（DOM 等の背後実装を抽象化するトレイト）
+├── xenolith-xpath/      # 字句・構文・意味解析・評価器・コア関数
+├── xenolith-serialize/  # xml/html/text シリアライザ, 名前空間修復
+├── xenolith-xslt/       # スタイルシートコンパイラ + 実行器
+├── xenolith-exslt/      # EXSLT 各モジュール（拡張関数機構の上に載る）
+├── xenolith-cli/        # xenolith transform / xenolith xpath / xenolith validate
+└── xenolith/            # ファサード（JAXP 相当の入口）
 ```
 
 ### 主要な設計判断（Phase 0 で確定させる）
@@ -349,7 +349,7 @@ xylogue/
 6. **RTF の表現**: 独立した小さなアリーナ（`DocumentFragment` ではなく専用ルート）とし、型システム上 node-set と区別する。ただし `exsl:node-set()`（決定 5）でゼロコピーに node-set へ昇格できるよう、**内部表現は通常のツリーと同一**にして型タグだけで区別する。
 7. **拡張関数の登録機構を先に作る**: EXSLT を最初から入れる（決定 5）なら、EXSLT 自身をその機構の最初の利用者にする。組み込みハードコードにしない。
 8. **パーサ本体は I/O を持たない（Sans-I/O）**: 決定 7。下記。
-9. **検証はスキーマ非依存レイヤー（決定 8）**: 検証は DTD だけではない。`xylogue-validate` に**スキーマ言語に依存しない `Validator` / `ErrorListener`** を置き、DTD 検証器をその最初の実装とする。妥当性エラーは recoverable、整形式エラーは fatal（Java の `setValidating(true)` と同じ切り分け）。XSD は同じ `Validator` を実装する将来トラック（`xylogue-xsd`、本線 XSLT 1.0 完了後、まず Structures + 主要 datatypes の実用サブセット、identity constraint / redefine / PSVI は当初除外）。この設計により XSD を後付けしても既存を作り直さない。
+9. **検証はスキーマ非依存レイヤー（決定 8）**: 検証は DTD だけではない。`xenolith-validate` に**スキーマ言語に依存しない `Validator` / `ErrorListener`** を置き、DTD 検証器をその最初の実装とする。妥当性エラーは recoverable、整形式エラーは fatal（Java の `setValidating(true)` と同じ切り分け）。XSD は同じ `Validator` を実装する将来トラック（`xenolith-xsd`、本線 XSLT 1.0 完了後、まず Structures + 主要 datatypes の実用サブセット、identity constraint / redefine / PSVI は当初除外）。この設計により XSD を後付けしても既存を作り直さない。
 
 ---
 
@@ -384,7 +384,7 @@ xylogue/
 
 - ワークスペース（edition 2024 / MSRV 1.85 / MIT OR Apache-2.0）、`unsafe_code = "forbid"`
 - CI: fmt / clippy(`-D warnings`) / doc / 3 OS テスト / feature 組み合わせ / MSRV ビルド
-- `xylogue-core`
+- `xenolith-core`
   - `error`: `Error` / `ErrorKind` / `Severity` / `Location`（**実体**単位の system ID + 行・列・オフセット）
   - `chars`: XML 1.0 5th ed の `Char` / `NameStartChar` / `NameChar` / `PubidChar`、`Name` / `NCName` / `Nmtoken` 検証、QName 分解
   - `name`: `NamePool`（インターン、予約名の `NameId` は定数）、`ExpandedName`、`QName`
@@ -398,7 +398,7 @@ xylogue/
 - `CharStream`: `Decoder` の上に載る文字ソース。符号化判定（Appendix F）、`\r\n` / `\r` の改行正規化（**チャンク境界をまたぐ CR LF を含む**）、`Char` 検査、行・列・オフセット追跡、消費済みバッファの圧縮
 - **消費は `advance` を呼ぶまで起きない**。不完全トークンは何もせず次の入力を待ち、トークン先頭から再スキャンする（決定 7 の再開方式）
 - `Entity` / `EntityStack`: 実体ごとの system ID と基底 URI、位置報告は最内実体、`Limits`（深さ・展開回数・展開文字数）、WFC "No Recursion" の検出
-- **成果物**: `xylogue-parser` クレート（テスト 26 + doctest 7）
+- **成果物**: `xenolith-parser` クレート（テスト 26 + doctest 7）
 
 **1b. Sans-I/O トークナイザ／パーサコア** ✅ 完了
 - `scan`: トークン境界の探索のみを行う純粋関数。未完なら何も消費せず「入力不足」を返す
@@ -445,14 +445,14 @@ xylogue/
 
 **実装方式（決定: 完全ストリーミング / 再パース）**: DTD パーサを **DTD バッファに対する再入可能関数**にする。内部 PE 参照はその場で値を融合（`%ref;` を値で置換）して読み進める。**外部 PE / 外部サブセットの取得点で `NeedExternalPe` / `NeedExternalSubset` を返して中断**し、ドライバが `NeedEntity` 経由で取得、取得内容をバッファに融合してから**先頭から再パース**する。再パースにより宣言途中での中断・再開を回避しつつ、宣言内 PE も文字列融合で扱える（DTD は小さいので再パースのコストは許容）。内部サブセット（PE は宣言間のみ、条件セクション不可）と外部サブセット（PE は宣言内も可、条件セクション可）はバッファ境界で区別する。
 
-**2b. 妥当性検証**（決定 1・8、`xylogue-validate`）✅ 完了
+**2b. 妥当性検証**（決定 1・8、`xenolith-validate`）✅ 完了
 - **スキーマ非依存の検証インタフェース**: `Validator`（イベント列／後の DOM 木を受け取る）と `ErrorListener`（warning / error(recoverable) / fatal）。DTD 検証器をその最初の実装に
 - parser が DTD モデル（`Dtd` / `ContentSpec` / `AttDef` …）を公開 API として提供（`pub`、`Dtd: Clone`）
 - 内容モデルの Glushkov オートマトンによるコンパイルと照合、決定性制約（付録 E）の検査
 - 属性の妥当性、ID の一意性・IDREF 解決、ルート要素名の一致
 - `ErrorListener` 経由の recoverable エラー報告と継続。`CollectErrors` / `FailFast` を同梱
-- ファサードから `xylogue::validate` として再エクスポート
-- **成果物**: `xylogue-validate` クレート（`Validator` / `Schema` / `ErrorListener` / `DtdValidator`。テスト 5 + 統合 10 + doctest 1）
+- ファサードから `xenolith::validate` として再エクスポート
+- **成果物**: `xenolith-validate` クレート（`Validator` / `Schema` / `ErrorListener` / `DtdValidator`。テスト 5 + 統合 10 + doctest 1）
 - **完了条件**: xmlconf の invalid 群 **89/97 を検出**（0 失敗）。残る 8 件は特殊な妥当性制約として `KNOWN_DEVIATIONS` に理由付きで記録 — Proper Group / PE Nesting ×5、standalone トークン化正規化 ×2、既定値中の実体宣言順 ×1（いずれも本線の検証は全通過）
 
 **2c. XML Base / xml:id**（決定 6）✅ 完了
@@ -467,14 +467,14 @@ xylogue/
 
 規模が大きいため、Phase 1・2 と同様にサブフェーズへ分割し、各サブフェーズの終わりにコミットする。
 
-**3a. アリーナツリーとノードモデル**（決定 1・3、`xylogue-dom`）✅ 完了
+**3a. アリーナツリーとノードモデル**（決定 1・3、`xenolith-dom`）✅ 完了
 - アリーナ（`Vec<NodeSlot>` + `NodeId(u32)`）を `Document` が所有。ノードハンドルは `Copy` の `NodeId`
 - ノード種別（`NodeType`、DOM `nodeType` コード）と種別ごとのペイロード（Element/Text/CDATA/Comment/PI/Document/DocumentType/DocumentFragment）
 - 構築（`create_element` / `create_element_ns` / `create_text_node` / `create_comment` / `create_cdata_section` / `create_processing_instruction` / `create_document_type` / `create_document_fragment`）
 - 走査（parent / first_child / last_child / previous_sibling / next_sibling / children / document_element / doctype）と、連鎖読み取り用の借用ハンドル `NodeRef`
 - 名前・値（node_name / node_value / local_name / prefix / namespace_uri / text_content）、属性の get/set/remove（最小）
 - 変更の基礎（append_child / insert_before / remove_child、サイクル・コンテナ・reference 検査）と `DomException` コード体系
-- **成果物**: `xylogue-dom` クレート（テスト 12 + doctest 3）。ファサードから `xylogue::dom`
+- **成果物**: `xenolith-dom` クレート（テスト 12 + doctest 3）。ファサードから `xenolith::dom`
 - **完了条件**: 木の構築・走査・値取得・基本的な変更が通る（本サブフェーズのユニット/doctest）
 
 **3b. 変更 API・live コレクション・名前空間**（`DOMException` を全面適用）✅ 完了
@@ -483,30 +483,30 @@ xylogue/
 - **live コレクション**: `NodeList`（`child_nodes` / `get_elements_by_tag_name(_ns)`、`*` ワイルドカード対応）と `NamedNodeMap`（`attributes`）。借用ごとに木を評価して live 性を得る
 - `get_element_by_id`（`set_id_attribute` で印を付けた ID を文書順で探索。3c で DTD / xml:id を印付け）
 - `create_element_ns` / `create_attribute_ns` / `set_attribute_ns` の名前空間検査（NAMESPACE_ERR: 接頭辞のみで名前空間なし・`xml` / `xmlns` の不整合）
-- **成果物**: `xylogue-dom` に変更 API・コレクション・名前空間検査を追加（テスト 25 + doctest 4）
+- **成果物**: `xenolith-dom` に変更 API・コレクション・名前空間検査を追加（テスト 25 + doctest 4）
 - **完了条件**: 変更・コレクション・名前空間・ID の各操作が本サブフェーズのテストで通る
 
 **3c. DocumentBuilder（パース → DOM）**✅ 完了
-- パーサのイベント列から DOM を構築（`xylogue-dom` の `build` モジュール、feature `parse`）: 要素＋属性、テキスト／CDATA／コメント／PI ノード、`DOCTYPE`。パーサが解決した名前空間を要素・属性名へ引き継ぐ
+- パーサのイベント列から DOM を構築（`xenolith-dom` の `build` モジュール、feature `parse`）: 要素＋属性、テキスト／CDATA／コメント／PI ノード、`DOCTYPE`。パーサが解決した名前空間を要素・属性名へ引き継ぐ
 - **ID 型属性を構築時に印付け**: `xml:id`、および DTD が `ID` 宣言した属性を `set_id_attribute` でマーク → `get_element_by_id` が動く
 - **基底 URI の取り込み（XML Base）**: 各要素の実効基底 URI（`xml:base` と system id から解決済み）を interned で記録し、`Document::base_uri()`（DOM `baseURI`）で取得。属性は所有要素、テキスト等は最寄り要素の基底を継承、無ければ文書の基底へフォールバック
-- `parse(source)` / `parse_reader(reader)`（resolver・limits・system id は reader 経由）。ファサードから `xylogue::dom::build`（既定で有効）
+- `parse(source)` / `parse_reader(reader)`（resolver・limits・system id は reader 経由）。ファサードから `xenolith::dom::build`（既定で有効）
 - feature 構成: `parse`（parser 依存＋`xml-base`/`xml-id` を引き込む）、`encodings`（weak 転送）。DOM 単体（parser なし）ビルドは維持
 - **成果物**: `build` モジュールと `base_uri`（ユニット +1、統合テスト 10）
 - **完了条件**: 代表的な文書（名前空間・DTD・PI/コメント/CDATA・xml:id・xml:base）が DOM に載り、走査・ID 検索・基底 URI 取得が通る
 
-**3d. シリアライザ**（`xylogue-serialize`）✅ 完了
+**3d. シリアライザ**（`xenolith-serialize`）✅ 完了
 - `Serializer`（ビルダー: `with_xml_declaration` / `with_standalone` / `with_indent`）で DOM 部分木を XML テキストへ。`to_string` と `write<W: io::Write>`
 - **エスケープ**: テキスト（`& < >`、`\r`）と属性値（`& < "`、`\t \n \r` を文字参照）、CDATA の `]]>` 分割
 - **名前空間修復**: 宣言が in-scope に無い接頭辞・既定名前空間を要素に補って整形式化（`create_element_ns` のみで作った木も直列化可能）。既存の xmlns 属性は重複させない
 - **indent**: 要素内容のみ字下げ（文字データを含む要素はインラインで折り返さない）、PI・コメント・DOCTYPE
-- **成果物**: `xylogue-serialize` クレート（ユニット 3 + 統合 9 + doctest 2）。ファサードから `xylogue::serialize`
+- **成果物**: `xenolith-serialize` クレート（ユニット 3 + 統合 9 + doctest 2）。ファサードから `xenolith::serialize`
 - **完了条件**: パース → DOM → 直列化が妥当な XML を出し、代表的な構造・名前空間・エスケープが往復する
 - **後続に回した点**: 出力は **UTF-8**。非 UTF / UTF-16 のバイト出力（`encoding_rs` の `encode` は UTF-16 を UTF-8 化するため独自処理が要る）は別途。DOCTYPE の public/system id は現状ビルダーが取り込まない（パーサが未公開）ため往復で欠落 → 3e で解消候補
 
 **3e. push/StAX アダプタとラウンドトリップ**✅ 完了
-- **SAX 相当の push アダプタ**（`xylogue-parser` の `sax` モジュール）: `Handler` トレイト（既定実装つき）と `drive(reader, handler)`。要素イベントは `&Parser` を渡し、名前・名前空間・属性をアクセサで読む
-- **StAX Writer**（`xylogue-serialize` の `XmlWriter`）: `write_start_element` / `write_attribute` / `write_characters` / `write_cdata` / `write_comment` / `write_processing_instruction` / `write_end_element`。開始タグ直後の終了は `<a/>` に畳む。エスケープは自動
+- **SAX 相当の push アダプタ**（`xenolith-parser` の `sax` モジュール）: `Handler` トレイト（既定実装つき）と `drive(reader, handler)`。要素イベントは `&Parser` を渡し、名前・名前空間・属性をアクセサで読む
+- **StAX Writer**（`xenolith-serialize` の `XmlWriter`）: `write_start_element` / `write_attribute` / `write_characters` / `write_cdata` / `write_comment` / `write_processing_instruction` / `write_end_element`。開始タグ直後の終了は `<a/>` に畳む。エスケープは自動
 - **DOCTYPE の外部 ID 往復を解消**: パーサに `doctype_public_id()` / `doctype_system_id()` を追加し、ビルダーが DocumentType に取り込む → シリアライザで往復
 - **成果物**: `sax` モジュール（ユニット 2 + doctest 1）、`XmlWriter`（ユニット 5 + doctest 1）、往復統合テスト
 - **完了条件（Phase 3 全体）✅**: パース → DOM → 直列化のラウンドトリップが情報を落とさない（名前空間・属性・混在内容・コメント・PI・CDATA・DOCTYPE 外部 ID を往復で確認）
@@ -516,14 +516,14 @@ xylogue/
 
 Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る後処理層。規模が大きいためサブフェーズに分割する。
 
-**3.5a. XInclude コア**（`xylogue-xinclude`）✅ 完了
+**3.5a. XInclude コア**（`xenolith-xinclude`）✅ 完了
 - `xi:include` の `parse="xml"`（全体・文書要素を取り込み）/ `parse="text"`（`encoding` で復号）
 - **href を基底 URI に対して解決**（3c の `base_uri` の上に載る）。取り込みは `import_node`（DOM に追加したクロス文書ディープコピー）で
 - **`xi:fallback`**: 取得失敗（リソースエラー）時に使用。fallback 内の `xi:include` も展開。fallback 無しの失敗・取り込みループ・誤配置 fallback は致命（`ErrorKind::XInclude` を追加）
 - **再帰処理**（取り込んだ文書内の `xi:include` も展開）、ループ検出、深さ・取得数の上限（`with_max_depth` / `with_max_includes`）
 - **base URI fixup**（`with_base_fixup`、既定 ON/OFF 双方をテスト）: 取り込んだ要素に `xml:base` を付与して基底を保存
 - **取得は `Loader` トレイト経由**（既定で何も取得しない = fetch 攻撃面を持たない）。crate = feature `xinclude`（ファサードで opt-in）
-- **成果物**: `xylogue-xinclude` クレート（統合テスト 9 + doctest 1）、DOM に `import_node` と `build::parse_with_system_id`、パーサ doctype 外部 ID 公開
+- **成果物**: `xenolith-xinclude` クレート（統合テスト 9 + doctest 1）、DOM に `import_node` と `build::parse_with_system_id`、パーサ doctype 外部 ID 公開
 - **完了条件**: 取り込み・再帰・text・fallback・ループ・上限・base fixup(ON/OFF) が通る
 
 **3.5b. XPointer**（部分選択）✅ 完了
@@ -547,21 +547,21 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 規模が大きいためサブフェーズに分割する（決定 3: XDM をツリーと分離し `trait` に対して評価器を動かす／名前空間ノードは XDM 側で合成。決定 4: AST を軸走査＋述語へ）。
 
-**4a. XDM（データモデル）**（`xylogue-xdm`）✅ 完了
+**4a. XDM（データモデル）**（`xenolith-xdm`）✅ 完了
 - 7 ノード型（root/element/attribute/namespace/text/comment/PI）を表す `Model` トレイト（`type Node` でツリー実装を抽象化）。`NodeKind` / `ExpandedName`
 - **DOM 実装 `DomModel`**（`&Document` を借用、書き換えない）: 隣接 text/CDATA を 1 テキストノードに結合、**名前空間ノードの合成**（in-scope 宣言＋暗黙の `xml`、xmlns 属性は属性軸から除外）、各ノード型の string-value と expanded-name、属性の親＝所有要素
 - **文書順**を構築時に全ノードへ付番（要素→名前空間ノード→属性→子の順）、`document_order` で比較
-- DOM に `owner_element`（属性の所有要素）を追加。ファサードから `xylogue::xdm`
-- **成果物**: `xylogue-xdm` クレート（統合テスト 8 + doctest 1）
+- DOM に `owner_element`（属性の所有要素）を追加。ファサードから `xenolith::xdm`
+- **成果物**: `xenolith-xdm` クレート（統合テスト 8 + doctest 1）
 - **完了条件**: 親子・兄弟・属性・名前空間・文書順・string-value・expanded-name がトレイト越しに辿れる
 
-**4b. 字句・構文解析**（`xylogue-xpath`）✅ 完了
+**4b. 字句・構文解析**（`xenolith-xpath`）✅ 完了
 - **トークナイザ**: XPath 1.0 §3.7 の文脈依存規則を字句段階で解決 — `*` は名前テスト位置なら wildcard・オペランドの後なら乗算、`and`/`or`/`div`/`mod` は演算子位置でのみ演算子、`::` が続けば軸名、`(` が続けば NodeType か関数名。パーサは曖昧さのないトークンだけを見る
 - **文法 → AST**（再帰下降、優先順位テーブル）: OrExpr〜UnaryExpr、UnionExpr、PathExpr／FilterExpr、13 軸、全ノードテスト、述語、関数呼び出し、変数参照
 - **略記を AST 構築時に展開**: `//`→`descendant-or-self::node()`、`.`→`self::node()`、`..`→`parent::node()`、`@x`→`attribute::x`、軸省略→`child::`。評価器（4c）は単一の平坦な形だけを扱えばよい
 - **`Display`** が展開後の形を XPath として書き戻す（二項式は括弧付きで優先順位が見える）→ テストの検証手段
 - エラーは `ErrorKind::XPath`（core に追加）で式中の位置を示す
-- **成果物**: `xylogue-xpath` クレート（ユニット 7 + 統合 13 + doctest 3）。ファサードから `xylogue::xpath`
+- **成果物**: `xenolith-xpath` クレート（ユニット 7 + 統合 13 + doctest 3）。ファサードから `xenolith::xpath`
 - **完了条件**: 略記・軸・ノードテスト・述語・優先順位・関数/変数/リテラルが AST になり、エラーが位置を示す
 
 **4c. 評価器コア**✅ 完了
@@ -604,26 +604,26 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 - **`Environment` を `Namespaces` / `Variables` に分割** — Java が `NamespaceContext` と `XPathVariableResolver` を別インタフェースにしているのに合わせた。設計上も筋が良い: 名前空間束縛は文字列 2 つで木に依存しないのでコンパイル時に確定でき、変数はノード集合を持ちうるので確定できない
 - **意図的な差異 2 点**（クレート doc に明記）: Java は戻り値型を先に指定してキャストするが、本実装は `Value` が型を持ち要求時に変換する（XPath の変換規則は演算子が使うものと同一なので自然）。`XPathFunctionResolver` 相当は未提供 — 拡張関数は XSLT と同時に入れる
-- `Value::nodes()` / `into_nodes()` を追加。`parse` / `evaluate` は AST を自分で保持する呼び出し側（XSLT）向けの下位 API として残す。ファサードから `xylogue::xpath`
+- `Value::nodes()` / `into_nodes()` を追加。`parse` / `evaluate` は AST を自分で保持する呼び出し側（XSLT）向けの下位 API として残す。ファサードから `xenolith::xpath`
 - **プロパティテスト**（proptest）: 任意テキストで字句解析が panic しない（バイト境界の保証）／数値の書式↔解析が有限値で可逆／AST を印字して再解析すると同じ木になる。加えて「`Infinity` は書けるが読み戻せない」という**仕様自身の非対称性**を明示的に記録
 - **差分テストの土台**（`tests/differential.rs`、90 式の corpus）: corpus が本実装で評価できることは常時検証。**比較の照合先は Java**（`javax.xml.xpath`）とし、ライブラリ完成時に組む（面が動いている最中に組んでも追従コストが高いため）。libxml2 版は手動実行用の暫定で **CI では走らせない**
   - 比較設計で決めたこと: 式は `concat('[', string(E), ']')` で包んで両者とも 1 個の文字列にする（ノード直列化形式は仕様が定めないので比較しない）。`1 div 3` のように**十進表現が有限でない数**は除外 — §4.2 が桁数を規定しておらず、実装差は**どちらも適合したまま**生じる。仕様が許す差分を報告するテストは無視されるようになる
 - **成果物**: `XPath` / `XPathExpression` / `Namespaces` / `Variables`、`tests/properties.rs`、`tests/differential.rs`（テスト計 67）
 - **完了条件**: JAXP と対応の取れた公開 API が使える
-- **Phase 4 全体について**: XPath 1.0 には W3C 公式の単独テストスイートが存在しない（XQTS は 2.0 向け）。網羅的な外部資産は **OASIS/Xalan の XSLT 1.0 スイート**で、XSLT が動いてから実行できる → **Phase 6 で取り込む**。CLI の `xylogue xpath` は Phase 7
+- **Phase 4 全体について**: XPath 1.0 には W3C 公式の単独テストスイートが存在しない（XQTS は 2.0 向け）。網羅的な外部資産は **OASIS/Xalan の XSLT 1.0 スイート**で、XSLT が動いてから実行できる → **Phase 6 で取り込む**。CLI の `xenolith xpath` は Phase 7
 
 ### Phase 5 — XSLT 骨格
 
 規模が大きいためサブフェーズへ分割する。**拡張関数機構は ROADMAP 当初 Phase 5 冒頭に置いていたが 5d へ移した** — 利用者（`exsl:node-set()` と実行エンジン）が現れる前に設計すると要求を外すため。5c が実際に必要とした形で組む。
 
-**5a. パターン**（`xylogue-xslt`）✅ 完了
+**5a. パターン**（`xenolith-xslt`）✅ 完了
 - **`Pattern`**: `xsl:template` の `match` が持つテスト。`|` の各代替は XSLT 上それぞれ独立したテンプレート規則なので `alternatives()` で個別に取り出せる
 - **マッチング意味論**（§5.2）: 仕様は「ある祖先を文脈として評価したとき、そのノードが選択されるか」と定義するが、これは計算手順ではない（全祖先から評価すると破滅的）。**ステップを右から左へ**辿り、`/` で親へ、`//` で祖先を探索する実装にした。答えは同じで、触るのは上へ向かう経路上のノードだけ
 - **述語**は「兄弟の中での位置」を問うので、親から当該ステップを評価してノードが含まれるかで判定（XPath 側に `evaluate_step` を公開）。述語が無い場合はノード単体の検査で済ませる
 - **XPath 部分集合の検証**: パターン専用の文法を second grammar として持つと XPath 側と乖離するので、**XPath パーサで読んでから部分集合か検査**する方式。`child`/`attribute` 軸以外、`id()`/`key()` 以外の先頭式は理由付きで拒否
 - **既定優先度**（§5.5）: 名前 0 / `prefix:*` -0.25 / それ以外のノードテスト -0.5 / それより複雑なもの 0.5
 - `key()` は構文として受理するがキー表が未実装なので何にもマッチしない（**6b-2 で解消** — 5c と書いていたが、キー表が入るのはこのフェーズだった）
-- **成果物**: `xylogue-xslt` クレート、`ErrorKind::Xslt`、統合テスト 13 + doctest
+- **成果物**: `xenolith-xslt` クレート、`ErrorKind::Xslt`、統合テスト 13 + doctest
 - **完了条件**: 各種パターンのマッチングと既定優先度が通り、部分集合外が拒否される
 
 **5b. スタイルシートのモデルとコンパイル**✅ 完了
@@ -653,7 +653,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **完了条件**: 単純なスタイルシートが動く
 
 **5d. 拡張機構と出力**✅ 完了
-- **拡張関数の登録機構**（決定 5 の受け皿）: `Function` トレイトと `Functions` レジストリを `xylogue-xpath` に。**Java の `XPathFunction` / `XPathFunctionResolver` そのもの**で、これにより JAXP 対応表の最後の空欄が埋まった
+- **拡張関数の登録機構**（決定 5 の受け皿）: `Function` トレイトと `Functions` レジストリを `xenolith-xpath` に。**Java の `XPathFunction` / `XPathFunctionResolver` そのもの**で、これにより JAXP 対応表の最後の空欄が埋まった
   - クロージャに `Function` のブランケット実装があるので、登録に専用の型は要らない
   - 拡張関数は必ず接頭辞付き（XPath は無接頭辞をコア関数のために予約している）。接頭辞は**展開名**に解決してから引くので、スタイルシート側が好きな接頭辞を選べる
   - `Context` に `functions` を持たせ、`Context::with_functions` で渡す。`Transform::run_with` が XSLT からこれを供給
@@ -698,7 +698,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **`generate-id()`**（§12.4）: 仕様の要求は「同一ノードには毎回同じ、異なるノードには異なる、英数字で先頭は英字」だけ。**訊かれた順に採番**する（何かから導出したふりをしない）。ハッシュは衝突しうるので使わない
 - **`system-property()`**（§12.4）: 仕様が名指しする 3 つ（`xsl:version` は**数値** 1.0、`xsl:vendor`、`xsl:vendor-url`）のみ。未知のプロパティは**エラーではなく空文字列**（§12.4 の規定）
 - **`element-available()` / `function-available()`**（§15）: これは「XSLT の建前」ではなく**この実装が実際に何を走らせるか**を答えるべきもの。`element-available()` は dispatch の隣に置いた `INSTRUCTIONS` から答え、**両者が食い違わないことをテストで検査**（各名前を実際に走らせ「未実装」エラーにならないことを確認）。`function-available()` は**レジストリに直接訊く**ので、呼んだら動くかどうかと答えが原理的にずれない
-- **成果物**: `xylogue-xslt` の `functions` モジュール、`xylogue_xpath::is_core_function`（統合テスト 13 + ユニット 1）
+- **成果物**: `xenolith-xslt` の `functions` モジュール、`xenolith_xpath::is_core_function`（統合テスト 13 + ユニット 1）
 - **完了条件**: §12.4 / §15 の 5 関数が通り、`element-available()` が実装の実態と一致する
 
 **6b-2. `xsl:key` と `key()`**（§12.2）✅ 完了
@@ -786,7 +786,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **完了条件**: 3 メソッドと §16 の属性が通り、エンコーディングは書けるか名前付きで断るかのどちらか
 
 **6e. 適合スイート** ✅ 測定済み（93.4%、目標 95% に対し 1.6 ポイント未達）
-- OASIS/Xalan の XSLT 1.0 テストスイートを **`XSLTCONF` env var 方式**で取り込むハーネスを実装（W3C XML スイートと同じ方式）。カタログ（`catalog.xml`）を xylogue 自身で読み、`major-path` / `file-path` から各ケースのパスを組み立て、`operation`（standard / compile-error / execution-error）に応じて判定する
+- OASIS/Xalan の XSLT 1.0 テストスイートを **`XSLTCONF` env var 方式**で取り込むハーネスを実装（W3C XML スイートと同じ方式）。カタログ（`catalog.xml`）を xenolith 自身で読み、`major-path` / `file-path` から各ケースのパスを組み立て、`operation`（standard / compile-error / execution-error）に応じて判定する
 - **比較の正規化**: 適合ケースの期待結果はファイルで与えられるが、同じ結果木を別の書き方で書いた処理系同士は**バイト比較では不一致になる**（`<a/>` と `<a></a>` など）。そこで XML 比較では**両辺を本実装のシリアライザで書き直してから**比較する — 差が出たらそれは書き方ではなく木の差。テキスト比較は正規化不要なので厳密比較。HTML / Manual 比較のケースは**スキップして計上**（黙って通さない）
 - **閾値は測ってから**: `XSLTCONF_MAX_FAILURES` を指定したときだけ失敗数を assert する。**誰も測っていない閾値は閾値ではない**ため、既定ではレポート出力のみ
 - **ハーネス自体は検証済み**: スイートは本リポジトリに無いので通常の実行では常にスキップされ、**壊れたハーネスときれいなスキップは見分けが付かない**。そこで小さなスイートをテスト内で組み立て、カタログ読み取り・パス組み立て・実行・一致/不一致の判定（および上記の正規化が書き方の差を吸収すること）を検査する
@@ -811,7 +811,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 **順序を変更した**: ROADMAP 当初は common → strings → math → sets の順だったが、**`exsl:node-set()` だけがエンジンの協力を要する**（結果木の断片をモデルの節点空間に渡す必要がある）。値だけで完結するモジュールを先に片付け、エンジン側の受け渡しを要するものを後に回す。
 
 **6.5a. クレートと値だけで完結するモジュール** ✅ 完了
-- 新クレート `xylogue-exslt`。**エンジンに組み込まない** — 決定 5 のとおり、Phase 5d の拡張関数レジストリの**最初の利用者**として、通常の拡張関数として登録する。「レジストリの設計が正しかったか」の検査でもある
+- 新クレート `xenolith-exslt`。**エンジンに組み込まない** — 決定 5 のとおり、Phase 5d の拡張関数レジストリの**最初の利用者**として、通常の拡張関数として登録する。「レジストリの設計が正しかったか」の検査でもある
 - **モジュールごとに feature**（`common` / `math` / `sets`、既定 ON）。`function-available()` は**レジストリに直接訊く**ので、feature 状態と自動的に一致する（手で同期させるものが無い）。CI で各 feature 単独ビルドを走らせて確認
 - **`math`**: min / max / lowest / highest / abs / sqrt / power / exp / log / 三角関数 / atan2 / constant
   - `min` / `max` は空 node-set で NaN、`lowest` / `highest` は空 node-set（前者は数、後者はノードを返すため）
@@ -821,7 +821,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
   - **同一性による比較と文字列値による比較を混同しない**。difference / intersection / has-same-node は**ノードの同一性**、distinct は**文字列値**（これがグループ化に使える理由）。取り違えると「もっともらしいが間違った」答えになるので、各関数にどちらかを明記
 - **`common`**: `object-type()` のみ。**`node-set()` は未実装**（`function-available()` が false と答える）— 断片の文字列で答えるのは「静かに間違い」なので、無いことを正しく主張する
 - **feature が全て OFF のビルドも正当**なので、共有ヘルパは使う feature で個別に `#[cfg]` する（`-D warnings` の dead_code を避けるため）
-- **成果物**: `xylogue-exslt` クレート、`register()` / `modules()`（統合テスト 19 + ユニット 4 + doctest 3）
+- **成果物**: `xenolith-exslt` クレート、`register()` / `modules()`（統合テスト 19 + ユニット 4 + doctest 3）
 - **完了条件**: 3 モジュールが XSLT から呼べ、feature 単独ビルドが通る
 
 **6.5b. `exsl:node-set()`** ✅ 完了
@@ -838,7 +838,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 **6.5c. `strings`** ✅ 完了
 - `concat` / `padding` / `align` / `encode-uri` / `decode-uri` / `tokenize` / `split`
 - **`tokenize` と `split` はノードで答える**（複数の文字列を持てる XPath 1.0 の値は node-set しかないため）。つまり木を作る必要があり、6.5b と同じ受け渡しが要る。よって `register_with(functions, trees)` を追加し、`register` は「置き場なし」版とした。置き場が無ければ**何を渡せばよいかを述べるエラー**で、推測では答えない
-  - このため `xylogue-exslt` は `xylogue-xslt` を**本依存**にした（`DocumentSource` のため）。循環はしない（xslt は exslt を知らない）
+  - このため `xenolith-exslt` は `xenolith-xslt` を**本依存**にした（`DocumentSource` のため）。循環はしない（xslt は exslt を知らない）
 - `tokenize` の第 2 引数は**各文字がそれぞれ区切り**、`split` は**全体で 1 つの区切り**。EXSLT の定義どおりで、取り違えると `'a--b'` の分割結果が変わる
 - `align` の幅は**数値ではなく文字列**で与える（`str:align('x', '.....')` は 5 文字幅）。溢れた場合は「揃えた側を残す」ように切る
 - `decode-uri` は**復号できない `%` をそのまま残す**。EXSLT は「不正な URI なら空文字列」と言うが、往復して戻る文字列の方が有用で、黙って失うより良い
@@ -883,31 +883,31 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 **6.5h. `functions`**（`func:function` / `func:result`）— 未着手
 - スタイルシート自身が関数を宣言する仕組み。**エンジンへの再入**が要る: 関数本体を実行するのはエンジンだが、その関数が呼ばれるのは既にエンジンが式を評価している最中で、登録された関数はエンジンを借用できない（6.5b と同じ壁の、より強い形）
-- **設計上の障害を特定した**: `Functions::with` が `impl Function<M> + 'static` を要求するため、`&Stylesheet` や `&M` を捕らえたクロージャを登録できない。取りうる道は 2 つ — (a) `Functions<'f, M>` にライフタイムを持たせる（`Functions` は 26 ファイル 86 箇所に現れるので波及が大きい）、(b) `Context` に host 用のトレイトオブジェクトを持たせ、エンジンの可変状態を `RefCell` 化して `&self` で再入できるようにする（xylogue-xslt 内に閉じるが 2000 行のファイルの構造変更で、RefCell の二重借用という実行時ハザードを持ち込む）
+- **設計上の障害を特定した**: `Functions::with` が `impl Function<M> + 'static` を要求するため、`&Stylesheet` や `&M` を捕らえたクロージャを登録できない。取りうる道は 2 つ — (a) `Functions<'f, M>` にライフタイムを持たせる（`Functions` は 26 ファイル 86 箇所に現れるので波及が大きい）、(b) `Context` に host 用のトレイトオブジェクトを持たせ、エンジンの可変状態を `RefCell` 化して `&self` で再入できるようにする（xenolith-xslt 内に閉じるが 2000 行のファイルの構造変更で、RefCell の二重借用という実行時ハザードを持ち込む）
 - **どちらを取るかは測ってから決めるべき性質のものではなく、設計判断**。着手前に方針を決める
 - **完了条件（Phase 6.5 全体）**: 各モジュールの EXSLT 公式サンプルが通る。libxslt との差分テスト — **未達**（`functions` と日時の duration 演算が残る）
 
 ### Phase 7 — 統合 API とツール
 
 **7a. `javax.xml.transform` 相当のファサード** ✅ 完了
-- `xylogue::transform` に `Source` / `Transformer` / `Transformed`。**下の層でできることの並べ替え**であって新しい能力ではない — JAXP から来た人が探す場所に、探す形で置く
+- `xenolith::transform` に `Source` / `Transformer` / `Transformed`。**下の層でできることの並べ替え**であって新しい能力ではない — JAXP から来た人が探す場所に、探す形で置く
 - **決定 3 の適用**: W3C が規定したものはそのまま、JAXP が発明したものは Rust 的に再設計。setter ではなく消費するメソッド、例外ではなく `Result`、そして **`ErrorListener` は無い** — `xsl:message` の内容は結果の横に返り、fatal になるものは `Err` そのもの。「登録し忘れると見落とす」経路を作らない
 - **機能の穴を 1 つ埋めた**: 呼び出し側から**大域 `xsl:param` に値を渡せなかった**（`Transform::with_parameter`）。§11.4 どおり、渡された引数は既定値を評価せずに置き換える。トップレベル `xsl:variable` は名前が同じでも**設定できない** — 2 つの宣言が存在する理由がその区別なので
 - **テストが実配線のバグを 1 つ捕まえた**: ワークスペースの feature 方針（クレート間依存は default features off）により、ファサードの `exslt` feature が **EXSLT クレートを「中身ゼロで」有効化**していた。全 EXSLT 呼び出しが失敗する状態で、`Cargo.toml` でモジュールを明示して解消
-- **成果物**: `xylogue::transform`（統合テスト 17 + doctest 1）、`Transform::with_parameter`、`Loader for Box<L>`
+- **成果物**: `xenolith::transform`（統合テスト 17 + doctest 1）、`Transform::with_parameter`、`Loader for Box<L>`
 
 **7b. CLI**（`transform` / `xpath` / `validate` / `format`）✅ 完了
-- `crates/xylogue-cli` に**バイナリ専用クレート**を新設。ライブラリ側は `clap` に一切依存しない（ワークスペース依存に置いたが、参照するのはこのクレートだけ）
+- `crates/xenolith-cli` に**バイナリ専用クレート**を新設。ライブラリ側は `clap` に一切依存しない（ワークスペース依存に置いたが、参照するのはこのクレートだけ）
 - 4 サブコマンドとも**入力ファイル省略時は標準入力**、出力先省略時は標準出力。パイプラインの部品として振る舞う
 - **終了ステータスを 2 系統に分けた**: `1` =「文書がノーと答えた」（invalid、`--fail-on-empty` で空）、`2` =「依頼自体を遂行できなかった」（ファイルが無い、整形式でない、式がコンパイルできない）。シェルスクリプトが両者を区別できることが目的
 - `xsl:message` の内容と診断は**標準エラーへ**送り、標準出力には結果だけを流す
 - スタイルシートの実パスを system identifier にするので、`xsl:import` / `document()` の**相対参照がスタイルシートの隣から解決される**（統合テストで確認）
 - `xpath` はノードセットを**1 行 1 ノード**で出力し、要素は文字列値ではなく**マークアップとして**書く（`//item` を尋ねて中身のテキストだけ返るのは意図と違うことが多い）
 - **DOCTYPE の無い文書は「valid」と呼ばない** — 照合対象が無いのは合格でも違反でもない、という区別を出力にも終了ステータスにも残す
-- **成果物**: `xylogue`（`transform` / `xpath` / `validate` / `format`、統合テスト 18）
+- **成果物**: `xenolith`（`transform` / `xpath` / `validate` / `format`、統合テスト 18）
 
 **7c. ドキュメントと Java からの移行ガイド** ✅ 完了
-- `crates/xylogue/MIGRATING-FROM-JAVA.md`: JAXP の各 API がどこに来たかの対応表、同じ処理の Java / Rust 併記（DOM 構築、プル解析、SAX ハンドラ、XPath、XSLT、検証、直列化）、そして**意図的に違えた点**（ファクトリ廃止、setter ではなくビルダ、例外ではなく `Result`、`ErrorListener` 無し、既定では外部実体を取りに行かない、オブジェクト網ではなくアリーナ）
+- `crates/xenolith/MIGRATING-FROM-JAVA.md`: JAXP の各 API がどこに来たかの対応表、同じ処理の Java / Rust 併記（DOM 構築、プル解析、SAX ハンドラ、XPath、XSLT、検証、直列化）、そして**意図的に違えた点**（ファクトリ廃止、setter ではなくビルダ、例外ではなく `Result`、`ErrorListener` 無し、既定では外部実体を取りに行かない、オブジェクト網ではなくアリーナ）
 - **ガイドをファサードの doc に `include_str!` で取り込んだ** — 中の Rust 例が全て `cargo test --doc` でコンパイル・実行される。API から乖離した移行ガイドは無いより悪いので、乖離したらビルドが落ちる形にした。実際に**初回実行で 2 件の誤りを捕まえた**（`NodeRef` と `NodeId` の取り違え、検証エラー件数の思い込み）
 - ガイドは `parse` feature がある時だけ doc に入る（例が DOM を組むため）。それを指す本文も `cfg_attr` で同じ条件にし、リンクが宙に浮かないようにした
 - **古くなっていた記述の一掃**: README の「Status: Phase 0、まだ XML を解析できない」、空行でクレート表が 7 行分壊れていた箇所、仕様表の EXSLT / XML Schema Part 2 欠落、ファサードの「XSLT と EXSLT は後のフェーズ」と feature 一覧の `parse` / `exslt` / `icu` / `xinclude` 欠落、`-xpath` の「評価は後のフェーズ」、`-xslt` の「EXSLT が最初の利用者になる予定」、`-exslt` の「`node-set()` は後で来る」
@@ -917,13 +917,13 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 **8a. ファジング**（`cargo-fuzz`）✅ 完了
 - ターゲット 5 種: `parse_document`（パーサ。スライスと**1 バイトずつ読むリーダ**の両方 — トークンが読み込み境界をまたぐ経路はスライスでは通らない）、`build_and_serialize`、`validate_document`、`compile_expression`、`transform`
-- **性質はターゲットの中に書かない**。`crates/xylogue-fuzz` に置き、ターゲットはバイトを渡すだけ。**ファザーの発見は、検査していた性質の質を超えない**ため、性質そのものを通常のテストで検証できる場所に置く
+- **性質はターゲットの中に書かない**。`crates/xenolith-fuzz` に置き、ターゲットはバイトを渡すだけ。**ファザーの発見は、検査していた性質の質を超えない**ため、性質そのものを通常のテストで検証できる場所に置く
   - 同クレートはワークスペースメンバなので、`cargo test` が**種コーパスを同じ性質に通す**（stable・全プラットフォーム）。nightly が要る libFuzzer 実行と違い、**性質が腐ったらビルドが落ちる**
 - 「panic もハングもしない」だけでなく、3 つは**より強い性質**を主張する: シリアライザが書いたものは読み戻せて同じ木になる／式を印字したものは同じ木に解析される／コンパイルできたスタイルシートは走るか失敗するかで、出た結果は必ず書き出せる
 - **`fuzz/short-run.sh` を CI とローカルで共用**。「CI で走るスクリプト」と「手元で走らせるスクリプト」を別物にしない
 - **Windows では libFuzzer ランタイムがロードできない**（ASan ランタイムの初期化に失敗、`0xc0000142`）。WSL / Linux で実行する。この制約はスクリプトと README に明記
 - **実行結果**: 5 ターゲット各 45 秒、クラッシュ 0（`parse_document` は 76,027 回実行 / 1,650 新規入力）
-- **成果物**: `crates/xylogue-fuzz`（性質 6 + コーパステスト 5）、`fuzz/`（ターゲット 5、ワークスペース外）、種コーパス 25 件、CI ジョブ
+- **成果物**: `crates/xenolith-fuzz`（性質 6 + コーパステスト 5）、`fuzz/`（ターゲット 5、ワークスペース外）、種コーパス 25 件、CI ジョブ
 
 **8b. 差分テスト**（Java と比較）✅ XPath 完了
 - Phase 4e で組んだ corpus（82 式 / 2 文書）と `tests/differential.rs` を、予定どおり **Java** に接続。照合先は `javax.xml.xpath`（JDK 同梱のエンジン）
@@ -936,7 +936,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **残り**: XSLT の差分テスト（`javax.xml.transform`）。結果木の比較には Phase 6e で作った正準形が要るので、それを共有できる形に切り出すのが次の作業
 
 **8c. ベンチマークとパターンインデックス** ✅ 完了（メモリ削減は未着手）
-- `crates/xylogue/benches/pipeline.rs`（criterion）。ファサードに置いたのは**全層に一度に届く**のがそこだから — 利用者が見る数字はその形をしている
+- `crates/xenolith/benches/pipeline.rs`（criterion）。ファサードに置いたのは**全層に一度に届く**のがそこだから — 利用者が見る数字はその形をしている
 - 文書は**ベンチ内で生成**（vendoring しない）。checkout から再現でき、サイズを変えてもリポジトリが太らない。決定的なので 2 回測れば同じ仕事を測る
 - 全ベンチが**バイト単位のスループット**を報告する。サイズ間で比較でき、他の処理系とも比較できる形にするため
 - `cargo test --benches` が各ベンチを 1 回走らせる。**滅多に測らないものが腐らない**ようにするのはこれ
@@ -973,14 +973,14 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 
 | # | 論点 | 決定 | 影響 |
 |---|---|---|---|
-| 1 | DTD 妥当性検証 | **ゴールに含める** | Phase 2 を 2a（DTD 情報）/ 2b（検証）に分割。検証は `xylogue-validate` に独立（決定 8）。完了条件に xmlconf invalid 群の全件検出を追加 |
+| 1 | DTD 妥当性検証 | **ゴールに含める** | Phase 2 を 2a（DTD 情報）/ 2b（検証）に分割。検証は `xenolith-validate` に独立（決定 8）。完了条件に xmlconf invalid 群の全件検出を追加 |
 | 2 | `xsl:sort` の照合 | **ICU（ICU4X）依存で可** | `icu_collator` を feature `icu`（既定 ON）で導入。`lang` / `case-order` を CLDR 準拠に。`lang()` 関数の BCP 47 処理にも流用。データサイズ対策としてロケール絞り込みビルドを用意 |
 | 3 | API 設計 | **W3C 規定のインタフェースは踏襲、それ以外は Rust 的に再設計** | DOM Level 3 Core はメソッド名・例外コードまで規定どおり（命名のみ snake_case）。live NodeList も維持。パーサ設定・変換駆動・エラー通知・CLI は型付きビルダーと `Result` で再設計し、ファクトリ + 文字列 feature 方式は採らない |
 | 4 | 非 UTF エンコーディング | **外部ライブラリに委譲** | 自前は UTF-8/16・ASCII・Latin-1 まで。以降は `encoding_rs`（feature `encodings`、既定 ON）。`Decoder` トレイトで抽象化し差し替え可能に。出力側は符号化不能文字を文字参照へフォールバック |
 | 5 | EXSLT | **最初から入れる** | Phase 5 で拡張関数の登録機構を先に作り、EXSLT をその最初の利用者にする。RTF は `exsl:node-set()` でゼロコピー昇格できる内部表現にする。Phase 6.5 として common → strings → math → sets → functions → dates → regex の順に実装 |
 | 6 | XInclude / XML Base / xml:id | **必須。feature + 実行時フラグで切替** | XML Base と xml:id は Phase 2c、XInclude は Phase 3.5（XPointer framework / `element()` / `xmlns()` を含む）。基底 URI の起点は実体の system ID なので **Phase 1 の実体スタックに system ID を持たせる**。XInclude の実行時既定は無効（JAXP 準拠）、XML Base / xml:id は既定有効 |
 | 7 | パーサの I/O とイベント API | **Sans-I/O コア + 同期／非同期ドライバ。カーソル API が一次、所有イベント `Iterator` はその上のラッパ** | 下記「決定 7 の詳細」。`tokio` は feature（既定 OFF）に隔離 |
-| 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xylogue-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xylogue-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
+| 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xenolith-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xenolith-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
 | 9 | 未規定動作の扱い | **「仕様が未定義」「本実装が選択」「ビルド/環境依存」を文書上はっきり区別し、実測レポートをテストとして出力する** | 下記「決定 9 の詳細」 |
 | 10 | 準拠仕様の出典 | **各クレートの doc に、実装の根拠となる仕様書を版固定 URL で明示する** | 下記「決定 10 の詳細」 |
 
@@ -1010,10 +1010,10 @@ XML・XPath は少なからぬ点を開いたままにしている。**その 3 
 
 仕様が**固定している**動作はここに入れない。それはアサーションを持つ通常のテストに属する。
 
-**実測レポート**: `crates/xylogue/tests/behaviour.rs` が上記 3 区分でレポートをコンソールへ出力する。文書の再掲ではなく**実際に動かして観測**するので、コードが変わればレポートも変わる（記述と実装が乖離しない）。CI で毎回出力し、適合率の数字と並べて記録に残す。
+**実測レポート**: `crates/xenolith/tests/behaviour.rs` が上記 3 区分でレポートをコンソールへ出力する。文書の再掲ではなく**実際に動かして観測**するので、コードが変わればレポートも変わる（記述と実装が乖離しない）。CI で毎回出力し、適合率の数字と並べて記録に残す。
 
 ```bash
-cargo test -p xylogue --all-features --test behaviour -- --nocapture
+cargo test -p xenolith --all-features --test behaviour -- --nocapture
 ```
 
 レポート自身の健全性テスト（観測が空でない・仕様の記述が空でない）も同居させ、腐りを防ぐ。実際、初回作成時にこの自己チェックが「既定名前空間があると `/r` が一致しない」という**私自身の式の誤り**を捕まえている。
@@ -1023,7 +1023,7 @@ cargo test -p xylogue --all-features --test behaviour -- --nocapture
 パーサ本体は I/O を持たず、バイト列を与えられて状態を進めるだけの機構にする。実際に読むのはドライバだけ。
 
 ```
-xylogue-parser                        I/O を一切持たない状態機械
+xenolith-parser                        I/O を一切持たない状態機械
   ├── Reader<R: Read>                   同期ドライバ（既定）
   ├── AsyncReader<R: AsyncRead>         非同期ドライバ（feature = "tokio"、既定 OFF）
   └── SliceReader<'a>                   メモリ上のバイト列
@@ -1054,10 +1054,10 @@ match parser.next()? {
 
 ### 決定 8 の詳細 — スキーマ非依存の検証フレームワーク
 
-検証は「イベント列に対する制約検査」であり、スキーマ言語に依存しない。`xylogue-validate` に共通インタフェースを置き、各スキーマ言語はその実装として載る。Java の `Schema` / `ValidatorHandler` と同型。
+検証は「イベント列に対する制約検査」であり、スキーマ言語に依存しない。`xenolith-validate` に共通インタフェースを置き、各スキーマ言語はその実装として載る。Java の `Schema` / `ValidatorHandler` と同型。
 
 ```rust
-// xylogue-validate（スキーマ言語非依存）
+// xenolith-validate（スキーマ言語非依存）
 pub trait Validator {
   fn start_element(&mut self, name: QName, attrs: &[AttributeRef<'_>]) -> Result<()>;
   fn characters(&mut self, text: &str) -> Result<()>;
@@ -1081,9 +1081,9 @@ pub trait ErrorListener {                           // warning / error(recoverab
 
 | 実装 | クレート | 位置づけ | 備考 |
 |---|---|---|---|
-| DTD 検証器 | `xylogue-validate` | Phase 2b（最初の実装） | parser が公開する DTD モデルを読む |
-| RELAX NG | `xylogue-relaxng`（想定） | 将来トラック | **微分（Brzozowski derivative）アルゴリズム**がイベント列検証そのもので、`Validator` に素直に写る。XSD より小さく綺麗に嵌まる良い候補 |
-| XSD 1.0 | `xylogue-xsd`（想定） | 将来トラック | 実用サブセットから（識別制約・redefine・PSVI は当初除外） |
+| DTD 検証器 | `xenolith-validate` | Phase 2b（最初の実装） | parser が公開する DTD モデルを読む |
+| RELAX NG | `xenolith-relaxng`（想定） | 将来トラック | **微分（Brzozowski derivative）アルゴリズム**がイベント列検証そのもので、`Validator` に素直に写る。XSD より小さく綺麗に嵌まる良い候補 |
+| XSD 1.0 | `xenolith-xsd`（想定） | 将来トラック | 実用サブセットから（識別制約・redefine・PSVI は当初除外） |
 | ユーザ独自 | 利用側 | 常時可能 | 「`<price>` は正数」等のルールや Schematron 風の検証を `Validator` 実装として差し込める |
 
 **設計の試金石**: 「RELAX NG の微分アルゴリズムがこのトレイトに素直に写るか」。Phase 2b で `Validator` を定義する際、DTD 都合でインタフェースを歪めない（DTD 固有の内容モデルや ATTLIST はインタフェースに露出させない）ことを、この写像で検証する。
@@ -1118,4 +1118,4 @@ pub trait ErrorListener {                           // warning / error(recoverab
 
 ### 次の着手
 
-Phase 0。ワークスペース雛形、`xylogue-core` のエラー型・`QName`・文字クラス表・URI、`Decoder` トレイトと `encoding_rs` バックエンド。
+Phase 0。ワークスペース雛形、`xenolith-core` のエラー型・`QName`・文字クラス表・URI、`Decoder` トレイトと `encoding_rs` バックエンド。

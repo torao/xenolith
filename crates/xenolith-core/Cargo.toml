@@ -1,0 +1,24 @@
+[package]
+name = "xenolith-core"
+description = "Core primitives for the xenolith XML toolchain: errors, names, XML character classes, URIs and character decoding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+# Character decoding — sniffing an encoding and turning bytes into characters — lives here.
+categories = ["encoding", "parser-implementations", "text-processing"]
+
+[features]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
+encodings = ["dep:encoding_rs"]
+
+[dependencies]
+encoding_rs = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

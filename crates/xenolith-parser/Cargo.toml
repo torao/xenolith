@@ -1,0 +1,40 @@
+[package]
+name = "xenolith-parser"
+description = "XML 1.0 parser for xenolith: character streams, entities, and the sans-I/O parser core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
+encodings = ["xenolith-core/encodings"]
+# A runtime-agnostic asynchronous driver, `AsyncReader`, over `futures_io::AsyncRead`. An
+# application can implement its own async I/O against it without pulling in any runtime.
+async = ["dep:futures-io"]
+# tokio adapters for the async driver, chiefly `AsyncEntityReader::from_tokio`. Enables `async`.
+tokio = ["async", "dep:tokio", "dep:tokio-util"]
+# Per-node base URI computation from xml:base and the entity's system id (XML Base).
+xml-base = []
+# xml:id as an ID-typed attribute: tokenized normalization and the xml:id accessor.
+xml-id = []
+
+[dependencies]
+xenolith-core = { workspace = true }
+futures-io = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tokio-test = "0.4"
+# A minimal, runtime-agnostic block_on for testing the async driver without a full runtime.
+pollster = "0.4"
+
+[lints]
+workspace = true

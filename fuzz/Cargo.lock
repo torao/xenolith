@@ -91,88 +91,88 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "xylogue-core"
+name = "xenolith-core"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
-name = "xylogue-dom"
+name = "xenolith-dom"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-parser",
+ "xenolith-core",
+ "xenolith-parser",
 ]
 
 [[package]]
-name = "xylogue-fuzz"
+name = "xenolith-fuzz"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
- "xylogue-parser",
- "xylogue-serialize",
- "xylogue-validate",
- "xylogue-xdm",
- "xylogue-xpath",
- "xylogue-xslt",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-parser",
+ "xenolith-serialize",
+ "xenolith-validate",
+ "xenolith-xdm",
+ "xenolith-xpath",
+ "xenolith-xslt",
 ]
 
 [[package]]
-name = "xylogue-fuzz-targets"
+name = "xenolith-fuzz-targets"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "xylogue-fuzz",
+ "xenolith-fuzz",
 ]
 
 [[package]]
-name = "xylogue-parser"
+name = "xenolith-parser"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
+ "xenolith-core",
 ]
 
 [[package]]
-name = "xylogue-serialize"
+name = "xenolith-serialize"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
+ "xenolith-core",
+ "xenolith-dom",
 ]
 
 [[package]]
-name = "xylogue-validate"
+name = "xenolith-validate"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-parser",
+ "xenolith-core",
+ "xenolith-parser",
 ]
 
 [[package]]
-name = "xylogue-xdm"
+name = "xenolith-xdm"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-dom",
+ "xenolith-core",
+ "xenolith-dom",
 ]
 
 [[package]]
-name = "xylogue-xpath"
+name = "xenolith-xpath"
 version = "0.0.0"
 dependencies = [
- "xylogue-core",
- "xylogue-xdm",
+ "xenolith-core",
+ "xenolith-xdm",
 ]
 
 [[package]]
-name = "xylogue-xslt"
+name = "xenolith-xslt"
 version = "0.0.0"
 dependencies = [
  "encoding_rs",
- "xylogue-core",
- "xylogue-dom",
- "xylogue-xdm",
- "xylogue-xpath",
+ "xenolith-core",
+ "xenolith-dom",
+ "xenolith-xdm",
+ "xenolith-xpath",
 ]
