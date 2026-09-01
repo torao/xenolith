@@ -52,7 +52,11 @@
 
 mod escape;
 mod serializer;
+#[cfg(feature = "validate")]
+mod validating;
 mod writer;
 
 pub use serializer::Serializer;
+#[cfg(feature = "validate")]
+pub use validating::ValidatingWriter;
 pub use writer::XmlWriter;

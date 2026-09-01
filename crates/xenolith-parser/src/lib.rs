@@ -29,9 +29,9 @@
 //! ```
 //!
 //! That pull loop is the usual choice. For the push style, with the parser calling you, implement a
-//! [`Handler`](sax::Handler) and let [`parse`](sax::parse) drive it; see the [`sax`] module. Both run the same parser,
-//! so it is a choice of shape, not capability: reach for [`sax`] when your code is a handler that dispatches on the
-//! event kind, or when porting a Java SAX `ContentHandler`, and stay with [`Reader`] otherwise.
+//! [`Handler`](sax::Handler) and run a source through it with [`emit`](sax::EventSource::emit); see the [`sax`] module.
+//! Both run the same parser, so it is a choice of shape, not capability: reach for [`sax`] when your code is a handler
+//! that dispatches on the event kind, or when porting a Java SAX `ContentHandler`, and stay with [`Reader`] otherwise.
 //!
 //! The other items sit beneath it:
 //!
@@ -136,9 +136,10 @@ pub use config::{Bounds, ParserConfig};
 pub use dtd::Dtd;
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
-pub use parser::{AttributeRef, Attributes, EventKind, EventRef, Events, Parser, Progress, XmlSpace};
+pub use parser::{Attributes, EventKind, EventRef, Events, Parser, Progress, XmlSpace};
 pub use reader::{Reader, ReaderEvents};
 #[cfg(feature = "async")]
 pub use resolve::{AsyncEntityReader, AsyncUriResolver};
 pub use resolve::{EntityRequest, RequestKind, UriResolver};
 pub use stream::CharStream;
+pub use xenolith_core::attr::AttributeRef;

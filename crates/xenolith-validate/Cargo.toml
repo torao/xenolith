@@ -22,6 +22,7 @@ xenolith-parser = { workspace = true }
 
 [dev-dependencies]
 xenolith-parser = { workspace = true, features = ["encodings"] }
+xenolith-dom = { workspace = true, features = ["parse"] }
 
 [lints]
 workspace = true

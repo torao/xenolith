@@ -1,16 +1,16 @@
 //! Matching children against an element content model.
 //!
-//! A content model like `(a, b*, (c | d)+)` is a regular expression over child element names.
-//! This compiles one to a Glushkov automaton — a position for every name in the model, with
-//! `first`, `last` and `follow` sets — and runs a sequence of child names through it. Glushkov
-//! suits XML because the automaton is deterministic exactly when the model is *deterministic*
-//! in the sense XML requires (Appendix E), so building it also answers whether the model is
+//! A content model like `(a, b*, (c | d)+)` is a regular expression over child element names. This compiles one to a
+//! Glushkov automaton (a position for every name in the model, with `first`, `last` and `follow` sets) and runs a
+//! sequence of child names through it. Glushkov suits XML because the automaton is deterministic exactly when the
+//! model is *deterministic* in the sense XML requires (Appendix E), so building it also answers whether the model is
 //! well-formed.
 
 use xenolith_core::name::NameId;
 use xenolith_parser::dtd::{ContentParticle, Occurs};
 
 /// A compiled content model, ready to match child sequences.
+///
 #[derive(Debug)]
 pub(crate) struct ContentModel {
   /// The child-element name at each position.
@@ -26,6 +26,7 @@ pub(crate) struct ContentModel {
 }
 
 /// The intermediate fragment for one sub-expression during compilation.
+///
 struct Fragment {
   nullable: bool,
   first: Vec<usize>,
@@ -128,58 +129,31 @@ impl ContentModel {
 
   /// Matches a sequence of child element names.
   ///
-  /// On failure, returns the names the model would have accepted at the point it stuck — for a
-  /// name that did not fit, or for the end of a sequence that stopped short.
+  /// On failure, returns the names the model would have accepted at the point it stuck: for a name that did not fit,
+  /// or for the end of a sequence that stopped short.
   pub(crate) fn matches(&self, children: &[NameId]) -> Result<(), MatchFailure> {
+    // Two position sets carry the whole run: `active` is where the next child could go, and `matched` is where the
+    // child just consumed went. Keeping both lets one walk answer every question asked below. `active` says which
+    // names fit next, and so what a failure should list as allowed; `matched` says whether the sequence may stop
+    // here.
     let mut active: Vec<usize> = self.first.clone();
-    let mut allowed_at_start = true;
+    let mut matched: Vec<usize> = Vec::new();
 
-    for (index, &child) in children.iter().enumerate() {
-      let candidates = if index == 0 { &self.first } else { &active.clone() };
-      let next: Vec<usize> = candidates.iter().copied().filter(|&p| self.symbols[p] == child).collect();
+    for &child in children {
+      let next: Vec<usize> = active.iter().copied().filter(|&p| self.symbols[p] == child).collect();
       if next.is_empty() {
-        return Err(MatchFailure { at: Some(child), allowed: self.symbols_of(candidates) });
+        return Err(MatchFailure { at: Some(child), allowed: self.symbols_of(&active) });
       }
       // Move to everything reachable from the matched positions.
       active = next.iter().flat_map(|&p| self.follow[p].iter().copied()).collect();
       dedup(&mut active);
-      allowed_at_start = false;
+      matched = next;
     }
 
-    // Accept if the model can end here: nothing consumed and nullable, or in a `last` position.
-    let accepts = if allowed_at_start {
-      self.nullable
-    } else {
-      // `active` holds where a next child could go; acceptance is whether the last matched
-      // position was terminal, which we recompute from the consumed prefix.
-      self.ends_after(children)
-    };
-    if accepts { Ok(()) } else { Err(MatchFailure { at: None, allowed: self.continuations(children) }) }
-  }
-
-  /// Whether the sequence leaves the automaton in an accepting position.
-  fn ends_after(&self, children: &[NameId]) -> bool {
-    let mut active = self.first.clone();
-    let mut matched: Vec<usize> = Vec::new();
-    for (index, &child) in children.iter().enumerate() {
-      let candidates = if index == 0 { self.first.clone() } else { active };
-      matched = candidates.into_iter().filter(|&p| self.symbols[p] == child).collect();
-      active = matched.iter().flat_map(|&p| self.follow[p].iter().copied()).collect();
-      dedup(&mut active);
-    }
-    matched.iter().any(|p| self.last.contains(p))
-  }
-
-  /// The names that could legally follow the given prefix.
-  fn continuations(&self, children: &[NameId]) -> Vec<NameId> {
-    let mut active = self.first.clone();
-    for (index, &child) in children.iter().enumerate() {
-      let candidates = if index == 0 { self.first.clone() } else { active };
-      let matched: Vec<usize> = candidates.into_iter().filter(|&p| self.symbols[p] == child).collect();
-      active = matched.iter().flat_map(|&p| self.follow[p].iter().copied()).collect();
-      dedup(&mut active);
-    }
-    self.symbols_of(&active)
+    // Accept if the model can end here: nothing consumed and nullable, or the last child landed on a `last` position.
+    let accepts =
+      if children.is_empty() { self.nullable } else { matched.iter().any(|position| self.last.contains(position)) };
+    if accepts { Ok(()) } else { Err(MatchFailure { at: None, allowed: self.symbols_of(&active) }) }
   }
 
   fn symbols_of(&self, positions: &[usize]) -> Vec<NameId> {
@@ -287,10 +261,25 @@ mod tests {
   }
 
   #[test]
+  fn reports_what_a_short_sequence_still_needed() {
+    let mut pool = NamePool::new();
+    let (a, b) = (pool.intern("a"), pool.intern("b"));
+    let model = ContentModel::compile(&P::Seq(vec![P::Name(a, Once), P::Name(b, Once)], Once));
+
+    let stopped_short = model.matches(&names(&mut pool, &["a"])).unwrap_err();
+    assert_eq!(stopped_short.at, None, "nothing was rejected; the sequence ended too soon");
+    assert_eq!(stopped_short.allowed, vec![b]);
+
+    let nothing_at_all = model.matches(&[]).unwrap_err();
+    assert_eq!(nothing_at_all.at, None);
+    assert_eq!(nothing_at_all.allowed, vec![a]);
+  }
+
+  #[test]
   fn detects_nondeterminism() {
     let mut pool = NamePool::new();
     let (a, b) = (pool.intern("a"), pool.intern("b"));
-    // (a, b) | (a, c): ambiguous on the leading `a` — Appendix E forbids it.
+    // (a, b) | (a, c): ambiguous on the leading `a`, which Appendix E forbids.
     let c = pool.intern("c");
     let ambiguous = ContentModel::compile(&P::Choice(
       vec![

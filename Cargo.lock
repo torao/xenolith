@@ -1144,6 +1144,7 @@ version = "0.0.0"
 dependencies = [
  "xenolith-core",
  "xenolith-dom",
+ "xenolith-validate",
 ]
 
 [[package]]
@@ -1151,6 +1152,7 @@ name = "xenolith-validate"
 version = "0.0.0"
 dependencies = [
  "xenolith-core",
+ "xenolith-dom",
  "xenolith-parser",
 ]
 

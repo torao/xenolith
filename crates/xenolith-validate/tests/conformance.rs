@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 use xenolith_parser::Reader;
 use xenolith_parser::resolve::{EntityRequest, UriResolver};
-use xenolith_validate::validate_reader;
+
+mod common;
+use common::validate_reader;
 
 fn suite() -> Option<PathBuf> {
   let root = PathBuf::from(std::env::var_os("XMLCONF")?);

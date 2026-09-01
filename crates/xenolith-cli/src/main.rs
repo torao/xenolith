@@ -28,8 +28,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use xenolith::dom::build;
+use xenolith::parser::Reader;
 use xenolith::serialize::Serializer;
 use xenolith::transform::{Source, Transformer};
+use xenolith::validate::Validatable;
 use xenolith::xdm::{DomModel, DomNode, Model, NodeKind};
 use xenolith::xpath::{Value, XPath};
 use xenolith::xslt::Loader;
@@ -285,7 +287,11 @@ fn validate(inputs: &[PathBuf]) -> Result<ExitCode, String> {
   let mut all_valid = true;
   for input in named {
     let source = read(input)?;
-    let report = xenolith_validate::validate(source.as_slice()).map_err(|error| where_it_was(input, &error))?;
+    let report = Reader::new(source.as_slice())
+      .with_validation()
+      .validating_dtd()
+      .run()
+      .map_err(|error| where_it_was(input, &error))?;
     let name = input.map_or_else(|| "<stdin>".to_owned(), display);
 
     if !report.had_dtd() {

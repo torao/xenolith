@@ -15,6 +15,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
+use xenolith_core::attr::{AttributeList, AttributeRef};
 use xenolith_core::chars;
 use xenolith_core::error::{Error, Location, Result};
 use xenolith_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
@@ -238,29 +239,26 @@ pub enum XmlSpace {
   Preserve,
 }
 
-/// One attribute of the current start element, borrowed from the parser and valid only until the next
-/// [`advance`](Parser::advance); [`Attributes`] yields these.
+/// The attributes of a start element, a borrowing view that yields [`AttributeRef`]. [`EventRef::StartElement`]
+/// carries one; iterate it with [`iter`](Self::iter) or index it with [`get`](Self::get).
 ///
-#[derive(Clone, Copy, Debug)]
-pub struct AttributeRef<'a> {
-  /// The attribute's name. An unprefixed attribute is in no namespace, never the default one.
-  ///
-  pub name: QName,
-  /// The value after attribute-value normalization (XML 1.0 §3.3.3), and the tokenized collapse the DTD applies when
-  /// the attribute has a tokenized type.
-  ///
-  pub value: &'a str,
-  /// True if this attribute is a namespace declaration (`xmlns` or `xmlns:p`).
-  ///
-  pub declares_namespace: bool,
-}
-
-/// The attributes of a start element, a borrowing view that yields [`AttributeRef`]. [`EventRef::StartElement`] carries
-/// one; iterate it with [`iter`](Self::iter) or index it with [`get`](Self::get).
+/// It implements [`AttributeList`], so a source-independent consumer, a validator or a push handler, reads it through
+/// an [`Attributes`](xenolith_core::attr::Attributes) view.
+///
 #[derive(Clone, Copy, Debug)]
 pub struct Attributes<'a> {
   attributes: &'a [Attribute],
   text: &'a str,
+}
+
+impl AttributeList for Attributes<'_> {
+  fn len(&self) -> usize {
+    self.attributes.len()
+  }
+
+  fn get(&self, index: usize) -> Option<AttributeRef<'_>> {
+    Attributes::get(self, index)
+  }
 }
 
 impl<'a> Attributes<'a> {

@@ -1,29 +1,30 @@
 //! The ID space shared by DTD `ID` attributes and `xml:id`.
 //!
-//! xml:id §4 places an `xml:id` value in the same ID space as any declared `ID`: it must be a
-//! valid `NCName` and unique across the document. The check here is reused by the
-//! [`DtdValidator`](crate::dtd::DtdValidator), so an `xml:id` and a declared `ID` with the same
-//! value collide as they should; and it stands alone as [`XmlIdValidator`] for a document that
-//! has no DTD.
+//! xml:id §4 places an `xml:id` value in the same ID space as any declared `ID`: it must be a valid `NCName` and
+//! unique across the document. The [`DtdValidator`](crate::dtd::DtdValidator) runs the check here against the table it
+//! uses to record declared `ID` values, so an `xml:id` and an `ID` with the same value collide. For a document with no
+//! DTD, [`XmlIdValidator`] runs the same check itself.
+//!
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
+use xenolith_core::attr::Attributes;
 use xenolith_core::error::Location;
 use xenolith_core::name::{NameId, NamePool, QName};
-use xenolith_parser::AttributeRef;
 
 use crate::{ErrorListener, Validator, ValidityError};
 
-/// Checks one `xml:id` value against `ids`: a valid `NCName`, then unique. `ids` is the same
-/// table the DTD validator records `ID` attributes in, so the two kinds of ID share one space.
+/// Checks one `xml:id` value against `ids`: a valid `NCName`, then unique. `ids` is the same table the DTD validator
+/// records `ID` attributes in, so the two kinds of ID share one space.
 pub(crate) fn check_xml_id(
   value: &str,
   at: &Location,
   ids: &mut HashMap<String, Location>,
   errors: &mut dyn ErrorListener,
 ) -> ControlFlow<()> {
-  // xml:id §4: an xml:id whose normalized value is not an NCName is an xml:id error.
+  // xml:id §4: the value arrives already normalized, since the parser types `xml:id` as an ID, so check it as it
+  // stands. A value that is not an NCName is still recorded below, so a document that repeats it hears about that too.
   if !xenolith_core::chars::is_ncname(value) {
     errors.report(ValidityError::new(format!("xml:id value \"{value}\" is not an NCName"), at.clone()))?;
   }
@@ -33,28 +34,30 @@ pub(crate) fn check_xml_id(
   ControlFlow::Continue(())
 }
 
-/// The value of the `xml:id` attribute of a start tag, if it has one.
-pub(crate) fn xml_id_of<'a>(attributes: &'a [AttributeRef<'_>], pool: &NamePool) -> Option<&'a str> {
+/// The value of the `xml:id` attribute among `attributes`, if there is one.
+pub(crate) fn xml_id_of<'a>(attributes: Attributes<'a>, pool: &NamePool) -> Option<&'a str> {
   attributes.iter().find(|a| is_xml_id(a.name, pool)).map(|a| a.value)
 }
 
-/// Whether a resolved attribute name is `xml:id`.
+/// Whether a resolved attribute name is `xml:id`, matched on the XML namespace rather than on the
+/// prefix text.
 pub(crate) fn is_xml_id(name: QName, pool: &NamePool) -> bool {
   name.namespace() == Some(NameId::XML_NS) && pool.resolve(name.local()) == "id"
 }
 
-/// Checks `xml:id` attributes for a document with no DTD: each a valid `NCName`, unique.
+/// Checks a document's `xml:id` attributes: each is a valid `NCName` and unique across the document.
 ///
-/// When a document has a DTD, the [`DtdValidator`](crate::dtd::DtdValidator) does this itself,
-/// so the ID space stays unified. This standalone validator is for the case that there is no
-/// DTD to fold it into.
+/// Use it when the document has no DTD. When it does, the [`DtdValidator`](crate::dtd::DtdValidator) makes these
+/// checks itself, recording `xml:id` values in the same table as the declared `ID` values so both kinds share one ID
+/// space. Adding this validator alongside it would report each `xml:id` fault twice.
+///
 #[derive(Debug, Default)]
 pub struct XmlIdValidator {
   ids: HashMap<String, Location>,
 }
 
 impl XmlIdValidator {
-  /// Creates an xml:id validator.
+  /// Creates a validator with an empty ID space.
   #[must_use]
   pub fn new() -> Self {
     Self::default()
@@ -65,7 +68,7 @@ impl Validator for XmlIdValidator {
   fn start_element(
     &mut self,
     _name: QName,
-    attributes: &[AttributeRef<'_>],
+    attributes: Attributes<'_>,
     pool: &NamePool,
     at: &Location,
     errors: &mut dyn ErrorListener,
@@ -80,7 +83,6 @@ impl Validator for XmlIdValidator {
     &mut self,
     _text: &str,
     _whitespace_only: bool,
-    _pool: &NamePool,
     _at: &Location,
     _errors: &mut dyn ErrorListener,
   ) -> ControlFlow<()> {
@@ -97,7 +99,7 @@ impl Validator for XmlIdValidator {
     ControlFlow::Continue(())
   }
 
-  fn finish(&mut self, _pool: &NamePool, _errors: &mut dyn ErrorListener) -> ControlFlow<()> {
+  fn finish(&mut self, _errors: &mut dyn ErrorListener) -> ControlFlow<()> {
     ControlFlow::Continue(())
   }
 }

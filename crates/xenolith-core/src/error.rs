@@ -168,22 +168,6 @@ pub enum Error {
     #[source]
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
   },
-  /// A failure raised by application code in a SAX-style event handler driven over the parser.
-  ///
-  /// Like [`Resolver`](Self::Resolver), the parser cannot know what went wrong inside the callback, so the
-  /// application's own error is stored as [`source`](std::error::Error::source); a caller can downcast it to recover the
-  /// original.
-  ///
-  #[error("SAX handler error: {message}")]
-  SaxHandler {
-    /// Where the handler was called, if known.
-    location: Location,
-    /// What went wrong, taken from the application error's `Display`.
-    message: String,
-    /// The application's own error, preserved so a caller can downcast to recover it.
-    #[source]
-    source: Option<Box<dyn std::error::Error + Send + Sync>>,
-  },
   /// Malformed input for the character encoding in use, or an unsupported encoding.
   #[error("encoding error: {message}")]
   Encoding {
@@ -315,17 +299,6 @@ impl Error {
     Self::Resolver { location: Location::unknown(), message: source.to_string(), source: Some(source) }
   }
 
-  /// A failure raised by application code in a SAX-style event handler.
-  ///
-  /// Like [`resolver`](Self::resolver), the application error is stored as [`source`](std::error::Error::source) and its
-  /// string representation serves as the message; append a location with [`at`](Self::at) when it is known.
-  ///
-  #[must_use]
-  pub fn sax_handler(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-    let source = source.into();
-    Self::SaxHandler { location: Location::unknown(), message: source.to_string(), source: Some(source) }
-  }
-
   /// A character-encoding failure. When the problematic byte has been indicated, specify [`byte_offset`] to indicate
   /// its byte offset.
   ///
@@ -398,7 +371,6 @@ impl Error {
     match &mut self {
       Self::Io { location: at, .. }
       | Self::Resolver { location: at, .. }
-      | Self::SaxHandler { location: at, .. }
       | Self::Encoding { location: at, .. }
       | Self::Uri { location: at, .. }
       | Self::Name { location: at, .. }
@@ -431,7 +403,6 @@ impl Error {
     match self {
       Self::Io { location, .. }
       | Self::Resolver { location, .. }
-      | Self::SaxHandler { location, .. }
       | Self::Encoding { location, .. }
       | Self::Uri { location, .. }
       | Self::Name { location, .. }
@@ -500,7 +471,6 @@ impl Error {
     match self {
       Self::Io { message, .. }
       | Self::Resolver { message, .. }
-      | Self::SaxHandler { message, .. }
       | Self::Encoding { message, .. }
       | Self::Uri { message, .. }
       | Self::Name { message, .. }

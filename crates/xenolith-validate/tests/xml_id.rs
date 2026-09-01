@@ -2,7 +2,8 @@
 
 #![cfg(feature = "xml-id")]
 
-use xenolith_validate::validate;
+mod common;
+use common::validate;
 
 /// The validity-error messages from validating `xml`, which must be well-formed.
 fn errors(xml: &str) -> Vec<String> {

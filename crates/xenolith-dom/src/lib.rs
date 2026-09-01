@@ -63,12 +63,16 @@
 pub mod build;
 mod collection;
 mod document;
+#[cfg(feature = "parse")]
+mod emit;
 mod exception;
 mod node;
 mod noderef;
 
 pub use collection::{NamedNodeMap, NodeList};
 pub use document::Document;
+#[cfg(feature = "parse")]
+pub use emit::DomSource;
 pub use exception::{DomException, ExceptionCode, Result};
 pub use node::{NodeId, NodeType};
 pub use noderef::NodeRef;

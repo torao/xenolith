@@ -1,6 +1,7 @@
-//! End-to-end DTD validation, through the public `validate` entry point.
+//! End-to-end DTD validation, through the shared `validate` test helper.
 
-use xenolith_validate::validate;
+mod common;
+use common::validate;
 
 /// Validates `xml`, returning the validity error messages (empty when valid).
 fn errors(xml: &str) -> Vec<String> {

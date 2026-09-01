@@ -1,17 +1,17 @@
 //! The DTD validator.
 //!
-//! It checks a document against the DTD the parser read: that the root is the one the
-//! `DOCTYPE` names, that every element and attribute is declared and used as declared, that
-//! content follows the declared model, and that IDs are unique and every reference resolves.
-//! The parser has already done the DTD's parsing-side work — entities, defaults, tokenized
-//! normalization — so this is pure constraint checking, reported through an [`ErrorListener`].
+//! It checks a document against the DTD the parser read: that the root is the one the `DOCTYPE` names, that every
+//! element and attribute is declared and used as declared, that content follows the declared model, and that IDs are
+//! unique and every reference resolves. The parser has already done the DTD's parsing-side work (entities, defaults,
+//! tokenized normalization), so this is pure constraint checking, reported through an [`ErrorListener`].
+//!
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
+use xenolith_core::attr::Attributes;
 use xenolith_core::error::Location;
 use xenolith_core::name::{NameId, NamePool, QName};
-use xenolith_parser::AttributeRef;
 use xenolith_parser::dtd::{AttDef, AttType, ContentSpec, DefaultDecl, Dtd, GeneralEntity};
 
 use crate::content::ContentModel;
@@ -19,8 +19,10 @@ use crate::{ErrorListener, Validator, ValidityError};
 
 /// A validator against a document's own DTD.
 ///
-/// Built from the [`Dtd`] once the `DOCTYPE` is read; see [`validate`](crate::validate). It
-/// owns a copy of the DTD so it can read it while the parser goes on emitting events.
+/// Built from the [`Dtd`] once the `DOCTYPE` is read, which [`ValidatingHandler`](crate::ValidatingHandler) does when
+/// asked to validate against the document's own DTD. It owns a copy of the DTD so it can read it while the parser
+/// continues emitting events.
+///
 #[derive(Debug)]
 pub struct DtdValidator {
   dtd: Dtd,
@@ -33,11 +35,11 @@ pub struct DtdValidator {
   models: HashMap<NameId, Option<ContentModel>>,
   /// The stack of open elements: lexical name and the children gathered so far.
   open: Vec<OpenElement>,
-  /// Every `ID` value seen, to catch duplicates, with where it was declared.
+  /// Every `ID` value seen, to catch duplicates, with where it appeared.
   ids: HashMap<String, Location>,
   /// Every `IDREF` value seen and where, checked at the end against `ids`.
   idrefs: Vec<(String, Location)>,
-  /// Whether `xml:id` attributes are checked as IDs (xml:id), recorded in the same `ids` space.
+  /// Whether `xml:id` attributes are checked as IDs, recorded in the same `ids` space.
   #[cfg(feature = "xml-id")]
   xml_id: bool,
 }
@@ -78,8 +80,8 @@ impl DtdValidator {
     }
   }
 
-  /// Also check `xml:id` attributes as IDs (xml:id), sharing this validator's ID space so an
-  /// `xml:id` and a declared `ID` with the same value collide. Off by default.
+  /// Also check `xml:id` attributes as IDs, sharing this validator's ID space so an `xml:id` and a declared `ID` with
+  /// the same value collide. Off by default.
   #[cfg(feature = "xml-id")]
   #[must_use]
   pub fn with_xml_id(mut self, on: bool) -> Self {
@@ -87,120 +89,19 @@ impl DtdValidator {
     self
   }
 
-  /// Reports `error`, returning whether validation should continue.
+  /// Reports a validity error with `message` at `at`, returning whether validation should continue.
   fn report(&self, errors: &mut dyn ErrorListener, at: &Location, message: String) -> ControlFlow<()> {
     errors.report(ValidityError::new(message, at.clone()))
   }
 
-  /// The lexical name of an element or attribute, interned once, for matching against the DTD.
+  /// The lexical name of an element or attribute, for looking it up in the DTD by name.
   fn lexical(pool: &NamePool, name: QName) -> String {
     name.to_lexical(pool)
   }
-}
 
-impl Validator for DtdValidator {
-  fn start_element(
-    &mut self,
-    name: QName,
-    attributes: &[AttributeRef<'_>],
-    pool: &NamePool,
-    at: &Location,
-    errors: &mut dyn ErrorListener,
-  ) -> ControlFlow<()> {
-    if !self.declarations_checked {
-      self.declarations_checked = true;
-      self.check_declarations(pool, at, errors)?;
-    }
-    let lexical = Self::lexical(pool, name);
-    // The DTD interned its names in this same pool while the DOCTYPE was parsed, so a name it
-    // never saw simply is not there.
-    let element = match pool.get(&lexical) {
-      Some(id) => id,
-      None => {
-        return self.report(errors, at, format!("element \"{lexical}\" is not declared"));
-      }
-    };
-
-    // VC: Root Element Type.
-    if !self.root_seen {
-      self.root_seen = true;
-      if element != self.root {
-        let root = pool.resolve(self.root).to_owned();
-        let flow = self.report(errors, at, format!("the root element is \"{lexical}\", but the DTD names \"{root}\""));
-        flow?;
-      }
-    }
-
-    // VC: Element Valid — the element must be declared.
-    if !self.dtd.has_element(element) {
-      self.report(errors, at, format!("element \"{lexical}\" is used but not declared"))?;
-    }
-
-    // Record this element as a child of its parent, for the parent's content model.
-    if let Some(parent) = self.open.last_mut() {
-      parent.children.push(element);
-    }
-
-    let content = match self.dtd.content_spec(element) {
-      Some(ContentSpec::Empty) => ContentKind::Empty,
-      Some(ContentSpec::Children(_)) => ContentKind::ElementOnly,
-      _ => ContentKind::CharacterData,
-    };
-    self.check_attributes(element, &lexical, attributes, pool, at, errors)?;
-    self.open.push(OpenElement { lexical: element, children: Vec::new(), content });
-    ControlFlow::Continue(())
-  }
-
-  fn characters(
-    &mut self,
-    _text: &str,
-    whitespace_only: bool,
-    _pool: &NamePool,
-    at: &Location,
-    errors: &mut dyn ErrorListener,
-  ) -> ControlFlow<()> {
-    // VC: Element Valid. An EMPTY element admits no content at all; element content admits
-    // whitespace between its children but no other character data.
-    match self.open.last().map(|o| o.content) {
-      Some(ContentKind::Empty) => self.report(errors, at, "an EMPTY element may not contain character data".to_owned()),
-      Some(ContentKind::ElementOnly) if !whitespace_only => {
-        self.report(errors, at, "character data may not appear in this element's content".to_owned())
-      }
-      _ => ControlFlow::Continue(()),
-    }
-  }
-
-  fn end_element(
-    &mut self,
-    _name: QName,
-    pool: &NamePool,
-    at: &Location,
-    errors: &mut dyn ErrorListener,
-  ) -> ControlFlow<()> {
-    // A well-formed document never closes what it did not open, so this is only reachable from
-    // a caller driving the validator by hand with events of its own — and once, from a parser
-    // that reported the `Doctype` event after the root element's start tag, which built the
-    // validator too late to see it. Whichever it is, there is nothing to check and no reason to
-    // bring the process down over it.
-    let Some(open) = self.open.pop() else { return ControlFlow::Continue(()) };
-    self.check_content(open.lexical, &open.children, pool, at, errors)
-  }
-
-  fn finish(&mut self, _pool: &NamePool, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
-    // VC: IDREF — every referenced ID must have been declared somewhere in the document.
-    for (value, at) in std::mem::take(&mut self.idrefs) {
-      if !self.ids.contains_key(&value) {
-        self.report(errors, &at, format!("IDREF \"{value}\" matches no ID in the document"))?;
-      }
-    }
-    ControlFlow::Continue(())
-  }
-}
-
-impl DtdValidator {
-  /// Checks the declarations themselves, once: the constraints on an `ATTLIST` that hold
-  /// regardless of any document — an ID attribute's default, one ID per element, and the
-  /// syntactic validity of each declared default value.
+  /// Checks the declarations themselves, once: the constraints that hold regardless of any document, for example, an
+  /// ID attribute's default, one ID per element, the syntactic validity of each declared default value, and no name
+  /// repeated in mixed content.
   fn check_declarations(&self, pool: &NamePool, at: &Location, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
     // Collect first so the borrow of the DTD does not outlive the reports.
     let attlists: Vec<(NameId, Vec<AttDef>)> = self.dtd.attlists().map(|(e, defs)| (e, defs.to_vec())).collect();
@@ -211,14 +112,14 @@ impl DtdValidator {
       for def in &defs {
         if matches!(def.att_type, AttType::Id) {
           ids += 1;
-          // VC: ID Attribute Default — an ID must be #IMPLIED or #REQUIRED.
+          // VC: ID Attribute Default. An ID must be #IMPLIED or #REQUIRED.
           if matches!(def.default, DefaultDecl::Fixed(_) | DefaultDecl::Default(_)) {
             let name = pool.resolve(def.name);
             let message = format!("the ID attribute \"{name}\" of \"{element_name}\" must be #IMPLIED or #REQUIRED");
             errors.report(ValidityError::new(message, at.clone()))?;
           }
         }
-        // VC: Notation Attributes — every name in a NOTATION type must be a declared notation.
+        // VC: Notation Attributes. Every name in a NOTATION type must be a declared notation.
         if let AttType::Notation(notations) = &def.att_type {
           for &notation in notations {
             if !self.dtd.has_notation(notation) {
@@ -229,8 +130,8 @@ impl DtdValidator {
             }
           }
         }
-        // VC: Attribute Default Value Syntactically Correct — a declared default must be a
-        // legal value for its type. Check it without recording IDs or references.
+        // VC: Attribute Default Value Syntactically Correct. A declared default must be a legal
+        // value for its type. Check it without recording IDs or references.
         if let Some(value) = def.default.value() {
           if !self.default_value_is_valid(&def.att_type, value, pool) {
             let name = pool.resolve(def.name);
@@ -246,7 +147,7 @@ impl DtdValidator {
       }
     }
 
-    // VC: No Duplicate Types — a name may not repeat in an element's mixed content.
+    // VC: No Duplicate Types. A name may not repeat in an element's mixed content.
     let mixed: Vec<(NameId, Vec<NameId>)> = self
       .dtd
       .elements()
@@ -359,7 +260,7 @@ impl DtdValidator {
     &mut self,
     element: NameId,
     element_lexical: &str,
-    attributes: &[AttributeRef<'_>],
+    attributes: Attributes<'_>,
     pool: &NamePool,
     at: &Location,
     errors: &mut dyn ErrorListener,
@@ -367,7 +268,7 @@ impl DtdValidator {
     // Copy the definitions off the DTD so the checks below may borrow `self` mutably.
     let defs = self.dtd.attlist(element).unwrap_or(&[]).to_vec();
 
-    for attribute in attributes {
+    for attribute in attributes.iter() {
       if attribute.declares_namespace {
         continue; // namespace declarations are not in the DTD
       }
@@ -433,7 +334,7 @@ impl DtdValidator {
         if !xenolith_core::chars::is_name(value) {
           return self.report(errors, at, format!("the ID value \"{value}\" is not a valid name"));
         }
-        // VC: ID — an ID value must be unique.
+        // VC: ID. An ID value must be unique.
         if self.ids.insert(value.to_owned(), at.clone()).is_some() {
           return self.report(errors, at, format!("the ID \"{value}\" is used more than once"));
         }
@@ -463,7 +364,7 @@ impl DtdValidator {
       }
       AttType::Entity | AttType::Entities => {
         for token in value.split_whitespace() {
-          // VC: Entity Name — the value must name an unparsed entity.
+          // VC: Entity Name. The value must name an unparsed entity.
           let unparsed = pool.get(token).and_then(|id| self.dtd.general_entity(id));
           if !matches!(unparsed, Some(GeneralEntity::Unparsed { .. })) {
             self.report(
@@ -504,6 +405,103 @@ impl DtdValidator {
         ControlFlow::Continue(())
       }
     }
+  }
+}
+
+impl Validator for DtdValidator {
+  fn start_element(
+    &mut self,
+    name: QName,
+    attributes: Attributes<'_>,
+    pool: &NamePool,
+    at: &Location,
+    errors: &mut dyn ErrorListener,
+  ) -> ControlFlow<()> {
+    if !self.declarations_checked {
+      self.declarations_checked = true;
+      self.check_declarations(pool, at, errors)?;
+    }
+    let lexical = Self::lexical(pool, name);
+    // The DTD interned its names in this same pool while the DOCTYPE was parsed, so a name it never saw simply is not
+    // there.
+    let element = match pool.get(&lexical) {
+      Some(id) => id,
+      None => {
+        return self.report(errors, at, format!("element \"{lexical}\" is not declared"));
+      }
+    };
+
+    // VC: Root Element Type.
+    if !self.root_seen {
+      self.root_seen = true;
+      if element != self.root {
+        let root = pool.resolve(self.root).to_owned();
+        let flow = self.report(errors, at, format!("the root element is \"{lexical}\", but the DTD names \"{root}\""));
+        flow?;
+      }
+    }
+
+    // VC: Element Valid. The element must be declared.
+    if !self.dtd.has_element(element) {
+      self.report(errors, at, format!("element \"{lexical}\" is used but not declared"))?;
+    }
+
+    // Record this element as a child of its parent, for the parent's content model.
+    if let Some(parent) = self.open.last_mut() {
+      parent.children.push(element);
+    }
+
+    let content = match self.dtd.content_spec(element) {
+      Some(ContentSpec::Empty) => ContentKind::Empty,
+      Some(ContentSpec::Children(_)) => ContentKind::ElementOnly,
+      _ => ContentKind::CharacterData,
+    };
+    self.check_attributes(element, &lexical, attributes, pool, at, errors)?;
+    self.open.push(OpenElement { lexical: element, children: Vec::new(), content });
+    ControlFlow::Continue(())
+  }
+
+  fn characters(
+    &mut self,
+    _text: &str,
+    whitespace_only: bool,
+    at: &Location,
+    errors: &mut dyn ErrorListener,
+  ) -> ControlFlow<()> {
+    // VC: Element Valid. An EMPTY element admits no content at all; element content admits whitespace between its
+    // children but no other character data.
+    match self.open.last().map(|o| o.content) {
+      Some(ContentKind::Empty) => self.report(errors, at, "an EMPTY element may not contain character data".to_owned()),
+      Some(ContentKind::ElementOnly) if !whitespace_only => {
+        self.report(errors, at, "character data may not appear in this element's content".to_owned())
+      }
+      _ => ControlFlow::Continue(()),
+    }
+  }
+
+  fn end_element(
+    &mut self,
+    _name: QName,
+    pool: &NamePool,
+    at: &Location,
+    errors: &mut dyn ErrorListener,
+  ) -> ControlFlow<()> {
+    // A well-formed document never closes what it did not open, so this is only reachable from a caller driving the
+    // validator by hand with events of its own, or once from a parser that reported the `Doctype` event after the root
+    // element's start tag, which built the validator too late to see it. Whichever it is, there is nothing to check
+    // and no reason to bring the process down over it.
+    let Some(open) = self.open.pop() else { return ControlFlow::Continue(()) };
+    self.check_content(open.lexical, &open.children, pool, at, errors)
+  }
+
+  fn finish(&mut self, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
+    // VC: IDREF. Every referenced ID must have been declared somewhere in the document.
+    for (value, at) in std::mem::take(&mut self.idrefs) {
+      if !self.ids.contains_key(&value) {
+        self.report(errors, &at, format!("IDREF \"{value}\" matches no ID in the document"))?;
+      }
+    }
+    ControlFlow::Continue(())
   }
 }
 

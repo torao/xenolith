@@ -30,6 +30,7 @@ use std::io::Read;
 
 use xenolith_dom::build;
 use xenolith_parser::{EventRef, Reader};
+use xenolith_validate::Validatable;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::XPath;
 use xenolith_xslt::{Stylesheet, Transform};
@@ -109,7 +110,7 @@ impl Read for OneByteAtATime<'_> {
 /// against — `xml:id` is checked whether or not a DTD declares anything — so "errors imply a
 /// DTD" would be a property that is not true, and a fuzzer would rightly find it.
 pub fn validate_document(data: &[u8]) {
-  if let Ok(report) = xenolith_validate::validate(data) {
+  if let Ok(report) = Reader::new(data).with_validation().validating_dtd().run() {
     let _ = report.is_valid();
     for error in report.errors() {
       let _ = error.message();

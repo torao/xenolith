@@ -12,10 +12,13 @@ categories.workspace = true
 
 [features]
 default = []
+# Validate as you write: the `ValidatingWriter`, which checks each write against a schema before it is emitted.
+validate = ["dep:xenolith-validate"]
 
 [dependencies]
 xenolith-core = { workspace = true }
 xenolith-dom = { workspace = true }
+xenolith-validate = { workspace = true, optional = true }
 
 [dev-dependencies]
 xenolith-dom = { workspace = true, features = ["parse"] }

@@ -416,6 +416,12 @@ impl Document {
     }
   }
 
+  /// The payload of a node, for crate code that reads a node's kind-specific data directly, such as emitting the tree
+  /// as an event stream.
+  pub(crate) fn node_data(&self, id: NodeId) -> &NodeData {
+    &self.slot(id).data
+  }
+
   /// The name of an element or attribute node, if this is one.
   fn name_of(&self, id: NodeId) -> Option<&QName> {
     match &self.slot(id).data {

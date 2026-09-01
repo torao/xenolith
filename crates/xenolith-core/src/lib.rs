@@ -6,6 +6,8 @@
 //! - [`error`] — errors carrying a [`Location`] in the *entity* they occurred in.
 //! - [`chars`] — the character classes of XML 1.0 Fifth Edition.
 //! - [`name`] — interned names, [`QName`] and [`ExpandedName`].
+//! - [`attr`] — [`Attributes`], a source-independent view of an element's attributes.
+//! - [`validate`] — the [`Validator`] contract and the errors it reports, for any source to target.
 //! - [`uri`] — RFC 3986 references and resolution, the basis of base URI handling.
 //! - [`encoding`] — the [`Decoder`](encoding::Decoder) seam and the built-in encodings.
 //!
@@ -62,12 +64,16 @@
 //! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 
+pub mod attr;
 pub mod chars;
 pub mod encoding;
 pub mod error;
 pub mod name;
 pub mod uri;
+pub mod validate;
 
+pub use attr::{AttributeList, AttributeRef, Attributes};
 pub use error::{Error, Location, Result, Severity};
 pub use name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
 pub use uri::UriReference;
+pub use validate::{CollectErrors, ErrorListener, FailFast, Validator, ValidityError};

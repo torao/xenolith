@@ -15,9 +15,9 @@ is what the code does.
 | `org.w3c.dom.Document`, `Node`, `Element` | [`dom::Document`](xenolith_dom::Document) and a `Copy` [`NodeId`](xenolith_dom::NodeId) |
 | `org.w3c.dom.DOMException` | [`dom::DomException`](xenolith_dom::DomException) |
 | `javax.xml.stream.XMLStreamReader` (StAX) | [`parser::Reader`](xenolith_parser::Reader) |
-| `org.xml.sax.ContentHandler` + `SAXParser` | [`parser::sax::Handler`](xenolith_parser::sax::Handler) + [`sax::parse`](xenolith_parser::sax::parse) |
+| `org.xml.sax.ContentHandler` + `SAXParser` | [`parser::sax::Handler`](xenolith_parser::sax::Handler) + [`EventSource::emit`](xenolith_parser::sax::EventSource::emit) |
 | `org.xml.sax.EntityResolver` | [`parser::resolve::UriResolver`](xenolith_parser::resolve::UriResolver) |
-| `setValidating(true)`, `javax.xml.validation` | [`validate::validate`](xenolith_validate::validate), [`Validator`](xenolith_validate::Validator) |
+| `setValidating(true)`, `javax.xml.validation` | [`Validatable::with_validation`](xenolith_validate::Validatable::with_validation), [`Validator`](xenolith_validate::Validator) |
 | `javax.xml.stream.XMLStreamWriter` | [`serialize::XmlWriter`](xenolith_serialize::XmlWriter) |
 | `LSSerializer` / `Transformer` used to print a tree | [`serialize::Serializer`](xenolith_serialize::Serializer) |
 | `XPathFactory.newInstance().newXPath()` | [`xpath::XPath::new`](xenolith_xpath::XPath::new) |
@@ -115,9 +115,7 @@ class Titles extends DefaultHandler {
 ```
 
 ```rust
-use std::convert::Infallible;
-
-use xenolith::parser::sax::{CharactersEvent, Handler, StartElementEvent, parse};
+use xenolith::parser::sax::{CharactersEvent, EventSource, Handler, StartElementEvent};
 use xenolith::parser::Reader;
 
 #[derive(Default)]
@@ -127,22 +125,19 @@ struct Titles {
 }
 
 impl Handler for Titles {
-  type Error = Infallible;
-  fn start_element(&mut self, event: StartElementEvent<'_>) -> Result<(), Infallible> {
+  fn start_element(&mut self, event: StartElementEvent<'_>) {
     self.in_title = event.pool.resolve(event.name.local()) == "title";
-    Ok(())
   }
-  fn characters(&mut self, event: CharactersEvent<'_>) -> Result<(), Infallible> {
+  fn characters(&mut self, event: CharactersEvent<'_>) {
     if self.in_title {
       self.found.push(event.text.to_owned());
     }
-    Ok(())
   }
 }
 
 let mut reader = Reader::new("<books><title>Dune</title><title>Emma</title></books>".as_bytes());
 let mut titles = Titles::default();
-parse(&mut reader, &mut titles)?;
+reader.emit(&mut titles)?;
 
 assert_eq!(titles.found, ["Dune", "Emma"]);
 # Ok::<(), xenolith::Error>(())
@@ -245,10 +240,11 @@ factory.newDocumentBuilder().parse(in); // errors reach the ErrorHandler
 ```
 
 ```rust
-use xenolith::validate::validate;
+use xenolith::parser::Reader;
+use xenolith::validate::Validatable;
 
 let xml = "<!DOCTYPE a [<!ELEMENT a (b)>]><a><c/></a>";
-let report = validate(xml.as_bytes())?;
+let report = Reader::new(xml.as_bytes()).with_validation().validating_dtd().run()?;
 
 // Two violations, not one: `c` is not declared, and `a` was declared to hold a `b`.
 assert!(!report.is_valid());
