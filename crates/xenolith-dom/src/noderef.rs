@@ -1,9 +1,10 @@
-//! A borrowing handle for reading a node with method-call ergonomics.
+//! A borrowing handle for reading a node through chained method calls.
 //!
-//! A [`NodeId`] plus its [`Document`] is all it takes to read a node, but threading the document
-//! through every step is noisy. [`NodeRef`] bundles the two for the length of a borrow, so a
-//! walk reads as `doc.node(root).first_child()` rather than a chain of `doc.method(id)` calls.
-//! It is a read-only view; mutation goes through [`Document`] with `&mut` access.
+//! A [`NodeId`] plus its [`Document`] is all it takes to read a node, but passing the document
+//! through every step is repetitive. [`NodeRef`] bundles the two for the length of a borrow, so a
+//! walk reads as `doc.node(root).first_child()` rather than a chain of `doc.method(id)` calls. It
+//! is a read-only view. Mutation goes through [`Document`] with `&mut` access.
+//!
 
 use crate::node::{NodeId, NodeType};
 use crate::{Document, NamedNodeMap, NodeList};
@@ -19,7 +20,7 @@ use crate::{Document, NamedNodeMap, NodeList};
 /// let root = doc.create_element("a")?;
 /// let child = doc.create_element("b")?;
 /// doc.append_child(root, child)?;
-/// doc.append_child(doc.root(), root)?;
+/// doc.append_child(doc.document_node(), root)?;
 ///
 /// let first = doc.node(root).first_child().unwrap();
 /// assert_eq!(first.node_name(), "b");
@@ -37,7 +38,7 @@ impl<'a> NodeRef<'a> {
     Self { doc, id }
   }
 
-  /// The node's handle.
+  /// The node's [`NodeId`].
   #[must_use]
   pub const fn id(self) -> NodeId {
     self.id

@@ -1,15 +1,14 @@
 //! Views over the tree: [`NodeList`] and [`NamedNodeMap`].
 //!
-//! Each holds no snapshot — only a borrow of the [`Document`] and a description of what to
-//! gather — and answers `length` and `item` by reading the tree as it is at that moment. So a
-//! view is always current: obtain one, and it reflects the tree right then.
+//! These collections hold no snapshot. They keep only a borrow of the [`Document`] and a description of what to
+//! gather, and answer `length` and `item` by reading the tree as it is at that moment. So a view is always current.
 //!
-//! This is the arena's version of the DOM's *live* collection, with one difference the borrow
-//! checker makes. A W3C `NodeList` is held while the document is mutated through another path
-//! and updates under you; here the view borrows the document, and mutation needs `&mut`, so the
-//! two cannot overlap. You do not watch a held list change — you re-obtain it after the change,
-//! and what you get is current. The liveness is in *how* it is computed, not in holding one
-//! across a mutation.
+//! This is the [arena](crate#arena)'s version of the W3C DOM specification's *live* collection, with one difference
+//! the borrow checker makes. A W3C `NodeList` is held while the document is mutated through another path, and updates
+//! under you. Here the view borrows the document, and mutation needs `&mut`, so the two cannot overlap. You do not
+//! watch a held list change. You re-obtain it after the change, and what you get is current. The liveness is in *how*
+//! it is computed, not in holding one across a mutation.
+//!
 
 use crate::Document;
 use crate::node::{NodeData, NodeId, NodeType};
@@ -86,12 +85,11 @@ impl NameFilter {
   }
 }
 
-/// An ordered list of nodes, computed on demand: the arena's take on the DOM's `NodeList`.
+/// An ordered list of nodes, computed on demand: the [arena](crate#arena)'s take on a W3C `NodeList`.
 ///
-/// It holds no snapshot: each read looks at the tree as it is then, so a list obtained after a
-/// change reflects that change. Unlike a W3C `NodeList` it cannot be held *across* a change — it
-/// borrows the document, and a change needs `&mut` — so you re-obtain it rather than watch one
-/// update under you.
+/// It holds no snapshot: each read looks at the tree as it is then, so a list obtained after a change includes that
+/// change. Unlike a W3C `NodeList`, it cannot be held *across* a change. It borrows the document, and a change needs
+/// `&mut`, so you re-obtain it rather than watch one update under you.
 ///
 /// # Examples
 ///
@@ -100,7 +98,7 @@ impl NameFilter {
 ///
 /// let mut doc = Document::new();
 /// let root = doc.create_element("ul")?;
-/// doc.append_child(doc.root(), root)?;
+/// doc.append_child(doc.document_node(), root)?;
 /// assert_eq!(doc.get_elements_by_tag_name("li").length(), 0);
 ///
 /// let li = doc.create_element("li")?;
@@ -131,7 +129,7 @@ impl<'a> NodeList<'a> {
         let name = name.clone();
         doc
           .descendants(*root)
-          .filter(|&node| doc.node_type(node) == NodeType::Element && name.matches(doc, node))
+          .filter(|&node| doc.node_type(node) == NodeType::ELEMENT_NODE && name.matches(doc, node))
           .collect()
       }
     };
@@ -157,10 +155,11 @@ impl<'a> NodeList<'a> {
   }
 }
 
-/// A map of an element's attribute nodes, computed on demand: the DOM's `NamedNodeMap`.
+/// A map of an element's attribute nodes, computed on demand: a W3C `NamedNodeMap`.
 ///
 /// Ordered like the attribute list and addressable by index or by name. Computed on each read
 /// and so always current, with the same borrow caveat as a [`NodeList`].
+///
 #[derive(Clone, Debug)]
 pub struct NamedNodeMap<'a> {
   doc: &'a Document,

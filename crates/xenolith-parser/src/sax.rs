@@ -233,6 +233,9 @@ pub struct StartElementEvent<'a> {
   pub xml_space: XmlSpace,
   /// The `xml:lang` in effect inside this element, if any.
   pub xml_lang: Option<&'a str>,
+  /// The base URI in effect at this element (XML Base), resolved from `xml:base` and the document's system identifier,
+  /// if either is known.
+  pub base_uri: Option<&'a str>,
   /// The name pool, for resolving `name` and the attribute names to strings.
   pub pool: &'a NamePool,
   /// The source position where this event begins, for diagnostics.
@@ -241,7 +244,7 @@ pub struct StartElementEvent<'a> {
 
 impl<'a> StartElementEvent<'a> {
   /// Builds a start element event, for a source other than the parser that drives a [`Handler`], for example a tree
-  /// walk. A source with no `xml:space` or `xml:lang` scope passes [`XmlSpace::default`] and `None`.
+  /// walk. A source with no `xml:space`, `xml:lang`, or base URI scope passes [`XmlSpace::default`] and `None`.
   ///
   #[must_use]
   pub fn new(
@@ -249,10 +252,11 @@ impl<'a> StartElementEvent<'a> {
     attributes: Attributes<'a>,
     xml_space: XmlSpace,
     xml_lang: Option<&'a str>,
+    base_uri: Option<&'a str>,
     pool: &'a NamePool,
     location: Location,
   ) -> Self {
-    Self { name, attributes, xml_space, xml_lang, pool, location }
+    Self { name, attributes, xml_space, xml_lang, base_uri, pool, location }
   }
 }
 
@@ -535,7 +539,10 @@ impl<R: Read> EventSource for Reader<R> {
       match parser.event_ref() {
         Some(EventRef::StartElement { name, attributes, xml_space, xml_lang }) => {
           let attributes = Attributes::new(&attributes);
-          handler.start_element(StartElementEvent::new(name, attributes, xml_space, xml_lang, pool, location));
+          // `base` is a local so the event can borrow the resolved base URI for this one call.
+          let base = parser.base_uri();
+          let event = StartElementEvent::new(name, attributes, xml_space, xml_lang, base.as_deref(), pool, location);
+          handler.start_element(event);
         }
         Some(EventRef::EndElement { name }) => handler.end_element(EndElementEvent::new(name, pool, location)),
         Some(EventRef::Text(text)) => handler.characters(CharactersEvent::new(text, location)),

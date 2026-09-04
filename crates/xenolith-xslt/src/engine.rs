@@ -504,7 +504,7 @@ fn settle_method(output: &mut Output, document: &Document, root: NodeId) {
   if output.method_stated {
     return;
   }
-  let first = document.children(root).find(|&child| document.node_type(child) == NodeType::Element);
+  let first = document.children(root).find(|&child| document.node_type(child) == NodeType::ELEMENT_NODE);
   let Some(element) = first else { return };
   let is_html = document.namespace_uri(element).is_none()
     && document.local_name(element).is_some_and(|local| local.eq_ignore_ascii_case("html"));
@@ -746,7 +746,7 @@ impl<M: Model> Engine<'_, M> {
   fn run_node(&mut self, module: usize, node: NodeId, focus: Focus<M::Node>) -> Result<()> {
     let document = self.stylesheet.document(module);
     match document.node_type(node) {
-      NodeType::Text | NodeType::CdataSection => {
+      NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE => {
         let text = document.node_value(node).unwrap_or_default().to_owned();
         // XSLT 1.0 §3.4 strips whitespace-only text from a stylesheet, so that the indentation
         // a stylesheet is written with does not turn up in the result. `xsl:text` keeps it,
@@ -758,8 +758,8 @@ impl<M: Model> Engine<'_, M> {
       }
       // A comment or processing instruction in the stylesheet is not part of the result;
       // xsl:comment and xsl:processing-instruction are how those are produced.
-      NodeType::Comment | NodeType::ProcessingInstruction => Ok(()),
-      NodeType::Element => {
+      NodeType::COMMENT_NODE | NodeType::PROCESSING_INSTRUCTION_NODE => Ok(()),
+      NodeType::ELEMENT_NODE => {
         if document.namespace_uri(node) == Some(XSLT_NAMESPACE) {
           let local = document.local_name(node).unwrap_or_default().to_owned();
           return self.instruction(module, node, &local, focus);
@@ -1062,7 +1062,7 @@ impl<M: Model> Engine<'_, M> {
     document
       .children(element)
       .filter(|&child| {
-        document.node_type(child) == NodeType::Element
+        document.node_type(child) == NodeType::ELEMENT_NODE
           && document.namespace_uri(child) == Some(XSLT_NAMESPACE)
           && document.local_name(child) == Some("fallback")
       })
@@ -1074,7 +1074,8 @@ impl<M: Model> Engine<'_, M> {
     let mut otherwise = None;
     for branch in branches {
       let document = self.stylesheet.document(module);
-      if document.node_type(branch) != NodeType::Element || document.namespace_uri(branch) != Some(XSLT_NAMESPACE) {
+      if document.node_type(branch) != NodeType::ELEMENT_NODE || document.namespace_uri(branch) != Some(XSLT_NAMESPACE)
+      {
         continue;
       }
       match document.local_name(branch) {
@@ -1157,7 +1158,7 @@ impl<M: Model> Engine<'_, M> {
     let mut parameters = Vec::new();
     for child in children {
       let document = self.stylesheet.document(module);
-      let is_param = document.node_type(child) == NodeType::Element
+      let is_param = document.node_type(child) == NodeType::ELEMENT_NODE
         && document.namespace_uri(child) == Some(XSLT_NAMESPACE)
         && document.local_name(child) == Some("with-param");
       if !is_param {
@@ -1279,7 +1280,7 @@ impl<M: Model> Engine<'_, M> {
     let value = self.captured_text(module, element, focus)?;
     let target = *self.insertion.last().expect("there is always somewhere to put the result");
     // An attribute added where no element is open has nowhere to go; XSLT calls that an error.
-    if self.output.node_type(target) != NodeType::Element {
+    if self.output.node_type(target) != NodeType::ELEMENT_NODE {
       let message = format!("xsl:attribute {name:?} has no element to be added to");
       return Err(Error::xslt(message));
     }
@@ -1371,7 +1372,7 @@ impl<M: Model> Engine<'_, M> {
         let name = self.model.qualified_name(node).unwrap_or_default();
         let namespace = self.model.expanded_name(node).and_then(|name| name.namespace);
         let target = *self.insertion.last().expect("there is always somewhere to put the result");
-        if self.output.node_type(target) != NodeType::Element {
+        if self.output.node_type(target) != NodeType::ELEMENT_NODE {
           return Err(Error::xslt(format!("the attribute {name:?} has no element to be copied onto")));
         }
         match namespace {
@@ -1884,7 +1885,7 @@ impl<M: Model> Engine<'_, M> {
     let mut sorts = Vec::new();
     for child in children {
       let document = self.stylesheet.document(module);
-      let is_sort = document.node_type(child) == NodeType::Element
+      let is_sort = document.node_type(child) == NodeType::ELEMENT_NODE
         && document.namespace_uri(child) == Some(XSLT_NAMESPACE)
         && document.local_name(child) == Some("sort");
       if !is_sort {

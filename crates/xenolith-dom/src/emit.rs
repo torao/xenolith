@@ -1,6 +1,8 @@
 //! Emitting a built [`Document`] as a stream of parser events.
 //!
-//! [`build`](crate::build) turns a parser's events into a tree; [`DomSource`] goes the other way.
+//! [`build`](crate::build) turns a parser's events into a tree. [`DomSource`] walks a tree and reports it as the same
+//! kind of events.
+//!
 
 use xenolith_core::attr::{AttributeList, AttributeRef, Attributes};
 use xenolith_core::error::{Location, Result};
@@ -12,23 +14,25 @@ use xenolith_parser::sax::{
 };
 
 use crate::node::NodeData;
+use crate::walk::Visit;
 use crate::{Document, NodeId};
 
 /// A built [`Document`], or a subtree of it, as an [`EventSource`], the counterpart of Java's `DOMSource`.
 ///
-/// It drives a [`Handler`] by walking the tree, so a document already in memory becomes an event source. Anything that
-/// consumes parser events, a serializer or a validator wrapped as a handler, then works on a tree without knowing it did
-/// not come from a parser. Pass it wherever a source of parser events is taken.
+/// It drives a [`Handler`] by walking the tree, so a document already in memory becomes an event source. A consumer of
+/// parser events, for example, a serializer or a validator wrapped as a handler, then works on the document without
+/// knowing the events came from a tree rather than from a parser. Use it anywhere that takes a source of parser events.
 ///
-/// [`emit`](EventSource::emit) calls [`start_document`](Handler::start_document) first, an event for each node in
-/// document order, and [`end_document`](Handler::end_document) at the end. When the source covers the whole document or a
-/// fragment, its children are emitted without an enclosing element. A handler that stops the run through
-/// [`should_continue`](Handler::should_continue) ends it before the final call.
+/// [`emit`](EventSource::emit) calls [`start_document`](Handler::start_document) first, an event callback for each node
+/// in document order, and [`end_document`](Handler::end_document) at the end. When the source covers the whole document
+/// or a fragment, it emits the children without an enclosing element of their own. A handler that stops the run through
+/// [`should_continue`](Handler::should_continue) ends the walk early, so [`end_document`](Handler::end_document) does
+/// not run.
 ///
-/// The events carry no source position, since a tree has none, so every [`Location`] is [`unknown`](Location::unknown).
-/// A tree keeps no document type declaration in a form a [`doctype`](Handler::doctype) callback could receive, so that
-/// node is skipped. `xml:space` and `xml:lang` scope is not reconstructed; a start element reports
-/// [`XmlSpace::default`] and no language.
+/// A tree has no source position, so every [`Location`] is [`unknown`](Location::unknown). It also keeps no parsed DTD,
+/// which a [`doctype`](Handler::doctype) callback requires, so the walk skips the document type node. The walk does not
+/// reconstruct `xml:space` or `xml:lang` scope either, and a start element reports [`XmlSpace::default`] and no
+/// language. It does report the base URI the tree recorded for the element.
 ///
 /// # Examples
 ///
@@ -62,15 +66,21 @@ impl std::fmt::Debug for DomSource<'_> {
 }
 
 impl<'a> DomSource<'a> {
-  /// A source over the whole document.
+  /// Creates a source over the whole document.
   #[must_use]
   pub fn new(doc: &'a Document) -> Self {
-    Self { doc, node: doc.root() }
+    Self { doc, node: doc.document_node() }
   }
 
-  /// A source over the subtree rooted at `node`.
+  /// Creates a source over the subtree rooted at `node`.
+  ///
+  /// # Panics
+  ///
+  /// If `node` was made by another document.
+  ///
   #[must_use]
   pub fn at(doc: &'a Document, node: NodeId) -> Self {
+    assert!(doc.owns(node), "the node was made by another document, and a node id is only valid with its own");
     Self { doc, node }
   }
 }
@@ -78,81 +88,44 @@ impl<'a> DomSource<'a> {
 impl EventSource for DomSource<'_> {
   fn emit<H: Handler + ?Sized>(&mut self, handler: &mut H) -> Result<()> {
     handler.start_document();
-    if walk(self.doc, self.node, handler) {
-      // The whole subtree was emitted, so the document was read in full.
-      handler.end_document();
+    let doc = self.doc;
+    for (visit, node) in doc.walk(self.node) {
+      let carry_on = match visit {
+        Visit::Enter => enter(doc, node, handler),
+        Visit::Leave => leave(doc, node, handler),
+      };
+      if !carry_on {
+        // The handler stopped the run, so the document was not read in full and no end_document follows.
+        return Ok(());
+      }
     }
+    // The walk covered the whole subtree, so the document was read in full.
+    handler.end_document();
     Ok(())
   }
 }
 
-/// A step in the walk: enter a node, or leave an element after its children.
-enum Step {
-  Enter(NodeId),
-  Leave(NodeId),
-}
-
-/// Walks the subtree rooted at `node`, returning `false` if a handler stopped the run early.
-fn walk<H: Handler + ?Sized>(doc: &Document, node: NodeId, handler: &mut H) -> bool {
-  let mut stack = vec![Step::Enter(node)];
-  while let Some(step) = stack.pop() {
-    match step {
-      Step::Enter(id) => {
-        if !enter(doc, id, handler, &mut stack) {
-          return false;
-        }
-      }
-      Step::Leave(id) => {
-        let name = element_name(doc, id).expect("only an element is scheduled to leave");
-        handler.end_element(EndElementEvent::new(name, doc.pool(), Location::unknown()));
-        if !handler.should_continue() {
-          return false;
-        }
-      }
-    }
-  }
-  true
-}
-
-/// Handles entering one node, scheduling its children, and returns `false` if a handler stopped the run.
-fn enter<H: Handler + ?Sized>(doc: &Document, id: NodeId, handler: &mut H, stack: &mut Vec<Step>) -> bool {
+/// Reports one node on the way in, returning `false` if the handler stopped the run.
+///
+fn enter<H: Handler + ?Sized>(doc: &Document, id: NodeId, handler: &mut H) -> bool {
   match doc.node_data(id) {
     NodeData::Element(element) => {
       let attributes = DomAttributes { doc, attributes: &element.attributes };
-      let event = StartElementEvent::new(
+      // A local so the event can borrow the element's base URI for this one call.
+      let base = doc.base_uri(id);
+      handler.start_element(StartElementEvent::new(
         element.name,
         Attributes::new(&attributes),
         XmlSpace::default(),
         None,
+        base.as_deref(),
         doc.pool(),
         Location::unknown(),
-      );
-      handler.start_element(event);
-      if !handler.should_continue() {
-        return false;
-      }
-      // Leave after the children, and push the children so the first is processed first.
-      stack.push(Step::Leave(id));
-      push_children(doc, id, stack);
+      ));
     }
-    NodeData::Text(text) => {
-      handler.characters(CharactersEvent::new(text, Location::unknown()));
-      if !handler.should_continue() {
-        return false;
-      }
-    }
-    NodeData::CdataSection(text) => {
-      handler.cdata(CdataEvent::new(text, Location::unknown()));
-      if !handler.should_continue() {
-        return false;
-      }
-    }
-    NodeData::Comment(text) => {
-      handler.comment(CommentEvent::new(text, Location::unknown()));
-      if !handler.should_continue() {
-        return false;
-      }
-    }
+    NodeData::Text(text) => handler.characters(CharactersEvent::new(text, Location::unknown())),
+    NodeData::CdataSection(text) => handler.cdata(CdataEvent::new(text, Location::unknown())),
+    NodeData::Comment(text) => handler.comment(CommentEvent::new(text, Location::unknown())),
     NodeData::ProcessingInstruction { target, data } => {
       let target = doc.pool().resolve(*target);
       handler.processing_instruction(ProcessingInstructionEvent::new(
@@ -161,36 +134,30 @@ fn enter<H: Handler + ?Sized>(doc: &Document, id: NodeId, handler: &mut H, stack
         Location::unknown(),
         Location::unknown(),
       ));
-      if !handler.should_continue() {
-        return false;
-      }
     }
-    // The document and a fragment are containers with no event of their own; emit their children in order.
-    NodeData::Document | NodeData::DocumentFragment => push_children(doc, id, stack),
-    // A tree keeps no DTD, so there is nothing to hand a doctype callback. An attribute is not a child.
-    NodeData::DocumentType { .. } | NodeData::Attribute(_) => {}
+    // The document and a fragment are containers with no event of their own, so their children appear without an
+    // enclosing element. A tree keeps no parsed DTD, so there is nothing to hand a doctype callback. An attribute is
+    // not a child, so a walk never reaches one.
+    NodeData::Document | NodeData::DocumentFragment | NodeData::DocumentType { .. } | NodeData::Attribute(_) => {
+      return true;
+    }
   }
-  true
+  handler.should_continue()
 }
 
-/// Pushes a node's children so that, popped from the stack, they are visited in document order.
-fn push_children(doc: &Document, id: NodeId, stack: &mut Vec<Step>) {
-  let children: Vec<NodeId> = doc.children(id).collect();
-  for child in children.into_iter().rev() {
-    stack.push(Step::Enter(child));
-  }
-}
-
-/// The name of a node when it is an element.
-fn element_name(doc: &Document, id: NodeId) -> Option<QName> {
-  match doc.node_data(id) {
-    NodeData::Element(element) => Some(element.name),
-    _ => None,
-  }
+/// Reports one node on the way out, returning `false` if the handler stopped the run.
+///
+/// Only an element closes, so leaving any other kind of node reports nothing.
+///
+fn leave<H: Handler + ?Sized>(doc: &Document, id: NodeId, handler: &mut H) -> bool {
+  let NodeData::Element(element) = doc.node_data(id) else { return true };
+  handler.end_element(EndElementEvent::new(element.name, doc.pool(), Location::unknown()));
+  handler.should_continue()
 }
 
 /// The attributes of a DOM element, presented as an [`AttributeList`] so a [`Handler`] receives them the way the parser
 /// delivers them.
+///
 struct DomAttributes<'a> {
   doc: &'a Document,
   attributes: &'a [NodeId],
@@ -213,6 +180,7 @@ impl AttributeList for DomAttributes<'_> {
 }
 
 /// Whether an attribute is a namespace declaration (`xmlns` or `xmlns:p`).
+///
 fn declares_namespace(name: QName, pool: &NamePool) -> bool {
   name.namespace() == Some(NameId::XMLNS_NS) || (name.prefix.is_none() && pool.resolve(name.local()) == "xmlns")
 }
@@ -295,6 +263,7 @@ mod tests {
 
   #[test]
   fn a_handler_stops_the_emission_early() {
+    // Record the first element name, then request a stop. The rest of the tree is not visited.
     #[derive(Default)]
     struct First {
       names: Vec<String>,

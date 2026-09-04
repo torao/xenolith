@@ -57,7 +57,7 @@ fn builds_comments_pis_and_cdata() {
   let doc = parse("<doc><!--c--><?pi data?><![CDATA[<raw>]]></doc>");
   let root = doc.document_element().unwrap();
   let kids: Vec<_> = doc.children(root).map(|n| doc.node_type(n)).collect();
-  assert_eq!(kids, [NodeType::Comment, NodeType::ProcessingInstruction, NodeType::CdataSection]);
+  assert_eq!(kids, [NodeType::COMMENT_NODE, NodeType::PROCESSING_INSTRUCTION_NODE, NodeType::CDATA_SECTION_NODE]);
   let cdata = doc.last_child(root).unwrap();
   assert_eq!(doc.node_value(cdata), Some("<raw>"));
 }
@@ -65,8 +65,8 @@ fn builds_comments_pis_and_cdata() {
 #[test]
 fn a_prolog_comment_becomes_a_child_of_the_document() {
   let doc = parse("<!--intro--><doc/>");
-  let first = doc.first_child(doc.root()).unwrap();
-  assert_eq!(doc.node_type(first), NodeType::Comment);
+  let first = doc.first_child(doc.document_node()).unwrap();
+  assert_eq!(doc.node_type(first), NodeType::COMMENT_NODE);
   assert_eq!(doc.node_value(first), Some("intro"));
 }
 
@@ -74,7 +74,7 @@ fn a_prolog_comment_becomes_a_child_of_the_document() {
 fn builds_the_document_type_node() {
   let doc = parse("<!DOCTYPE greeting [<!ELEMENT greeting (#PCDATA)>]><greeting>hi</greeting>");
   let doctype = doc.doctype().unwrap();
-  assert_eq!(doc.node_type(doctype), NodeType::DocumentType);
+  assert_eq!(doc.node_type(doctype), NodeType::DOCUMENT_TYPE_NODE);
   assert_eq!(doc.node_name(doctype), "greeting");
 }
 
@@ -125,6 +125,37 @@ fn captures_the_doctype_public_and_system_ids() {
   assert_eq!(doc.node_name(doctype), "a");
   assert_eq!(doc.public_id(doctype), Some("pub-id"));
   assert_eq!(doc.system_id(doctype), Some("a.dtd"));
+}
+
+#[test]
+fn the_builder_runs_beside_another_handler_in_one_pass() {
+  // The DOM builder is a Handler, so a source can drive it and another handler together in a single read. Here a
+  // counting handler runs alongside it through `broadcast`; a validator would take the same place.
+  use xenolith_dom::build::DomBuilder;
+  use xenolith_parser::Reader;
+  use xenolith_parser::sax::{EventSource, Handler, StartElementEvent};
+
+  #[derive(Default)]
+  struct CountElements(usize);
+  impl Handler for CountElements {
+    fn start_element(&mut self, _event: StartElementEvent<'_>) {
+      self.0 += 1;
+    }
+  }
+
+  let mut builder = DomBuilder::new();
+  let mut counter = CountElements::default();
+  Reader::new("<doc><a/><b/></doc>".as_bytes())
+    .broadcast()
+    .with_handler(&mut builder)
+    .with_handler(&mut counter)
+    .run()
+    .expect("well-formed");
+
+  assert_eq!(counter.0, 3, "the counter saw every element in the same pass");
+  let doc = builder.into_document().expect("built");
+  assert_eq!(doc.node_name(doc.document_element().unwrap()), "doc");
+  assert_eq!(doc.children(doc.document_element().unwrap()).count(), 2);
 }
 
 #[test]

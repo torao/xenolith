@@ -257,20 +257,20 @@ impl<'a> Writer<'a> {
     self
       .document
       .children(root)
-      .find(|&child| self.document.node_type(child) == NodeType::Element)
+      .find(|&child| self.document.node_type(child) == NodeType::ELEMENT_NODE)
       .map(|element| self.document.node_name(element))
   }
 
   /// Writes one node and everything below it.
   fn node(&mut self, node: NodeId, depth: usize) {
     match self.document.node_type(node) {
-      NodeType::Element => self.element(node, depth),
-      NodeType::Text | NodeType::CdataSection => self.text(node),
-      NodeType::Comment => {
+      NodeType::ELEMENT_NODE => self.element(node, depth),
+      NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE => self.text(node),
+      NodeType::COMMENT_NODE => {
         let data = self.document.node_value(node).unwrap_or_default().to_owned();
         self.written.push_str(&format!("<!--{data}-->"));
       }
-      NodeType::ProcessingInstruction => {
+      NodeType::PROCESSING_INSTRUCTION_NODE => {
         let target = self.document.node_name(node);
         let data = self.document.node_value(node).unwrap_or_default().to_owned();
         // §16.2: the HTML method ends a processing instruction with `>` rather than `?>`.
@@ -418,12 +418,12 @@ impl<'a> Writer<'a> {
     let unescaped = html && HTML_UNESCAPED.contains(&local.as_str());
     let cdata = self.output.is_cdata_section(self.document.namespace_uri(node), &local);
     for child in children {
-      if unescaped && matches!(self.document.node_type(child), NodeType::Text | NodeType::CdataSection) {
+      if unescaped && matches!(self.document.node_type(child), NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE) {
         let text = self.document.node_value(child).unwrap_or_default().to_owned();
         self.written.push_str(&text);
         continue;
       }
-      if cdata && matches!(self.document.node_type(child), NodeType::Text | NodeType::CdataSection) {
+      if cdata && matches!(self.document.node_type(child), NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE) {
         let text = self.document.node_value(child).unwrap_or_default().to_owned();
         // A `]]>` inside would end the section early, so the section is split around it.
         self.written.push_str("<![CDATA[");
@@ -458,7 +458,7 @@ impl<'a> Writer<'a> {
     if children.peek().is_none() {
       return false;
     }
-    children.all(|child| self.document.node_type(child) == NodeType::Element)
+    children.all(|child| self.document.node_type(child) == NodeType::ELEMENT_NODE)
   }
 
   fn text(&mut self, node: NodeId) {

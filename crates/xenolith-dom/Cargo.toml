@@ -24,6 +24,9 @@ xenolith-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 xenolith-parser = { workspace = true, features = ["encodings", "xml-base", "xml-id"] }
+# For doctests that show a DomBuilder running beside a validator in one pass. validate does not depend on dom, so this
+# is a test-only sibling dependency with no dependency cycle.
+xenolith-validate = { workspace = true }
 
 [lints]
 workspace = true

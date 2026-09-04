@@ -454,7 +454,7 @@ fn a_hand_built_document_has_neither_base_uri_nor_ids() {
   let mut doc = Document::new();
   let root = doc.create_element("r").expect("a valid name");
   doc.set_attribute(root, "id", "x").expect("an element");
-  doc.append_child(doc.root(), root).expect("a root element");
+  doc.append_child(doc.document_node(), root).expect("a root element");
   assert_eq!(doc.base_uri(root), None);
   assert_eq!(doc.get_element_by_id("x"), None, "an attribute named id is not an ID until it is typed as one");
 }

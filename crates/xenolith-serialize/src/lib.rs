@@ -23,9 +23,9 @@
 //! let note = doc.create_element("note")?;
 //! let text = doc.create_text_node("hi");
 //! doc.append_child(note, text)?;
-//! doc.append_child(doc.root(), note)?;
+//! doc.append_child(doc.document_node(), note)?;
 //!
-//! let xml = Serializer::new().with_xml_declaration(true).to_string(&doc, doc.root());
+//! let xml = Serializer::new().with_xml_declaration(true).to_string(&doc, doc.document_node());
 //! assert_eq!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?><note>hi</note>");
 //! # Ok::<(), xenolith_dom::DomException>(())
 //! ```

@@ -74,7 +74,7 @@ impl XInclude {
   /// whatever a resource's own parsing or decoding raises.
   pub fn expand<L: Loader>(&self, doc: &mut Document, loader: &mut L) -> Result<(), Error> {
     let mut state = State { loader, count: 0, chain: Vec::new() };
-    let root = doc.root();
+    let root = doc.document_node();
     self.process_children(doc, root, &mut state, 0)
   }
 
@@ -89,7 +89,7 @@ impl XInclude {
     let mut child = doc.first_child(parent);
     while let Some(node) = child {
       let next = doc.next_sibling(node);
-      if doc.node_type(node) == NodeType::Element {
+      if doc.node_type(node) == NodeType::ELEMENT_NODE {
         if is_xi(doc, node, "include") {
           self.process_include(doc, node, state, depth)?;
         } else if is_xi(doc, node, "fallback") {
@@ -201,7 +201,7 @@ impl XInclude {
 
     // A malformed resource is fatal, not a fallback case.
     let mut included = build::parse_with_system_id(&bytes[..], &target).map_err(Fault::Fatal)?;
-    let included_root = included.root();
+    let included_root = included.document_node();
     state.chain.push(target.clone());
     let result = self.process_children(&mut included, included_root, state, depth + 1);
     state.chain.pop();
@@ -298,7 +298,7 @@ impl XInclude {
 fn effective_language(doc: &Document, node: NodeId) -> Option<String> {
   let mut current = Some(node);
   while let Some(node) = current {
-    if doc.node_type(node) == NodeType::Element {
+    if doc.node_type(node) == NodeType::ELEMENT_NODE {
       if let Some(language) = doc.attribute_ns(node, Some(XML_NS_URI), "lang") {
         return Some(language.to_owned());
       }

@@ -387,11 +387,11 @@ fn normalize(xml: &str) -> Option<String> {
 fn normalize_indented(xml: &str, indented: bool) -> Option<String> {
   let document = parse_loosely(xml)?;
   let mut written = String::new();
-  for child in document.children(document.root()) {
+  for child in document.children(document.document_node()) {
     // Whitespace outside the document element is layout rather than content — XML allows it
     // there and gives it no meaning — so a blank line between the declaration and the root is
     // not a difference of any kind.
-    if document.node_type(child) == xenolith_dom::NodeType::Text {
+    if document.node_type(child) == xenolith_dom::NodeType::TEXT_NODE {
       continue;
     }
     canonical(&document, child, indented, &mut written);
@@ -418,7 +418,7 @@ fn parse_loosely(xml: &str) -> Option<xenolith_dom::Document> {
 fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, indented: bool, into: &mut String) {
   use std::fmt::Write as _;
   match document.node_type(node) {
-    xenolith_dom::NodeType::Element => {
+    xenolith_dom::NodeType::ELEMENT_NODE => {
       let _ = write!(into, "<{}", expanded(document, node));
       let mut attributes: Vec<String> = document
         .attributes(node)
@@ -435,8 +435,8 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
       into.push('>');
       // Where an indenting processor may have put whitespace: between an element's children,
       // when they are elements. Text of its own is never touched, here or in the writer.
-      let among_elements =
-        indented && document.children(node).any(|child| document.node_type(child) == xenolith_dom::NodeType::Element);
+      let among_elements = indented
+        && document.children(node).any(|child| document.node_type(child) == xenolith_dom::NodeType::ELEMENT_NODE);
       for child in document.children(node) {
         if among_elements && is_only_whitespace(document, child) {
           continue;
@@ -445,14 +445,14 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
       }
       let _ = write!(into, "</{}>", expanded(document, node));
     }
-    xenolith_dom::NodeType::Text | xenolith_dom::NodeType::CdataSection => {
+    xenolith_dom::NodeType::TEXT_NODE | xenolith_dom::NodeType::CDATA_SECTION_NODE => {
       // A CDATA section is a way of writing text, not a different kind of content.
       into.push_str(document.node_value(node).unwrap_or_default());
     }
-    xenolith_dom::NodeType::Comment => {
+    xenolith_dom::NodeType::COMMENT_NODE => {
       let _ = write!(into, "<!--{}-->", document.node_value(node).unwrap_or_default());
     }
-    xenolith_dom::NodeType::ProcessingInstruction => {
+    xenolith_dom::NodeType::PROCESSING_INSTRUCTION_NODE => {
       let _ = write!(into, "<?{} {}?>", document.node_name(node), document.node_value(node).unwrap_or_default());
     }
     _ => {}
@@ -461,7 +461,7 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
 
 /// Whether a node is a text node holding nothing but whitespace.
 fn is_only_whitespace(document: &xenolith_dom::Document, node: xenolith_dom::NodeId) -> bool {
-  document.node_type(node) == xenolith_dom::NodeType::Text
+  document.node_type(node) == xenolith_dom::NodeType::TEXT_NODE
     && document.node_value(node).unwrap_or_default().trim().is_empty()
 }
 

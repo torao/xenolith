@@ -30,7 +30,7 @@ fn repairs_missing_namespace_declarations() {
   let a = doc.create_element_ns(Some("urn:d"), "a").unwrap();
   let b = doc.create_element_ns(Some("urn:p"), "p:b").unwrap();
   doc.append_child(a, b).unwrap();
-  doc.append_child(doc.root(), a).unwrap();
+  doc.append_child(doc.document_node(), a).unwrap();
   // Neither element carries an xmlns attribute; the serializer supplies them.
   assert_eq!(Serializer::new().to_string(&doc, a), "<a xmlns=\"urn:d\"><p:b xmlns:p=\"urn:p\"/></a>");
 }
@@ -41,7 +41,7 @@ fn does_not_redeclare_an_inherited_namespace() {
   let a = doc.create_element_ns(Some("urn:d"), "a").unwrap();
   let b = doc.create_element_ns(Some("urn:d"), "b").unwrap();
   doc.append_child(a, b).unwrap();
-  doc.append_child(doc.root(), a).unwrap();
+  doc.append_child(doc.document_node(), a).unwrap();
   // b is in the same namespace as a, already the default in scope: no second xmlns.
   assert_eq!(Serializer::new().to_string(&doc, a), "<a xmlns=\"urn:d\"><b/></a>");
 }
@@ -72,11 +72,11 @@ fn writes_comments_pis_and_cdata() {
 fn writes_a_doctype_with_public_and_system_ids() {
   let mut doc = Document::new();
   let doctype = doc.create_document_type("html", Some("-//W3C//DTD XHTML//EN"), Some("x.dtd")).unwrap();
-  doc.append_child(doc.root(), doctype).unwrap();
+  doc.append_child(doc.document_node(), doctype).unwrap();
   let html = doc.create_element("html").unwrap();
-  doc.append_child(doc.root(), html).unwrap();
+  doc.append_child(doc.document_node(), html).unwrap();
   assert_eq!(
-    Serializer::new().to_string(&doc, doc.root()),
+    Serializer::new().to_string(&doc, doc.document_node()),
     "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML//EN\" \"x.dtd\"><html/>"
   );
 }
@@ -94,6 +94,6 @@ fn a_rich_document_round_trips_through_dom_and_back() {
 #[test]
 fn writes_a_whole_document_with_a_declaration_and_indent() {
   let doc = build::parse("<a><b/></a>".as_bytes()).unwrap();
-  let out = Serializer::new().with_xml_declaration(true).with_indent("  ").to_string(&doc, doc.root());
+  let out = Serializer::new().with_xml_declaration(true).with_indent("  ").to_string(&doc, doc.document_node());
   assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<a>\n  <b/>\n</a>");
 }

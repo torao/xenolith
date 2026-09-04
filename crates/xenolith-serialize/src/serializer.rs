@@ -25,7 +25,7 @@ use crate::escape::{push_attribute, push_cdata, push_text};
 /// let text = doc.create_text_node("t & u");
 /// doc.append_child(b, text)?;
 /// doc.append_child(a, b)?;
-/// doc.append_child(doc.root(), a)?;
+/// doc.append_child(doc.document_node(), a)?;
 ///
 /// assert_eq!(Serializer::new().to_string(&doc, a), "<a><b x=\"1 &lt; 2\">t &amp; u</b></a>");
 /// # Ok::<(), xenolith_dom::DomException>(())
@@ -119,16 +119,16 @@ impl Writer<'_> {
 
   fn write_node(&mut self, node: NodeId, depth: usize) {
     match self.doc.node_type(node) {
-      NodeType::Document | NodeType::DocumentFragment => self.write_children(node, depth),
-      NodeType::Element => self.write_element(node, depth),
-      NodeType::Text => push_text(&mut self.out, self.doc.node_value(node).unwrap_or_default()),
-      NodeType::CdataSection => push_cdata(&mut self.out, self.doc.node_value(node).unwrap_or_default()),
-      NodeType::Comment => {
+      NodeType::DOCUMENT_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => self.write_children(node, depth),
+      NodeType::ELEMENT_NODE => self.write_element(node, depth),
+      NodeType::TEXT_NODE => push_text(&mut self.out, self.doc.node_value(node).unwrap_or_default()),
+      NodeType::CDATA_SECTION_NODE => push_cdata(&mut self.out, self.doc.node_value(node).unwrap_or_default()),
+      NodeType::COMMENT_NODE => {
         self.out.push_str("<!--");
         self.out.push_str(self.doc.node_value(node).unwrap_or_default());
         self.out.push_str("-->");
       }
-      NodeType::ProcessingInstruction => {
+      NodeType::PROCESSING_INSTRUCTION_NODE => {
         self.out.push_str("<?");
         self.out.push_str(&self.doc.node_name(node));
         let data = self.doc.node_value(node).unwrap_or_default();
@@ -138,8 +138,8 @@ impl Writer<'_> {
         }
         self.out.push_str("?>");
       }
-      NodeType::DocumentType => self.write_doctype(node),
-      NodeType::Attribute => {}
+      NodeType::DOCUMENT_TYPE_NODE => self.write_doctype(node),
+      NodeType::ATTRIBUTE_NODE => {}
     }
   }
 
@@ -269,7 +269,7 @@ impl Writer<'_> {
   }
 
   fn is_character_data(&self, node: NodeId) -> bool {
-    matches!(self.doc.node_type(node), NodeType::Text | NodeType::CdataSection)
+    matches!(self.doc.node_type(node), NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE)
   }
 
   /// If `attr` is a namespace declaration, the prefix it declares (or `None` for the default

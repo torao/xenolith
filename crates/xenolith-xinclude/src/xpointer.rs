@@ -119,17 +119,17 @@ fn parse_child_sequence(sequence: &str) -> Option<Vec<usize>> {
 fn eval_element(doc: &Document, scheme: &ElementScheme) -> Option<NodeId> {
   let mut current = match &scheme.id {
     Some(id) => doc.get_element_by_id(id)?,
-    None => doc.root(),
+    None => doc.document_node(),
   };
   for &step in &scheme.steps {
     current = nth_child_element(doc, current, step)?;
   }
   // A pointer with only an ID lands on that element; one with a sequence lands on an element
   // too. The document root (no ID, no steps) is not a valid target.
-  (doc.node_type(current) == NodeType::Element).then_some(current)
+  (doc.node_type(current) == NodeType::ELEMENT_NODE).then_some(current)
 }
 
 /// The `position`-th child *element* of `node`, counting from 1.
 fn nth_child_element(doc: &Document, node: NodeId, position: usize) -> Option<NodeId> {
-  doc.children(node).filter(|&child| doc.node_type(child) == NodeType::Element).nth(position - 1)
+  doc.children(node).filter(|&child| doc.node_type(child) == NodeType::ELEMENT_NODE).nth(position - 1)
 }

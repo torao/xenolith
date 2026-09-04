@@ -1116,7 +1116,7 @@ impl Stylesheet {
     if document.attribute(root, "version").is_none() {
       return Err(xslt_error("xsl:stylesheet needs a version"));
     }
-    Ok(document.children(root).filter(|&child| document.node_type(child) == NodeType::Element).collect())
+    Ok(document.children(root).filter(|&child| document.node_type(child) == NodeType::ELEMENT_NODE).collect())
   }
 
   /// The local name of an element, if it is in the XSLT namespace.
@@ -1293,7 +1293,7 @@ pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Names
   let mut bound: Vec<String> = Vec::new();
   let mut current = Some(element);
   while let Some(node) = current {
-    if document.node_type(node) == NodeType::Element {
+    if document.node_type(node) == NodeType::ELEMENT_NODE {
       for attribute in document.attributes(node).iter() {
         // `xmlns:p="…"` declares p; a bare `xmlns` declares the default namespace, which a
         // prefix in an expression can never name.
@@ -1324,7 +1324,7 @@ pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Names
 pub(crate) fn default_namespace(document: &Document, element: NodeId) -> Option<String> {
   let mut current = Some(element);
   while let Some(node) = current {
-    if document.node_type(node) == NodeType::Element {
+    if document.node_type(node) == NodeType::ELEMENT_NODE {
       for attribute in document.attributes(node).iter() {
         if document.node_name(attribute) == "xmlns" {
           let value = document.node_value(attribute).unwrap_or_default();

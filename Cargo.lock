@@ -1098,6 +1098,7 @@ version = "0.0.0"
 dependencies = [
  "xenolith-core",
  "xenolith-parser",
+ "xenolith-validate",
 ]
 
 [[package]]

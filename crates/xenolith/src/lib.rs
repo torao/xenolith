@@ -162,7 +162,7 @@ mod tests {
   fn the_facade_reaches_the_dom() {
     let mut doc = crate::dom::Document::new();
     let root = doc.create_element("a").unwrap();
-    doc.append_child(doc.root(), root).unwrap();
+    doc.append_child(doc.document_node(), root).unwrap();
     assert_eq!(doc.document_element(), Some(root));
   }
 
@@ -185,7 +185,7 @@ mod tests {
   fn the_facade_serializes_a_dom() {
     let mut doc = crate::dom::Document::new();
     let a = doc.create_element("a").unwrap();
-    doc.append_child(doc.root(), a).unwrap();
+    doc.append_child(doc.document_node(), a).unwrap();
     assert_eq!(crate::serialize::Serializer::new().to_string(&doc, a), "<a/>");
   }
 

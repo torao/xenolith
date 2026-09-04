@@ -144,7 +144,7 @@ impl Documents {
   /// # Ok::<(), xenolith_core::Error>(())
   /// ```
   pub fn add(&self, uri: &str, document: Document) -> DomNode {
-    let root = document.root();
+    let root = document.document_node();
     self.add_rooted(uri, document, root)
   }
 
@@ -247,7 +247,7 @@ impl View<'_> {
   }
 
   fn is_text_like(&self, id: NodeId) -> bool {
-    matches!(self.doc.node_type(id), NodeType::Text | NodeType::CdataSection)
+    matches!(self.doc.node_type(id), NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE)
   }
 
   /// The first DOM node of the text run that `id` belongs to.
@@ -267,18 +267,21 @@ impl View<'_> {
     let DomNode::Tree { node: id, .. } = node else { return Vec::new() };
     // A document fragment is here because a result tree fragment hangs from one; it is the root
     // of that tree, and its children are the tree.
-    if !matches!(self.doc.node_type(id), NodeType::Document | NodeType::Element | NodeType::DocumentFragment) {
+    if !matches!(
+      self.doc.node_type(id),
+      NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE | NodeType::DOCUMENT_FRAGMENT_NODE
+    ) {
       return Vec::new();
     }
     let mut children = Vec::new();
     let mut child = self.doc.first_child(id);
     while let Some(current) = child {
       match self.doc.node_type(current) {
-        NodeType::Text | NodeType::CdataSection => {
+        NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE => {
           children.push(DomNode::Text { document: self.id, node: current });
           child = self.after_run(current);
         }
-        NodeType::Element | NodeType::Comment | NodeType::ProcessingInstruction => {
+        NodeType::ELEMENT_NODE | NodeType::COMMENT_NODE | NodeType::PROCESSING_INSTRUCTION_NODE => {
           children.push(DomNode::Tree { document: self.id, node: current });
           child = self.doc.next_sibling(current);
         }
@@ -304,7 +307,7 @@ impl View<'_> {
 
   fn attributes_of(&self, node: DomNode) -> Vec<DomNode> {
     match node {
-      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::Element => self
+      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::ELEMENT_NODE => self
         .doc
         .attributes(id)
         .iter()
@@ -318,7 +321,7 @@ impl View<'_> {
 
   fn namespaces_of(&self, node: DomNode) -> Vec<DomNode> {
     match node {
-      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::Element => self
+      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::ELEMENT_NODE => self
         .in_scope_prefixes(id)
         .into_iter()
         .map(|prefix| DomNode::Namespace { document: self.id, element: id, prefix })
@@ -334,7 +337,7 @@ impl View<'_> {
     let mut result: Vec<Option<NameId>> = Vec::new();
     let mut current = Some(element);
     while let Some(node) = current {
-      if self.doc.node_type(node) == NodeType::Element {
+      if self.doc.node_type(node) == NodeType::ELEMENT_NODE {
         for attribute in self.doc.attributes(node).iter() {
           if let Some(prefix) = self.declared_prefix(attribute) {
             if !seen.contains(&prefix) {
@@ -382,7 +385,7 @@ impl View<'_> {
     }
     let mut current = Some(element);
     while let Some(node) = current {
-      if self.doc.node_type(node) == NodeType::Element {
+      if self.doc.node_type(node) == NodeType::ELEMENT_NODE {
         for attribute in self.doc.attributes(node).iter() {
           if self.declared_prefix(attribute) == Some(prefix) {
             let value = self.doc.node_value(attribute).unwrap_or_default();
@@ -400,14 +403,14 @@ impl View<'_> {
       DomNode::Text { .. } => NodeKind::Text,
       DomNode::Namespace { .. } => NodeKind::Namespace,
       DomNode::Tree { node: id, .. } => match self.doc.node_type(id) {
-        NodeType::Document => NodeKind::Root,
-        NodeType::Element => NodeKind::Element,
-        NodeType::Attribute => NodeKind::Attribute,
-        NodeType::Comment => NodeKind::Comment,
-        NodeType::ProcessingInstruction => NodeKind::ProcessingInstruction,
-        NodeType::Text | NodeType::CdataSection => NodeKind::Text,
+        NodeType::DOCUMENT_NODE => NodeKind::Root,
+        NodeType::ELEMENT_NODE => NodeKind::Element,
+        NodeType::ATTRIBUTE_NODE => NodeKind::Attribute,
+        NodeType::COMMENT_NODE => NodeKind::Comment,
+        NodeType::PROCESSING_INSTRUCTION_NODE => NodeKind::ProcessingInstruction,
+        NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE => NodeKind::Text,
         // A document type or fragment is not an XPath node; nothing reaches here in a tree.
-        NodeType::DocumentType | NodeType::DocumentFragment => NodeKind::Root,
+        NodeType::DOCUMENT_TYPE_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => NodeKind::Root,
       },
     }
   }
@@ -422,7 +425,7 @@ impl View<'_> {
       }
     }
     match node {
-      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::Attribute => {
+      DomNode::Tree { node: id, .. } if self.doc.node_type(id) == NodeType::ATTRIBUTE_NODE => {
         self.doc.owner_element(id).map(tree)
       }
       DomNode::Tree { node: id, .. } => self.doc.parent(id).map(tree),
@@ -434,11 +437,11 @@ impl View<'_> {
   fn expanded_name(&self, node: DomNode) -> Option<ExpandedName> {
     match node {
       DomNode::Tree { node: id, .. } => match self.doc.node_type(id) {
-        NodeType::Element | NodeType::Attribute => Some(ExpandedName {
+        NodeType::ELEMENT_NODE | NodeType::ATTRIBUTE_NODE => Some(ExpandedName {
           namespace: self.doc.namespace_uri(id).map(ToOwned::to_owned),
           local: self.doc.local_name(id).unwrap_or_default().to_owned(),
         }),
-        NodeType::ProcessingInstruction => Some(ExpandedName { namespace: None, local: self.doc.node_name(id) }),
+        NodeType::PROCESSING_INSTRUCTION_NODE => Some(ExpandedName { namespace: None, local: self.doc.node_name(id) }),
         _ => None,
       },
       DomNode::Namespace { prefix, .. } => Some(ExpandedName {
@@ -453,7 +456,9 @@ impl View<'_> {
     match node {
       // The DOM's node name is already the lexical form, prefix included.
       DomNode::Tree { node: id, .. } => match self.doc.node_type(id) {
-        NodeType::Element | NodeType::Attribute | NodeType::ProcessingInstruction => Some(self.doc.node_name(id)),
+        NodeType::ELEMENT_NODE | NodeType::ATTRIBUTE_NODE | NodeType::PROCESSING_INSTRUCTION_NODE => {
+          Some(self.doc.node_name(id))
+        }
         _ => None,
       },
       // A namespace node's name is the prefix it binds, and nothing for the default namespace.
@@ -467,8 +472,10 @@ impl View<'_> {
   fn string_value(&self, node: DomNode) -> String {
     match node {
       DomNode::Tree { node: id, .. } => match self.doc.node_type(id) {
-        NodeType::Document | NodeType::Element | NodeType::DocumentFragment => self.doc.text_content(id),
-        NodeType::Attribute | NodeType::Comment | NodeType::ProcessingInstruction => {
+        NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => {
+          self.doc.text_content(id)
+        }
+        NodeType::ATTRIBUTE_NODE | NodeType::COMMENT_NODE | NodeType::PROCESSING_INSTRUCTION_NODE => {
           self.doc.node_value(id).unwrap_or_default().to_owned()
         }
         _ => String::new(),
@@ -513,7 +520,7 @@ impl<'a> DomModel<'a> {
   /// Anything added to `documents` afterwards becomes part of this model's node space.
   #[must_use]
   pub fn with_documents(doc: &'a Document, documents: &Documents) -> Self {
-    let view = View { doc, id: DocumentId::PRIMARY, root: doc.root() };
+    let view = View { doc, id: DocumentId::PRIMARY, root: doc.document_node() };
     let mut order = HashMap::new();
     let mut counter = 0;
     view.number(view.root_node(), &mut order, &mut counter);
@@ -523,13 +530,13 @@ impl<'a> DomModel<'a> {
   /// The root node — the document the model was built over.
   #[must_use]
   pub fn root_node(&self) -> DomNode {
-    DomNode::Tree { document: DocumentId::PRIMARY, node: self.primary.root() }
+    DomNode::Tree { document: DocumentId::PRIMARY, node: self.primary.document_node() }
   }
 
   /// The XPath node for a DOM node of the primary document.
   #[must_use]
   pub fn node(&self, id: NodeId) -> DomNode {
-    View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.root() }.node(id)
+    View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.document_node() }.node(id)
   }
 
   /// The further documents this model can see, for adding one or looking one up.
@@ -541,7 +548,7 @@ impl<'a> DomModel<'a> {
   /// Reads a node through the view of whichever document it belongs to.
   fn view<T>(&self, node: DomNode, read: impl FnOnce(&View<'_>) -> T) -> T {
     if node.document() == DocumentId::PRIMARY {
-      return read(&View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.root() });
+      return read(&View { doc: self.primary, id: DocumentId::PRIMARY, root: self.primary.document_node() });
     }
     let documents: Ref<'_, Vec<Held>> = self.extra.shared.documents.borrow();
     let index = Documents::index(node.document());
