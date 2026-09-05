@@ -23,20 +23,21 @@ use xenolith_core::name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XML
 use xenolith_core::uri::UriReference;
 
 use crate::config::{Bounds, ParserConfig};
-use crate::dtd::{self, Dtd, GeneralEntity};
+use crate::dtd::{self, Dtd, DtdAssembly, GeneralEntity};
 use crate::entity::{Entity, EntityKind, EntityStack, Limits};
 use crate::event::Event;
 use crate::namespace::NamespaceScope;
-use crate::resolve::{EntityRequest, RequestKind};
 use crate::scan::{Scan, Token, scan};
-use crate::stream::CharStream;
+use xenolith_core::decl::{self, TextDecl};
+use xenolith_core::resolve::{EntityRequest, RequestKind};
+use xenolith_core::stream::CharStream;
 
 /// What a call to [`Parser::advance`] achieved.
 ///
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Progress {
-  /// The parser produced an event. Read its data through the accessors the [`EventKind`] names; the values belong to
+  /// The parser produced an event. Read its data through the accessors the [`EventKind`] points to; the values belong to
   /// this event only, and the next [`advance`](Parser::advance) clears them.
   ///
   Event(EventKind),
@@ -60,7 +61,7 @@ pub enum Progress {
   ///   [`provide_entity`](Parser::provide_entity) only.
   /// - The driver refuses an entity it cannot fetch with [`decline_entity`](Parser::decline_entity).
   ///
-  /// A blocking driver does all this through a [`UriResolver`](crate::resolve::UriResolver); most callers use a
+  /// A blocking driver does all this through a [`UriResolver`](xenolith_core::resolve::UriResolver); most callers use a
   /// [`Reader`](crate::Reader) and never see this variant.
   ///
   NeedEntity,
@@ -71,7 +72,7 @@ pub enum Progress {
 
 /// The kind of event the parser is reporting, carried by [`Progress::Event`].
 ///
-/// It names only the kind, carrying none of the event's data and so no borrow of the parser; that is what lets
+/// It carries only the kind, none of the event's data and so no borrow of the parser; that is what lets
 /// [`advance`](Parser::advance) report it by value while the caller stays free to [`feed`](Parser::feed) more input. The
 /// data is read separately through [`Parser::event_ref`], whose [`EventRef`] variant matches the kind named here, and
 /// each variant below points at that counterpart. Those borrowed values are current only until the next
@@ -347,25 +348,6 @@ struct Held {
   at: Location,
 }
 
-/// The result of looking for a text declaration at the start of an external entity.
-///
-/// An external entity may open with `<?xml ... ?>` (the `TextDecl` production). The stream reads it to choose the
-/// encoding but leaves it in the character input, so the parser steps over a [`Present`](TextDecl::Present) span
-/// rather than report it as a processing instruction. [`NeedMore`](TextDecl::NeedMore) arises only while an entity
-/// arrives in pieces and its start has not fully landed.
-///
-enum TextDecl {
-  /// The entity does not open with a text declaration.
-  ///
-  None,
-  /// The entity opens with a text declaration this many bytes long; the parser steps over it.
-  ///
-  Present(usize),
-  /// The input read so far is too little to decide; the parser requests more.
-  ///
-  NeedMore,
-}
-
 /// Where in the document the parser is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
@@ -454,15 +436,13 @@ pub struct Parser {
   external_subset_unread: bool,
   /// The DTD text being parsed — internal subset then external subset — grown as parameter
   /// entities are spliced in. Non-empty only while the DTD is being parsed.
-  dtd_buf: String,
-  /// Byte length of the internal subset within [`dtd_buf`](Self::dtd_buf).
-  dtd_internal_len: usize,
+  /// The DTD text gathered so far and the parse over it, which the DTD crate owns.
+  dtd_assembly: DtdAssembly,
   /// The external subset's identifier, until it has been fetched.
   dtd_external_id: Option<(Option<String>, String)>,
   /// True while the DTD is being parsed: `advance` drives it before the `Doctype` event.
   dtd_active: bool,
   /// The external parameter entity being fetched, so its content can be spliced back in.
-  dtd_pe: Option<dtd::ExternalPe>,
   /// Character data accumulated but not yet emitted, so a run split by a character reference
   /// or an entity boundary still surfaces as one text event where it can.
   pending_text: String,
@@ -498,7 +478,7 @@ pub struct Parser {
   attributes: Vec<Attribute>,
   attribute_text: String,
   version: String,
-  /// The XML declaration names the encoding. The stream layer sniffed the encoding from the bytes and is already
+  /// The XML declaration gives the encoding. The stream layer sniffed the encoding from the bytes and is already
   /// decoding with it, so this copy is read only to report the declaration, never to pick a codec here.
   ///
   declared_encoding: Option<String>,
@@ -574,11 +554,9 @@ impl Parser {
       doctype_system_id: None,
       dtd: None,
       external_subset_unread: false,
-      dtd_buf: String::new(),
-      dtd_internal_len: 0,
+      dtd_assembly: DtdAssembly::new(),
       dtd_external_id: None,
       dtd_active: false,
-      dtd_pe: None,
       pending_text: String::new(),
       pending_text_at: Location::unknown(),
       held: None,
@@ -709,7 +687,7 @@ impl Parser {
   /// throughout.
   ///
   /// A [`Reader`](crate::Reader) runs this loop and resolves entities through a
-  /// [`UriResolver`](crate::resolve::UriResolver), so most callers never call `advance` directly.
+  /// [`UriResolver`](xenolith_core::resolve::UriResolver), so most callers never call `advance` directly.
   ///
   /// # Errors
   ///
@@ -750,7 +728,7 @@ impl Parser {
       if self.entity_text_decl_pending {
         let last = !self.stack.current().stream().can_be_fed();
         let rem = self.stack.current().stream().remainder();
-        match self.text_declaration_span(rem, last).map_err(|e| e.at(self.stack.location()))? {
+        match decl::text_declaration_span(rem, last).map_err(|e| e.at(self.stack.location()))? {
           TextDecl::NeedMore => return Ok(Progress::NeedMoreInput),
           TextDecl::None => self.entity_text_decl_pending = false,
           TextDecl::Present(len) => {
@@ -961,9 +939,10 @@ impl Parser {
         let message = "the XML declaration needs whitespace between its parts";
         return Err(self.error(Error::well_formedness, message));
       }
-      let (name, value, tail) = self.pseudo_attribute(rest, "XML declaration")?;
+      let (name, value, tail) =
+        decl::pseudo_attribute(rest, "XML declaration").map_err(|e| e.at(self.stack.location()))?;
       // A repeat of any pseudo-attribute is rejected up front. `seen` only ever holds the three known names, so an
-      // unknown one never matches here and falls to the `other` arm below to be named as unknown.
+      // unknown one never matches here and falls to the `other` arm below to be reported as unknown.
       if seen.contains(&name) {
         let message = format!("the XML declaration has more than one {name}");
         return Err(self.error(Error::well_formedness, message));
@@ -1026,95 +1005,6 @@ impl Parser {
       return Err(self.error(Error::well_formedness, "the XML declaration has no version"));
     }
     Ok(())
-  }
-
-  /// Reads one `name = "value"` of the XML or text declaration, returning it and what follows.
-  ///
-  /// `decl` names the enclosing declaration for the error message, since both share this pseudo-attribute syntax.
-  ///
-  fn pseudo_attribute<'t>(&self, rest: &'t str, decl: &str) -> Result<(&'t str, &'t str, &'t str)> {
-    let malformed = |what: &str| self.error(Error::well_formedness, format!("the {decl} {what}"));
-    let rest = rest.trim_start_matches(chars::is_whitespace);
-    let name_len = rest.find(|c: char| c == '=' || chars::is_whitespace(c)).unwrap_or(rest.len());
-    let (name, rest) = rest.split_at(name_len);
-    let rest = rest.trim_start_matches(chars::is_whitespace);
-    let rest = rest.strip_prefix('=').ok_or_else(|| malformed("is missing an \"=\""))?;
-    let rest = rest.trim_start_matches(chars::is_whitespace);
-    let quote =
-      rest.chars().next().filter(|c| *c == '"' || *c == '\'').ok_or_else(|| malformed("has an unquoted value"))?;
-    let rest = &rest[quote.len_utf8()..];
-    let end = rest.find(quote).ok_or_else(|| malformed("has an unterminated value"))?;
-    Ok((name, &rest[..end], &rest[end + quote.len_utf8()..]))
-  }
-
-  /// Consumes and checks a leading text declaration on a fully-read external entity's stream.
-  ///
-  /// This is the whole-buffer path, used when the entity's bytes arrive all at once. The incremental driver uses
-  /// [`text_declaration_span`](Self::text_declaration_span) directly.
-  ///
-  fn strip_text_declaration(&self, stream: &mut CharStream) -> Result<()> {
-    let at = stream.location();
-    let len = match self.text_declaration_span(stream.remainder(), true).map_err(|e| e.at(at))? {
-      TextDecl::Present(len) => len,
-      TextDecl::None => return Ok(()),
-      TextDecl::NeedMore => {
-        return Err(Error::internal("a completed entity still requested more of its text declaration"));
-      }
-    };
-    stream.advance(len);
-    Ok(())
-  }
-
-  /// Measures a leading text declaration on an external entity, without consuming it.
-  ///
-  /// `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`: the encoding is required, the version optional and, if
-  /// present, first, and — unlike the XML declaration — there is no standalone. The stream already read it to choose
-  /// the encoding; this checks its shape and reports how many bytes to step over so it does not reach the parser as a
-  /// processing instruction. `last` is true once the entity has been read to its end; while it is false and the
-  /// declaration is not yet complete, [`TextDecl::NeedMore`] requests more input. Errors carry no location; the caller
-  /// adds one.
-  ///
-  fn text_declaration_span(&self, rem: &str, last: bool) -> Result<TextDecl> {
-    const HEAD: &str = "<?xml";
-    // Too little read to tell `<?xml` from a shorter prefix, or its following character apart.
-    if !last && rem.len() <= HEAD.len() && HEAD.starts_with(rem) {
-      return Ok(TextDecl::NeedMore);
-    }
-    let Some(after) = rem.strip_prefix(HEAD) else { return Ok(TextDecl::None) };
-    // `<?xmlfoo` is not a declaration; a real one is followed by whitespace.
-    match after.chars().next() {
-      None if !last => return Ok(TextDecl::NeedMore),
-      Some(c) if chars::is_whitespace(c) => {}
-      _ => return Ok(TextDecl::None),
-    }
-    let malformed = |what: &str| Error::well_formedness(format!("the text declaration {what}"));
-    let Some(end) = rem.find("?>") else {
-      return if last { Err(malformed("is not closed by \"?>\"")) } else { Ok(TextDecl::NeedMore) };
-    };
-    let mut rest = &rem[HEAD.len()..end];
-    let mut seen: Vec<&str> = Vec::new();
-    while !rest.trim_start_matches(chars::is_whitespace).is_empty() {
-      let (name, _value, tail) = self.pseudo_attribute(rest, "text declaration")?;
-      // Dispatch on the name first, so a misplaced or repeated version/encoding is told apart from a name that is not a
-      // pseudo-attribute at all.
-      if seen.contains(&name) {
-        return Err(malformed(&format!("has more than one {name}")));
-      }
-      match name {
-        // `TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'`, so version, when present, comes before encoding.
-        "version" if seen.is_empty() => {}
-        "version" => return Err(malformed("has version after encoding")),
-        "encoding" => {}
-        "standalone" => return Err(malformed("may not have a standalone declaration")),
-        other => return Err(malformed(&format!("has {other:?}, which is not one of version or encoding"))),
-      }
-      seen.push(name);
-      rest = tail;
-    }
-    if !seen.contains(&"encoding") {
-      return Err(malformed("has no encoding"));
-    }
-    Ok(TextDecl::Present(end + 2))
   }
 
   fn comment(&mut self, text: &str) -> Result<EventKind> {
@@ -1191,8 +1081,7 @@ impl Parser {
     // which runs across the entity fetches an external subset or parameter entity may need.
     self.text.clear();
     self.text.push_str(text);
-    self.dtd_buf = internal_subset.to_owned();
-    self.dtd_internal_len = self.dtd_buf.len();
+    self.dtd_assembly = DtdAssembly::with_internal_subset(internal_subset);
     self.dtd_active = true;
     Ok(None)
   }
@@ -1209,11 +1098,11 @@ impl Parser {
     // One pass over the buffer. It either finishes the DTD or stops for an external parameter
     // entity; in the latter case the driver fetches it and calls back here through `advance`.
     let base = self.token_at.clone();
-    match dtd::parse_dtd(&mut self.dtd_buf, &mut self.dtd_internal_len, &mut self.pool, &base)? {
+    match self.dtd_assembly.advance(&mut self.pool, &base)? {
       dtd::DtdOutcome::Complete(dtd) => {
         self.dtd = Some(*dtd);
         self.dtd_active = false;
-        self.dtd_buf = String::new();
+        self.dtd_assembly = DtdAssembly::new();
         self.kind = Some(EventKind::Doctype);
         Ok(Progress::Event(EventKind::Doctype))
       }
@@ -1226,7 +1115,6 @@ impl Parser {
           base,
           RequestKind::ParameterEntity,
         ));
-        self.dtd_pe = Some(pe);
         Ok(Progress::NeedEntity)
       }
     }
@@ -2251,7 +2139,7 @@ impl Parser {
       stream = stream.with_system_id(id);
     }
     stream.feed(bytes, true)?;
-    self.strip_text_declaration(&mut stream)?;
+    decl::strip_text_declaration(&mut stream)?;
 
     match request.kind() {
       RequestKind::GeneralEntity => {
@@ -2260,21 +2148,12 @@ impl Parser {
       }
       // The external subset is DTD text: append it after the internal subset and resume.
       RequestKind::ExternalSubset => {
-        if !self.dtd_buf.is_empty() {
-          self.dtd_buf.push('\n');
-        }
-        self.dtd_buf.push_str(stream.remainder());
+        self.dtd_assembly.add_external_subset(stream.remainder());
         Ok(())
       }
       // An external parameter entity's content replaces the `%name;` that summoned it.
       RequestKind::ParameterEntity => {
-        let pe = self.dtd_pe.take().expect("a parameter entity was pending");
-        let replacement = format!(" {} ", stream.remainder());
-        if pe.at < self.dtd_internal_len {
-          let removed = pe.end.min(self.dtd_internal_len) - pe.at;
-          self.dtd_internal_len = self.dtd_internal_len - removed + replacement.len();
-        }
-        self.dtd_buf.replace_range(pe.at..pe.end, &replacement);
+        self.dtd_assembly.provide_parameter_entity(stream.remainder());
         Ok(())
       }
     }
@@ -2297,7 +2176,7 @@ impl Parser {
     };
     if request.kind() == RequestKind::ExternalSubset {
       self.external_subset_unread = true;
-      self.dtd_pe = None;
+      self.dtd_assembly.discard_pending();
       return Ok(());
     }
     let what = request.name().map_or_else(|| "an external entity".to_owned(), |name| format!("entity \"{name}\""));
@@ -2331,7 +2210,7 @@ impl Parser {
     Events { parser: self, done: false }
   }
 
-  /// Builds the namespace error for a prefix with no binding in scope, naming the fix (add an `xmlns:` declaration).
+  /// Builds the namespace error for a prefix with no binding in scope, giving the fix (add an `xmlns:` declaration).
   ///
   fn undeclared_prefix(&self, prefix: NameId) -> Error {
     let name = self.pool.resolve(prefix);
@@ -2447,7 +2326,7 @@ fn parse_external_id(text: &str) -> Option<(Option<String>, String, &str)> {
   }
 }
 
-/// Explains why `name` is not a usable name; `role` (for example, `"element"` or `"attribute"`) names the kind in the
+/// Explains why `name` is not a usable name; `role` (for example, `"element"` or `"attribute"`) says which kind in the
 /// message.
 ///
 /// A bare "not a valid name" leaves the author hunting, so this points to the offending character or the extra colon,

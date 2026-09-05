@@ -86,14 +86,14 @@ pub struct ExpandedName {
 ///
 /// A `Model` presents a tree as the seven node kinds, giving each its kind, its place among its
 /// neighbours (the primitives the axes are built from), its expanded name and string-value, and
-/// a total document order. A node is named by the associated [`Node`](Model::Node) handle, which
+/// a total document order. A node is identified by the associated [`Node`](Model::Node) handle, which
 /// is cheap to copy and compare for identity; ordering goes through
 /// [`document_order`](Model::document_order) rather than `Ord`, since it is a property of the
 /// tree, not of the handle.
 pub trait Model {
   /// A handle to a node. Identity only — order is [`document_order`](Model::document_order).
   ///
-  /// A handle names a node without borrowing the tree, so it owns nothing with a lifetime. That
+  /// A handle identifies a node without borrowing the tree, so it owns nothing with a lifetime. That
   /// is what lets a host language built on this model — XSLT's `current()` and `key()` — keep
   /// hold of nodes between calls, which a handle borrowed from the tree could not do.
   type Node: Copy + Eq + Hash + Debug + 'static;

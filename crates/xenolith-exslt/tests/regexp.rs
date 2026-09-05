@@ -58,7 +58,7 @@ fn replace_changes_the_first_match_or_every_one() {
 
 #[test]
 fn a_dollar_in_the_replacement_is_a_dollar_sign() {
-  // EXSLT says nothing about `$1` naming a captured group, and libxslt does not read one that
+  // EXSLT says nothing about `$1` standing for a captured group, and libxslt does not read one that
   // way either, so the replacement goes in as it stands.
   assert_eq!(value_of("regexp:replace('ab', '(a)', 'g', '$1')"), "$1b");
 }

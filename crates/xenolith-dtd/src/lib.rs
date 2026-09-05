@@ -8,11 +8,11 @@
 //! resource.
 //!
 //! Although DTDs are also used to validate XML documents, that is not done here. However, this module ensures that
-//! declarations necessary for parsing, such as the replacement text for general entities indicated by reference names,
+//! declarations necessary for parsing, such as the replacement text for general entities given by reference name,
 //! default attribute values, and the notation used for unparsed entities, can be obtained.
 //!
-//! A parsed DTD is a [`Dtd`], which a user obtains from [`Parser::dtd`](crate::Parser::dtd) once the `DOCTYPE` has been
-//! read.
+//! A parsed DTD is a [`Dtd`]. A document parser hands one over once the `DOCTYPE` has been read, and
+//! [`parse_subset`] reads one that is already in hand.
 //!
 //! This module models a DTD and parses it from a buffer containing an internal subset followed by an external subset.
 //! The name is lexical. `p:a` and `q:a` are considered different elements by the DTD regardless of how the prefixes
@@ -25,6 +25,12 @@
 //! entities cannot be inserted synchronously. The caller retrieves and inserts it, then re-parses the buffer from the
 //! beginning. By restarting each processing path, we eliminate any state that must be maintained after the pause.
 //!
+
+mod assemble;
+mod reader;
+
+pub use assemble::DtdAssembly;
+pub use reader::DtdReader;
 
 use std::collections::HashMap;
 
@@ -198,25 +204,24 @@ pub enum ContentSpec {
 
 /// A parsed document type definition: the declarations of a DTD, kept as read.
 ///
-/// Obtained from [`Parser::dtd`](crate::Parser::dtd) once the `DOCTYPE` has been read. Interpreting the declarations
-/// against a document, to check that it conforms, is a validator's work, not done here. It is [`Clone`] so a validator
+/// Obtained from a document parser once the `DOCTYPE` has been read, or from [`parse_subset`]. Interpreting the
+/// declarations against a document, to check that it conforms, is a validator's work, not done here. It is [`Clone`] so a validator
 /// can own a copy and read it while the parser goes on producing events.
 ///
 /// Declarations are keyed by the interned [`NameId`] of a name; resolve one back to text, or intern one to look a
-/// declaration up, through the parser's [`pool`](crate::Parser::pool).
+/// declaration up, through the [`NamePool`] its names were interned in.
 ///
 /// # Examples
 ///
 /// ```
-/// use xenolith_parser::Reader;
+/// use xenolith_core::error::Location;
+/// use xenolith_core::name::NamePool;
+/// use xenolith_dtd::parse_subset;
 ///
-/// let xml = "<!DOCTYPE note [<!ELEMENT note (#PCDATA)>]><note>hi</note>";
-/// let mut reader = Reader::new(xml.as_bytes());
-/// while reader.advance()?.is_some() {} // read the whole document, DTD included
+/// let mut pool = NamePool::new();
+/// let dtd = parse_subset("<!ELEMENT note (#PCDATA)>", &mut pool, Location::unknown())?;
 ///
-/// let parser = reader.parser();
-/// let dtd = parser.dtd().expect("the DOCTYPE declared a DTD");
-/// let elements: Vec<_> = dtd.elements().map(|(name, _)| parser.pool().resolve(name).to_owned()).collect();
+/// let elements: Vec<_> = dtd.elements().map(|(name, _)| pool.resolve(name).to_owned()).collect();
 /// assert_eq!(elements, ["note"]);
 /// # Ok::<(), xenolith_core::Error>(())
 /// ```
@@ -282,6 +287,73 @@ impl Dtd {
   pub fn elements(&self) -> impl Iterator<Item = (NameId, &ContentSpec)> {
     self.elements.iter().map(|(&name, spec)| (name, spec))
   }
+
+  /// The external identifier declared for a notation, if it was declared.
+  pub fn notation(&self, name: NameId) -> Option<&ExternalId> {
+    self.notations.get(&name)
+  }
+
+  /// Every general entity declared, and its declaration.
+  pub fn general_entities(&self) -> impl Iterator<Item = (NameId, &GeneralEntity)> {
+    self.general.iter().map(|(&name, entity)| (name, entity))
+  }
+
+  /// Every parameter entity declared, and its declaration.
+  pub fn parameter_entities(&self) -> impl Iterator<Item = (NameId, &ParameterEntity)> {
+    self.parameter.iter().map(|(&name, entity)| (name, entity))
+  }
+
+  /// The declaration of a parameter entity, if it has one.
+  pub fn parameter_entity(&self, name: NameId) -> Option<&ParameterEntity> {
+    self.parameter.get(&name)
+  }
+
+  /// Every notation declared, and its external identifier.
+  pub fn notations(&self) -> impl Iterator<Item = (NameId, &ExternalId)> {
+    self.notations.iter().map(|(&name, id)| (name, id))
+  }
+
+  // --- Building one by hand -------------------------------------------------------------------
+
+  /// Declares an element's content, returning `false` if it was already declared, which leaves the first declaration
+  /// standing.
+  ///
+  /// XML makes a second `<!ELEMENT>` for the same name an error, so a caller assembling a DTD checks the return where
+  /// it does not already know the name is fresh.
+  ///
+  pub fn declare_element(&mut self, name: NameId, content: ContentSpec) -> bool {
+    !self.elements.contains_key(&name) && self.elements.insert(name, content).is_none()
+  }
+
+  /// Adds attribute definitions for an element, after any it already has.
+  ///
+  /// Attribute-list declarations accumulate: XML allows several for one element, and where two define the same
+  /// attribute the first one stands. This appends in that spirit, so the order the definitions arrive in is the order
+  /// they are kept.
+  ///
+  pub fn declare_attributes(&mut self, element: NameId, definitions: impl IntoIterator<Item = AttDef>) {
+    self.attlists.entry(element).or_default().extend(definitions);
+  }
+
+  /// Declares a general entity, returning `false` if one of that name was already declared, which leaves the first
+  /// standing as XML requires.
+  pub fn declare_general_entity(&mut self, name: NameId, entity: GeneralEntity) -> bool {
+    !self.general.contains_key(&name) && self.general.insert(name, entity).is_none()
+  }
+
+  /// Declares a parameter entity, returning `false` if one of that name was already declared, which leaves the first
+  /// standing as XML requires.
+  pub fn declare_parameter_entity(&mut self, name: NameId, entity: ParameterEntity) -> bool {
+    !self.parameter.contains_key(&name) && self.parameter.insert(name, entity).is_none()
+  }
+
+  /// Declares a notation, returning `false` if it was already declared, which leaves the first declaration standing.
+  ///
+  /// XML makes a second `<!NOTATION>` for the same name an error, as it does for an element.
+  ///
+  pub fn declare_notation(&mut self, name: NameId, id: ExternalId) -> bool {
+    !self.notations.contains_key(&name) && self.notations.insert(name, id).is_none()
+  }
 }
 
 /// A request for an external parameter entity that occurred during DTD parsing.
@@ -290,12 +362,16 @@ impl Dtd {
 /// at the position [`at`](Self::at)`..`[`end`](Self::end), and then resumes parsing from the beginning.
 ///
 #[derive(Clone, Debug)]
-pub(crate) struct ExternalPe {
+pub struct ExternalPe {
+  /// The entity's name, as it was declared and referenced.
   pub name: String,
+  /// The public identifier the declaration gave, if it gave one.
   pub public_id: Option<String>,
+  /// The system identifier to fetch the replacement text from.
   pub system_id: String,
-  /// Byte range of the `%name;` reference in the buffer, replaced by the fetched content.
+  /// Where the `%name;` reference starts in the buffer. The fetched content replaces `at..end`.
   pub at: usize,
+  /// Where the `%name;` reference ends in the buffer.
   pub end: usize,
 }
 
@@ -309,7 +385,8 @@ pub(crate) struct ExternalPe {
 /// reference to gather the later ones. References standing cleanly between declarations could in principle be batched,
 /// but that would add a second parse mode for a rare case and risk fetching resources a strictly sequential parse would
 /// never reach.
-pub(crate) enum DtdOutcome {
+#[derive(Debug)]
+pub enum DtdOutcome {
   /// The DTD is fully parsed. Boxed because a completed DTD is much larger than a request.
   Complete(Box<Dtd>),
   /// An external parameter entity is needed; fetch it, splice it in, and parse again.
@@ -353,7 +430,7 @@ type Broken<T> = std::result::Result<T, Break>;
 /// this position. While the parsing cursor is before `internal_len`, references to parameter entities must not appear
 /// within the declaration, and conditional sections are not allowed. On the other hand, both are permitted after that
 /// position. The reason it is declared as `&mut` is that inserting an internal parameter entity expands the internal
-/// position and shifts the boundary. It is updated during the [`splice`](DtdParser::splice) step.
+/// position and shifts the boundary. Splicing a fetched entity into the buffer updates it.
 ///
 /// For example, 1) a DTD containing only an internal subset `<!ENTITY x "y">` and 2) the same DTD with the external
 /// subset `<!ELEMENT a EMPTY>` added (the tow are joined by a line break) would look like this:
@@ -367,7 +444,7 @@ type Broken<T> = std::result::Result<T, Break>;
 ///   buf          = <!ENTITY x "y">\n<!ELEMENT a EMPTY>
 ///   internal_len = 15    (buf[..15] is the internal subset, buf[15..] the external subset)
 /// ```
-pub(crate) fn parse_dtd(
+pub fn parse_dtd(
   buf: &mut String,
   internal_len: &mut usize,
   pool: &mut NamePool,
@@ -384,9 +461,14 @@ pub(crate) fn parse_dtd(
 
 /// Parses a self-contained internal subset that references no external parameter entity.
 ///
-/// A convenience over [`parse_dtd`] for tests and for a document whose DTD is wholly internal.
-#[cfg(test)]
-pub(crate) fn parse_internal_subset(subset: &str, pool: &mut NamePool, base: Location) -> Result<Dtd> {
+/// A convenience over [`parse_dtd`] for a subset already in hand and complete.
+///
+/// # Errors
+///
+/// The parser's error if the subset is malformed, or [`Error::UnsupportedFeature`] if it references an external
+/// parameter entity, which only a caller that can fetch one may resolve.
+///
+pub fn parse_subset(subset: &str, pool: &mut NamePool, base: Location) -> Result<Dtd> {
   let mut buf = subset.to_owned();
   let mut internal_len = buf.len();
   match parse_dtd(&mut buf, &mut internal_len, pool, &base)? {
@@ -1328,7 +1410,7 @@ impl DtdParser<'_> {
 
 /// Collapses whitespace as tokenized-attribute normalization requires (XML 1.0 §3.3.3):
 /// leading and trailing spaces removed, runs of spaces reduced to one. `CDATA` skips this.
-pub(crate) fn normalize_tokenized(value: &str, tokenized: bool) -> String {
+pub fn normalize_tokenized(value: &str, tokenized: bool) -> String {
   if !tokenized {
     return value.to_owned();
   }
@@ -1341,7 +1423,7 @@ mod tests {
 
   fn parse(subset: &str) -> Result<(Dtd, NamePool)> {
     let mut pool = NamePool::new();
-    let dtd = parse_internal_subset(subset, &mut pool, Location::unknown())?;
+    let dtd = parse_subset(subset, &mut pool, Location::unknown())?;
     Ok((dtd, pool))
   }
 

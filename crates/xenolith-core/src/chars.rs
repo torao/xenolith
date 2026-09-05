@@ -32,7 +32,7 @@ pub const fn is_whitespace(c: char) -> bool {
 /// assert!(!is_char('\u{B}')); // nor is a vertical tab
 /// assert!(is_char('\u{10FFFF}'));
 ///
-/// // `&#xD800;` names a surrogate, which is not a character at all.
+/// // `&#xD800;` refers to a surrogate, which is not a character at all.
 /// assert!(char::from_u32(0xD800).is_none());
 /// ```
 #[inline]

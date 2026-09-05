@@ -1,0 +1,17 @@
+[package]
+name = "xenolith-dtd"
+description = "The XML document type definition for xenolith: the model, its parser, and the checks it drives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+xenolith-core = { workspace = true }
+
+[lints]
+workspace = true

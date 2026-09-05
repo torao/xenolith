@@ -1,6 +1,6 @@
 //! XPointer, as far as XInclude uses it: selecting one element of a resource.
 //!
-//! Three forms are handled. A **shorthand pointer** is a bare `NCName` that names an element by
+//! Three forms are handled. A **shorthand pointer** is a bare `NCName` that selects an element by
 //! its ID. The **`element()` scheme** walks a child sequence — `element(id/2/1)` from the
 //! element with that ID, or `element(/1/2)` from the root, each step the position of a child
 //! *element*. The **`xmlns()` scheme** declares a prefix; it is parsed (a scheme-based pointer

@@ -52,6 +52,7 @@ xml-id = ["xenolith-parser/xml-id", "xenolith-validate/xml-id"]
 
 [dependencies]
 xenolith-core = { workspace = true }
+xenolith-dtd = { workspace = true }
 xenolith-parser = { workspace = true }
 xenolith-validate = { workspace = true }
 xenolith-dom = { workspace = true }

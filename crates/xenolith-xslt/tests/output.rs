@@ -238,7 +238,7 @@ fn another_encoding_is_written_when_the_feature_is_there() {
 #[cfg(not(feature = "encodings"))]
 #[test]
 fn another_encoding_is_refused_by_name_without_the_feature() {
-  // Never bytes in one encoding under a declaration naming another; an error saying which
+  // Never bytes in one encoding under a declaration giving another; an error saying which
   // feature would provide it.
   let error = shift_jis_result().to_bytes().expect_err("cannot be written");
   assert!(error.message().contains("encodings"), "{}", error.message());

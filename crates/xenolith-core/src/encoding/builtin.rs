@@ -254,7 +254,7 @@ mod tests {
     let mut out = String::from("<");
     let err = d.decode(&[0x41, 0xC0, 0x41], &mut out, false).unwrap_err();
     // The good prefix is kept, appended after whatever `dst` already held, and the byte at
-    // fault is named relative to the slice just handed over.
+    // fault is reported relative to the slice just handed over.
     assert_eq!(out, "<A");
     assert!(matches!(err, Error::Encoding { byte_offset: Some(1), .. }));
   }

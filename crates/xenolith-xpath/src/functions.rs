@@ -265,7 +265,7 @@ fn no_extension<M: Model>(namespace: &str, local: &str, context: &Context<'_, M>
 
 // --- The functions that need more than a line ---------------------------------------------------
 
-/// `id()`: the elements named by the IDs in the argument.
+/// `id()`: the elements the IDs in the argument point at.
 ///
 /// A node-set argument contributes the string-value of each of its nodes; anything else is one
 /// string. Either way the strings are lists of IDs separated by whitespace.

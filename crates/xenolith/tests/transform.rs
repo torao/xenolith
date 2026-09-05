@@ -109,7 +109,7 @@ fn what_would_have_been_a_fatal_error_is_the_error_of_the_call() {
   assert!(error.message().contains("no good"), "{}", error.message());
 }
 
-// --- Resolving what a stylesheet names -----------------------------------------------------------
+// --- Resolving what a stylesheet refers to -----------------------------------------------------------
 
 /// A resolver serving one module and one document.
 struct Shelf;
@@ -196,7 +196,7 @@ fn a_stylesheet_that_is_not_one_is_refused_with_a_reason() {
 
 #[test]
 fn a_document_is_compiled_from_bytes_rather_than_from_a_tree() {
-  // The modules a stylesheet names are fetched while it is compiled, and each needs its own
+  // The modules a stylesheet refers to are fetched while it is compiled, and each needs its own
   // document, so this says so rather than half-working.
   let document = build::parse(&b"<a/>"[..]).expect("well-formed");
   let error = Transformer::compile(Source::document(&document)).expect_err("wrong kind of source");

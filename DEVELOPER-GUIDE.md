@@ -9,12 +9,13 @@
 
 ## Layout
 
-13 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
+14 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
 
 | Crate | 責務 |
 |---|---|
 | `xenolith-core` | 全層が使う語彙。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI、文字デコード |
-| `xenolith-parser` | XML 1.0 のプルパーサ。DTD（内部・外部サブセット、パラメータ実体）、実体解決、SAX 相当の push アダプタ、sans-I/O コア |
+| `xenolith-dtd` | DTD そのもの。宣言の模型、その構文解析（sans-I/O）、プログラムによる組み立てと走査。文書パーサに依存しない |
+| `xenolith-parser` | XML 1.0 のプルパーサ。DOCTYPE を見つけると `xenolith-dtd` に解析を委ね、外部サブセットとパラメータ実体を取得する。実体解決、SAX 相当の push アダプタ、sans-I/O コア |
 | `xenolith-validate` | スキーマ非依存の `Validator` / `ErrorListener` と、その最初の実装である DTD 検証器 |
 | `xenolith-dom` | アリーナ木。`Vec<NodeSlot>` + `Copy` な `NodeId`。W3C DOM Level 3 Core の名前を保つ |
 | `xenolith-serialize` | DOM 部分木から整形式 XML へ。エスケープ、名前空間修復、StAX 相当の `XmlWriter` |

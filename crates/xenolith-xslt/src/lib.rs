@@ -15,14 +15,14 @@
 //! # Fetching
 //!
 //! Nothing is fetched unless the caller says how. A stylesheet's own modules come through a
-//! [`Loader`], and the trees `document()` names through a [`DocumentSource`] — the default of
+//! [`Loader`], and the trees `document()` asks for through a [`DocumentSource`] — the default of
 //! each serves nothing, so a transformation reads no more than it was handed.
 //!
 //! # Features
 //!
 //! `encodings` (off by default here, on through the facade) lets [`ResultTree::to_bytes`] write
 //! a result in the encoding `xsl:output` named. Without it, anything but UTF-8 is an error
-//! saying so — never bytes in one encoding under a declaration naming another.
+//! saying so — never bytes in one encoding under a declaration giving another.
 //!
 //! `icu` (on by default) gives `xsl:sort` a language's own collation, from CLDR through ICU4X.
 //! Without it a text sort compares by Unicode code point — a defensible order, but not the one a

@@ -13,12 +13,13 @@ use futures_io::AsyncRead;
 
 use xenolith_core::error::{Error, Location, Result};
 
+use crate::async_resolve::{AsyncEntityReader, AsyncUriResolver};
 use crate::config::{Bounds, ParserConfig};
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
-use crate::resolve::{AsyncEntityReader, AsyncUriResolver, RequestKind};
-use crate::stream::CharStream;
+use xenolith_core::resolve::RequestKind;
+use xenolith_core::stream::CharStream;
 
 /// The read buffer's size, and so how many bytes are read from the source at a time.
 ///
@@ -84,7 +85,7 @@ impl<R, Resolver> std::fmt::Debug for AsyncReader<R, Resolver> {
 pub struct NoResolver;
 
 impl AsyncUriResolver for NoResolver {
-  async fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+  async fn resolve(&mut self, request: &xenolith_core::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
     let message = format!("{request}: no resolver is configured; attach one with with_resolver to allow this");
     Err(Error::well_formedness(message))
   }
@@ -489,7 +490,7 @@ mod tests {
   struct AsyncFixture(&'static [u8]);
 
   impl AsyncUriResolver for AsyncFixture {
-    async fn resolve(&mut self, _request: &crate::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+    async fn resolve(&mut self, _request: &xenolith_core::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
       // A real resolver would await a socket or a file here.
       Ok(Some(AsyncEntityReader::from_async_read(self.0)))
     }
@@ -520,7 +521,7 @@ mod tests {
   struct OwnedAsyncEntity(&'static str, Vec<u8>);
 
   impl AsyncUriResolver for OwnedAsyncEntity {
-    async fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+    async fn resolve(&mut self, request: &xenolith_core::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
       if request.name() == Some(self.0) {
         Ok(Some(AsyncEntityReader::from_async_read(Bytes { data: self.1.clone(), at: 0 })))
       } else {
@@ -555,7 +556,10 @@ mod tests {
     struct TokioFixture(&'static [u8]);
 
     impl AsyncUriResolver for TokioFixture {
-      async fn resolve(&mut self, _request: &crate::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+      async fn resolve(
+        &mut self,
+        _request: &xenolith_core::resolve::EntityRequest,
+      ) -> Result<Option<AsyncEntityReader>> {
         Ok(Some(AsyncEntityReader::from_tokio(std::io::Cursor::new(self.0.to_vec()))))
       }
     }

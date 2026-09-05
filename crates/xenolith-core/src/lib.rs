@@ -66,9 +66,12 @@
 
 pub mod attr;
 pub mod chars;
+pub mod decl;
 pub mod encoding;
 pub mod error;
 pub mod name;
+pub mod resolve;
+pub mod stream;
 pub mod uri;
 pub mod validate;
 

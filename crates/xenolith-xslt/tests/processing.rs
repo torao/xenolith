@@ -293,7 +293,7 @@ fn an_extension_element_uses_its_fallback() {
 
 #[test]
 fn an_element_of_a_namespace_that_was_not_declared_is_a_literal_result_element() {
-  // Only the prefixes `extension-element-prefixes` names are extension elements; everything
+  // Only the prefixes `extension-element-prefixes` lists are extension elements; everything
   // else in a namespace is ordinary output.
   let source = "<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform' \
                 xmlns:o='urn:o'><xsl:template match='/'><o:thing/></xsl:template></xsl:stylesheet>";

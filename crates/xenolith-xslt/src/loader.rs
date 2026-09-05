@@ -1,4 +1,4 @@
-//! Fetching the documents a stylesheet names — its own modules, and the trees `document()` asks
+//! Fetching the documents a stylesheet refers to — its own modules, and the trees `document()` asks
 //! for.
 
 use std::cell::RefCell;
@@ -7,7 +7,7 @@ use xenolith_core::error::{Error, Result};
 use xenolith_dom::{Document, NodeId, build};
 use xenolith_xdm::{Documents, DomNode};
 
-/// Fetches the bytes of a stylesheet module named by an absolute URI.
+/// Fetches the bytes of a stylesheet module given by an absolute URI.
 ///
 /// A stylesheet may be built from several documents, and reading them is I/O — the same trust
 /// decision as fetching an external entity. So it is not built in: the caller supplies a loader,
@@ -17,7 +17,7 @@ pub trait Loader {
   ///
   /// # Errors
   ///
-  /// Returns an error if the module cannot be provided. A stylesheet that names a module it
+  /// Returns an error if the module cannot be provided. A stylesheet that refers to a module it
   /// cannot have is not a stylesheet, so this is fatal — unlike XInclude, XSLT has no fallback.
   fn load(&mut self, uri: &str) -> Result<Vec<u8>>;
 }
@@ -39,7 +39,7 @@ pub struct NoLoader;
 impl Loader for NoLoader {
   fn load(&mut self, uri: &str) -> Result<Vec<u8>> {
     let message = format!(
-      "this stylesheet names the module {uri:?}, but no loader was given; \
+      "this stylesheet refers to the module {uri:?}, but no loader was given; \
        use Stylesheet::compile_with to supply one"
     );
     Err(Error::xslt(message))
@@ -150,7 +150,7 @@ impl ResultSink for NoResults {
 
 /// A source that has nothing, so `document()` always finds nothing.
 ///
-/// The default, because fetching a document a stylesheet names is I/O on the caller's behalf —
+/// The default, because fetching a document a stylesheet refers to is I/O on the caller's behalf —
 /// the same trust decision as [`Loader`], taken the same way.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoDocuments;
@@ -201,7 +201,7 @@ impl<L: Loader> LoadedDocuments<L> {
 
 impl<L: Loader> DocumentSource<DomNode> for LoadedDocuments<L> {
   fn document(&self, uri: &str) -> Result<Option<DomNode>> {
-    // §12.1: two calls naming the same URI give the same tree, so a document is fetched once
+    // §12.1: two calls with the same URI give the same tree, so a document is fetched once
     // and the nodes of it compare equal however they were reached.
     if let Some(found) = self.documents.find(uri) {
       return Ok(Some(found));

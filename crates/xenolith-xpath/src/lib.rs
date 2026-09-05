@@ -141,7 +141,7 @@ pub fn parse(expression: &str) -> Result<Expr> {
 /// Evaluates an expression tree with `node` as the context node, and nothing bound.
 ///
 /// This is the low-level entry, for a caller holding an [`Expr`] of its own; most callers want
-/// [`XPathExpression`]. Use [`evaluate_with`] when the expression names a variable or uses a
+/// [`XPathExpression`]. Use [`evaluate_with`] when the expression refers to a variable or uses a
 /// namespace prefix.
 ///
 /// # Errors

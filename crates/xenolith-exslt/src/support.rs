@@ -34,7 +34,7 @@ pub(crate) fn arity<N>(name: &str, arguments: &[Value<N>], least: usize, most: O
 /// Reads an argument that has to be a node-set.
 ///
 /// EXSLT's set and math modules are about node-sets, and a string where one was meant is a
-/// mistake worth naming rather than an empty answer.
+/// mistake worth reporting rather than an empty answer.
 #[cfg(any(feature = "math", feature = "sets"))]
 pub(crate) fn nodes<M: Model>(name: &str, value: &Value<M::Node>) -> Result<Vec<M::Node>> {
   match value {

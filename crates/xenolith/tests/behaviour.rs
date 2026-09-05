@@ -396,7 +396,7 @@ fn dependent_on_the_build() -> Vec<Item> {
     )
     .observe("available in this build", available.join(", "))
     .observe("this depends on", "the `encodings` feature, which adds everything encoding_rs knows")
-    .observe("without it", "an unsupported encoding is an error naming the feature, never a wrong decoding"),
+    .observe("without it", "an unsupported encoding is an error giving the feature, never a wrong decoding"),
     item(
       "",
       "which optional layers are compiled in",

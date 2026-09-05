@@ -50,6 +50,7 @@ mod handler;
 pub mod ids;
 mod validation;
 
+pub use dtd::{DtdSchema, DtdValidator};
 pub use handler::ValidatingHandler;
 #[cfg(feature = "xml-id")]
 pub use ids::XmlIdValidator;

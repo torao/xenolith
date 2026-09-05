@@ -1,8 +1,8 @@
-//! Fetching the resources XInclude names.
+//! Fetching the resources XInclude refers to.
 
 use xenolith_core::Error;
 
-/// Fetches the bytes of a resource named by an absolute URI.
+/// Fetches the bytes of a resource given by an absolute URI.
 ///
 /// XInclude does no I/O of its own — it hands each resolved `href` to a loader. That keeps the
 /// fetch, and its trust decisions, in the caller's hands: serve only from a directory, only from

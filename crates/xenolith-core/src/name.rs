@@ -77,7 +77,9 @@ impl NameId {
 /// assert_eq!(pool.resolve(NameId::XML), "xml");
 /// assert_eq!(pool.resolve(NameId::XML_NS), XML_NS_URI);
 /// ```
-#[derive(Debug)]
+/// It is [`Clone`] so that a consumer outliving the parser, for example a validator built at the `DOCTYPE`, can own
+/// the names its own interned ids resolve against.
+#[derive(Clone, Debug)]
 pub struct NamePool {
   names: Vec<Box<str>>,
   index: HashMap<Box<str>, NameId>,

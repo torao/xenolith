@@ -33,7 +33,7 @@ use crate::support::arity;
 /// The namespace a stylesheet binds a prefix to for this module.
 pub const NAMESPACE: &str = "http://exslt.org/regular-expressions";
 
-/// What `regexp:match` names each piece it finds.
+/// What `regexp:match` calls each piece it finds.
 const MATCH: &str = "match";
 
 /// Adds this module's functions, with `trees` for the one that answers with nodes.

@@ -133,7 +133,7 @@ pub fn register<M: Model>(functions: Functions<M>) -> Functions<M> {
 /// let model = DomModel::with_documents(&source, &documents);
 /// let space: Rc<dyn DocumentSource<DomNode>> = Rc::new(TreeSpace::new(&documents));
 ///
-/// // The set is tied to the model it will run against, which is what names the node type here.
+/// // The set is tied to the model it will run against, which is what fixes the node type here.
 /// let functions: Functions<DomModel<'_>> = xenolith_exslt::register_with(Functions::new(), &space);
 /// # let _ = (model, functions);
 /// # Ok::<(), xenolith_core::Error>(())
@@ -190,7 +190,7 @@ pub fn modules() -> Vec<&'static str> {
   modules
 }
 
-// The namespaces are named even where the module was not built, so `modules()` above can list
+// The namespaces are listed even where the module was not built, so `modules()` above can list
 // what a build has without the names themselves depending on the features.
 #[cfg(not(feature = "common"))]
 mod common {

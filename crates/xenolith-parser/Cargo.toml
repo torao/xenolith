@@ -26,6 +26,7 @@ xml-id = []
 
 [dependencies]
 xenolith-core = { workspace = true }
+xenolith-dtd = { workspace = true }
 futures-io = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }

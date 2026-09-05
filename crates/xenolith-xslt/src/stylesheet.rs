@@ -345,7 +345,7 @@ struct Module {
   document: Document,
   system_id: String,
   precedence: i32,
-  /// Whether its `version` names a later XSLT than this one, which §2.5 asks to be forgiving of.
+  /// Whether its `version` gives a later XSLT than this one, which §2.5 asks to be forgiving of.
   forwards_compatible: bool,
 }
 
@@ -354,7 +354,7 @@ impl Stylesheet {
   ///
   /// # Errors
   ///
-  /// [`Error::Xslt`] if the document is not a stylesheet, or names a module — use
+  /// [`Error::Xslt`] if the document is not a stylesheet, or refers to a module — use
   /// [`compile_with`](Self::compile_with) for a stylesheet built from several. Whatever the
   /// parser raises if the document is not well-formed, and [`Error::XPath`] if a pattern
   /// cannot be read.
@@ -482,15 +482,15 @@ impl Stylesheet {
 
   /// Whether an element is an extension element rather than a literal result element (§14.1).
   ///
-  /// `extension-element-prefixes` names prefixes, and applies to the element it is written on
+  /// `extension-element-prefixes` lists prefixes, and applies to the element it is written on
   /// and everything below it — so the question is answered by walking up from the element until
-  /// one of the declarations names the prefix this element's namespace is bound to. An XSLT
+  /// one of the declarations lists the prefix this element's namespace is bound to. An XSLT
   /// element writes the attribute without a prefix; a literal result element writes it in the
   /// XSLT namespace, since on it an unprefixed attribute would be part of the result.
   pub(crate) fn is_extension_element(&self, module: usize, element: NodeId) -> bool {
     let document = &self.modules[module].document;
     let Some(namespace) = document.namespace_uri(element).map(ToOwned::to_owned) else {
-      // An element in no namespace can be named by no prefix, so it is never an extension one.
+      // An element in no namespace carries no prefix, so it is never an extension one.
       return false;
     };
 
@@ -502,7 +502,7 @@ impl Stylesheet {
       if let Some(declared) = declared {
         let namespaces = in_scope_namespaces(document, node);
         for prefix in declared.split_whitespace() {
-          // `#default` names the default namespace, which a literal result element may be in.
+          // `#default` stands for the default namespace, which a literal result element may be in.
           let named = if prefix == "#default" {
             default_namespace(document, node)
           } else {
@@ -894,7 +894,7 @@ impl Stylesheet {
           "xml" => OutputMethod::Xml,
           "html" => OutputMethod::Html,
           "text" => OutputMethod::Text,
-          // A qualified name here names a method an implementation invented; XSLT says an
+          // A qualified name here stands for a method an implementation invented; XSLT says an
           // unknown one may be reported.
           other => return Err(xslt_error(format!("xsl:output method {other:?} is not one this can write"))),
         };
@@ -929,7 +929,7 @@ impl Stylesheet {
         self.output.standalone = Some(value == "yes");
       }
     }
-    // The union, whatever the precedences: every declaration names elements that are to be
+    // The union, whatever the precedences: every declaration lists elements that are to be
     // written as CDATA, and none of them takes that back.
     if let Some(elements) = document.attribute(element, "cdata-section-elements").map(ToOwned::to_owned) {
       for name in elements.split_whitespace() {
@@ -970,7 +970,7 @@ impl Stylesheet {
   fn read_namespace_alias(&mut self, module: usize, element: NodeId) -> Result<()> {
     let document = &self.modules[module].document;
     let namespaces = in_scope_namespaces(document, element);
-    // `#default` names the default namespace, which may be no namespace at all.
+    // `#default` stands for the default namespace, which may be no namespace at all.
     let resolve = |attribute: &str| -> Result<Option<String>> {
       let Some(prefix) = document.attribute(element, attribute) else {
         return Err(xslt_error(format!("xsl:namespace-alias needs a {attribute}")));
@@ -1012,7 +1012,7 @@ impl Stylesheet {
       }),
     };
 
-    /// One attribute of an `xsl:decimal-format` that names a single character.
+    /// One attribute of an `xsl:decimal-format` that gives a single character.
     fn character(document: &Document, element: NodeId, attribute: &str, current: char) -> Result<char> {
       let Some(value) = document.attribute(element, attribute) else { return Ok(current) };
       let mut characters = value.chars();
@@ -1316,7 +1316,7 @@ pub(crate) fn in_scope_namespaces(document: &Document, element: NodeId) -> Names
   namespaces
 }
 
-/// The default namespace in scope on an element, which no prefix names.
+/// The default namespace in scope on an element, which no prefix stands for.
 ///
 /// [`in_scope_namespaces`] leaves this out on purpose: an XPath prefix can never stand for the
 /// default namespace, so an expression has no use for it. `xsl:namespace-alias` does, through

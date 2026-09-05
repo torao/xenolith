@@ -2,7 +2,7 @@
 //!
 //! This is vocabulary, not an implementation. A [`Validator`] checks a stream of document events, whatever emits them,
 //! and reports each departure from the schema to an [`ErrorListener`]. The schema languages that implement it, and the
-//! drivers that feed it, live in higher crates. It names only core types, so a parser, a tree, or a writer can all
+//! drivers that feed it, live in higher crates. It rests on core types alone, so a parser, a tree, or a writer can all
 //! target it.
 //!
 

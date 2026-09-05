@@ -103,7 +103,7 @@ cargo test --workspace --no-default-features
 
 | Feature | Default | Effect |
 |---|---|---|
-| `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error naming the feature |
+| `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error giving the feature |
 | `parse` | on | `dom::build`, which turns parsed XML into a DOM tree |
 | `exslt` | on | `exslt`, the EXSLT extension functions. Each module has a feature of its own on that crate, and `function-available()` answers from the registry, so it agrees with the build without anything keeping the two in step |
 | `icu` | on | Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it a text sort compares by Unicode code point. XSLT 1.0 §10 leaves the collating sequence to the processor, so this changes the *answer*, not just the speed — see the behaviour report |
@@ -114,7 +114,7 @@ cargo test --workspace --no-default-features
 
 ## Specifications
 
-Each crate names the documents it was written from, in its own documentation. The links are to
+Each crate lists the documents it was written from, in its own documentation. The links are to
 **dated** versions rather than to "latest", so that a reviewer can read the same text the code
 was written against — `/TR/xml/` moves, `/TR/2008/REC-xml-20081126/` does not.
 

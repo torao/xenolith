@@ -90,7 +90,7 @@ fn a_fetched_document_has_a_root_of_its_own() {
 
 #[test]
 fn one_uri_gives_one_tree_however_often_it_is_asked_for() {
-  // §12.1: two calls naming the same URI give the same node, so the union of them is one node.
+  // §12.1: two calls with the same URI give the same node, so the union of them is one node.
   let body = "<xsl:template match='/'>\
               <xsl:value-of select=\"count(document('a.xml') | document('a.xml'))\"/></xsl:template>";
   let shelf = [("file:///dir/a.xml", "<r/>")];

@@ -1065,6 +1065,7 @@ dependencies = [
  "criterion",
  "xenolith-core",
  "xenolith-dom",
+ "xenolith-dtd",
  "xenolith-exslt",
  "xenolith-parser",
  "xenolith-serialize",
@@ -1099,6 +1100,13 @@ dependencies = [
  "xenolith-core",
  "xenolith-parser",
  "xenolith-validate",
+]
+
+[[package]]
+name = "xenolith-dtd"
+version = "0.0.0"
+dependencies = [
+ "xenolith-core",
 ]
 
 [[package]]
@@ -1137,6 +1145,7 @@ dependencies = [
  "tokio-test",
  "tokio-util",
  "xenolith-core",
+ "xenolith-dtd",
 ]
 
 [[package]]
@@ -1154,6 +1163,7 @@ version = "0.0.0"
 dependencies = [
  "xenolith-core",
  "xenolith-dom",
+ "xenolith-dtd",
  "xenolith-parser",
 ]
 

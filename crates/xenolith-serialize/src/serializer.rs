@@ -273,7 +273,7 @@ impl Writer<'_> {
   }
 
   /// If `attr` is a namespace declaration, the prefix it declares (or `None` for the default
-  /// namespace) and the namespace it names.
+  /// namespace) and the namespace it binds.
   fn namespace_declaration(&self, attr: NodeId) -> Option<(Option<String>, String)> {
     if self.doc.namespace_uri(attr) != Some(XMLNS_NS_URI) {
       return None;

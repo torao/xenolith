@@ -11,7 +11,7 @@
 //! - [Number to string conversion attributes (§7.7.1)] — the format string, `letter-value`,
 //!   `grouping-separator` and `grouping-size`
 //!
-//! Where §7.7.1 leaves something open it is named as such below, and `tests/behaviour.rs` in the
+//! Where §7.7.1 leaves something open it is called out below, and `tests/behaviour.rs` in the
 //! `xenolith` crate prints what this build does.
 //!
 //! [Number to string conversion attributes (§7.7.1)]: https://www.w3.org/TR/1999/REC-xslt-19991116#convert
@@ -49,7 +49,7 @@ impl Format {
   /// Reads a format string.
   ///
   /// A format with no token at all still has to number something, so it falls back to `1` — §7.7
-  /// makes `1` the default format, and a format that names no sequence is no more informative
+  /// makes `1` the default format, and a format that selects no sequence is no more informative
   /// than none at all.
   pub(crate) fn parse(format: &str, letter_value: LetterValue) -> Self {
     let characters: Vec<char> = format.chars().collect();
@@ -130,7 +130,7 @@ pub(crate) enum LetterValue {
   Traditional,
 }
 
-/// Which sequence a token names.
+/// Which sequence a token selects.
 ///
 /// `i` and `I` are the awkward ones: they could begin the alphabet's ninth letter or the Roman
 /// numerals, and §7.7.1 says only that `letter-value` disambiguates them — **it does not say
@@ -354,7 +354,7 @@ mod tests {
 
   #[test]
   fn a_token_that_names_no_sequence_is_numbered_as_one() {
-    assert_eq!(write("\u{3b1}", &[3.0]), "3", "a Greek alpha is alphanumeric, but names no sequence here");
+    assert_eq!(write("\u{3b1}", &[3.0]), "3", "a Greek alpha is alphanumeric, but selects no sequence here");
   }
 
   #[test]

@@ -90,7 +90,7 @@ impl Pattern {
   ///
   /// # Errors
   ///
-  /// If the pattern holds more than one `pattern-separator`, which names a third half that
+  /// If the pattern holds more than one `pattern-separator`, which would give a third half that
   /// `DecimalFormat` has no meaning for.
   pub(crate) fn parse(pattern: &str, symbols: &Symbols) -> Result<Self, String> {
     let halves = split_halves(pattern, symbols);
@@ -101,7 +101,7 @@ impl Pattern {
         negative: Some(Subpattern::parse(&halves[1], symbols)),
       }),
       _ => Err(format!(
-        "the format pattern {pattern:?} has more than one {:?}, so it names more than a positive \
+        "the format pattern {pattern:?} has more than one {:?}, so it gives more than a positive \
          and a negative form",
         symbols.pattern_separator
       )),
@@ -415,7 +415,7 @@ mod tests {
 
   #[test]
   fn another_digit_set_can_be_used() {
-    // zero-digit names the start of a run of ten digits, so the whole set moves with it.
+    // zero-digit fixes the start of a run of ten digits, so the whole set moves with it.
     let symbols = Symbols { zero_digit: '\u{0660}', ..Symbols::default() };
     let pattern = Pattern::parse("\u{0660}\u{0660}\u{0660}", &symbols).expect("a pattern");
     assert_eq!(pattern.format(123.0, &symbols), "\u{661}\u{662}\u{663}");

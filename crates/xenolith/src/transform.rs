@@ -62,7 +62,7 @@ pub use xenolith_xslt::OutputMethod;
 ///
 /// Bytes are parsed; a [`Document`] already built is used as it stands. A system identifier is
 /// what relative references — `xsl:import`, `document()` — are resolved against, so a source
-/// that names one can be part of a stylesheet built from several files.
+/// that refers to one can be part of a stylesheet built from several files.
 #[derive(Debug)]
 pub struct Source<'a> {
   content: Content<'a>,
@@ -95,13 +95,13 @@ impl<'a> Source<'a> {
     self
   }
 
-  /// The system identifier, or a placeholder naming what has none.
+  /// The system identifier, or a placeholder standing in for what has none.
   fn system_id(&self) -> String {
     self.system_id.clone().unwrap_or_else(|| "urn:xenolith:unnamed-source".to_owned())
   }
 }
 
-/// Where documents a transformation names are fetched from: JAXP's `URIResolver`.
+/// Where documents a transformation refers to are fetched from: JAXP's `URIResolver`.
 ///
 /// This is [`Loader`] under another name, because a stylesheet module and a `document()` tree
 /// are fetched the same way; the transformer hands it to both.
@@ -131,19 +131,19 @@ impl std::fmt::Debug for Transformer {
 impl Transformer {
   /// Compiles a stylesheet: JAXP's `newTransformer(Source)`.
   ///
-  /// A stylesheet naming `xsl:import` or `xsl:include` needs a resolver, which
+  /// A stylesheet using `xsl:import` or `xsl:include` needs a resolver, which
   /// [`with_resolver`](Self::with_resolver) supplies — but the modules are fetched when the
   /// stylesheet is compiled, so use [`compile_with`](Self::compile_with) for that.
   ///
   /// # Errors
   ///
-  /// If the stylesheet is not well-formed, is not a stylesheet, or names a module with no
+  /// If the stylesheet is not well-formed, is not a stylesheet, or refers to a module with no
   /// resolver to fetch it.
   pub fn compile(source: Source<'_>) -> Result<Self> {
     Self::compile_with(source, &mut NoLoader)
   }
 
-  /// Compiles a stylesheet, fetching the modules it names through `resolver`.
+  /// Compiles a stylesheet, fetching the modules it refers to through `resolver`.
   ///
   /// # Errors
   ///
@@ -153,7 +153,7 @@ impl Transformer {
     let stylesheet = match source.content {
       Content::Bytes(bytes) => Stylesheet::compile_with(bytes, &system_id, resolver)?,
       Content::Document(_) => {
-        // A stylesheet is compiled from its text, because the modules it names are fetched
+        // A stylesheet is compiled from its text, because the modules it refers to are fetched
         // during compilation and each needs its own document.
         let message = "a stylesheet is compiled from bytes; give Source::bytes, not a Document".to_owned();
         return Err(Error::xslt(message));

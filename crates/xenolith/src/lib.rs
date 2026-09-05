@@ -51,8 +51,8 @@
 //! # Feature flags
 //!
 //! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1. Without it, an
-//!   `xsl:output` naming another encoding is an error saying so, never bytes in one encoding
-//!   under a declaration naming another.
+//!   `xsl:output` giving another encoding is an error saying so, never bytes in one encoding
+//!   under a declaration giving another.
 //! - `parse` (default): [`dom::build`], which turns parsed XML into a tree.
 //! - `exslt` (default): the `exslt` module, with every EXSLT module this crate knows of.
 //! - `icu` (default): language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without
@@ -65,7 +65,7 @@
 //!
 //! # Specifications
 //!
-//! Every layer names the documents it was written from, at dated URLs so that the text read
+//! Every layer lists the documents it was written from, at dated URLs so that the text read
 //! while writing it can still be found. Together they are:
 //!
 //! | Document | Version | Where |
@@ -99,6 +99,7 @@
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
+pub use xenolith_dtd as dtd;
 pub use xenolith_parser as parser;
 
 /// Validation: the schema-agnostic [`Validator`](validate::Validator) and the DTD validator.
@@ -191,7 +192,7 @@ mod tests {
 
   #[test]
   fn core_primitives_are_at_the_root() {
-    // A name and a URI resolve through the crate root, without naming the inner crates.
+    // A name and a URI resolve through the crate root, without reaching for the inner crates.
     let mut pool = crate::NamePool::new();
     let a = pool.intern("a");
     assert_eq!(pool.resolve(a), "a");

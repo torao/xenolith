@@ -214,7 +214,7 @@ fn detect_declaration_incremental(bytes: &[u8]) -> Detected {
     Some(_) => return default_encoding(),
   }
   match find(rest, b"?>") {
-    // The declaration is complete: its `encoding`, or the default when it names none.
+    // The declaration is complete: its `encoding`, or the default when it gives none.
     Some(end) => match scan_for_encoding(&rest[..end]) {
       Some(encoding) => Detected::Determined(Detection::new(&encoding, 0, DetectionSource::Declaration)),
       None => default_encoding(),
@@ -331,11 +331,11 @@ mod tests {
     assert_eq!(determined(b"<?xml disabled encoding='Shift_JIS'?>").encoding, "Shift_JIS");
     assert_eq!(determined(b"<?xml notencoding='x' encoding='EUC-JP'?>").encoding, "EUC-JP");
 
-    // `encoding` must match a whole pseudo-attribute, not the tail of another or a value naming it.
+    // `encoding` must match a whole pseudo-attribute, not the tail of another or a value spelling it.
     assert_eq!(determined(b"<?xml version='1.0' fooencoding='x'?>").source, DetectionSource::Default);
     assert_eq!(determined(b"<?xml version='encoding=utf-7'?>").source, DetectionSource::Default);
 
-    // A complete declaration that names no usable encoding is the default.
+    // A complete declaration that gives no usable encoding is the default.
     for decl in [
       &b"<?xml version='1.0'?>"[..],
       b"<?xml?>", // `<?xml` with no following whitespace is not a declaration

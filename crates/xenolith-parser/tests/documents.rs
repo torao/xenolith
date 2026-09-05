@@ -333,7 +333,7 @@ fn an_element_must_start_and_end_in_one_entity() {
 
 #[test]
 fn a_default_referencing_a_later_entity_is_rejected() {
-  // The entity is declared, but after the attribute list that names it in a default.
+  // The entity is declared, but after the attribute list that refers to it in a default.
   let xml = "<!DOCTYPE a [<!ATTLIST a x CDATA '&e;'><!ENTITY e 'v'>]><a/>";
   assert!(rejects(xml).contains("before it is declared"));
   // Declared first, it is fine and the default expands.
@@ -365,7 +365,7 @@ fn a_declared_entity_expands_in_content_and_attributes() {
 
 #[test]
 fn an_expansion_bomb_is_refused_rather_than_expanded() {
-  // The billion-laughs shape: each level names the one below it ten times. Expanding it fully
+  // The billion-laughs shape: each level refers to the one below it ten times. Expanding it fully
   // would be 10^10 characters; the entity-expansion limits must stop it long before that.
   let mut dtd = String::from("<!DOCTYPE a [<!ENTITY l0 \"boom\">");
   for level in 1..=10 {

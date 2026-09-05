@@ -52,7 +52,7 @@ use std::sync::Arc;
 use xenolith_core::error::{Error, Location, Result};
 use xenolith_core::uri::UriReference;
 
-use crate::stream::CharStream;
+use xenolith_core::stream::CharStream;
 
 /// What kind of entity is being read.
 ///

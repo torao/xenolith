@@ -49,7 +49,7 @@
 //! | Java `org.xml.sax` | Here |
 //! | --- | --- |
 //! | `ContentHandler` | [`Handler`], driven by [`emit`](EventSource::emit) |
-//! | `EntityResolver` | [`UriResolver`](crate::resolve::UriResolver), given to a reader with [`with_resolver`](Reader::with_resolver) |
+//! | `EntityResolver` | [`UriResolver`](xenolith_core::resolve::UriResolver), given to a reader with [`with_resolver`](Reader::with_resolver) |
 //! | `ErrorHandler` | the [`Result`] from [`emit`](EventSource::emit) carries parser errors; an application problem is held by the handler itself |
 //! | `DTDHandler`, ext `DeclHandler` | the parsed [`Dtd`] on [`DoctypeEvent::dtd`], in the [`doctype`](Handler::doctype) callback |
 //! | ext `LexicalHandler` | [`comment`](Handler::comment), [`cdata`](Handler::cdata), and [`doctype`](Handler::doctype) |
@@ -57,7 +57,7 @@
 //! ## Resolving external entities (`EntityResolver`)
 //!
 //! Resolving an external entity is a reader concern, not a content callback: implement
-//! [`UriResolver`](crate::resolve::UriResolver) and hand it to the reader. It is off by default, since resolving
+//! [`UriResolver`](xenolith_core::resolve::UriResolver) and hand it to the reader. It is off by default, since resolving
 //! external entities is the XML external-entity (XXE) attack surface.
 //!
 //! ```
@@ -186,7 +186,7 @@
 //!     if let Some(gif) = event.pool.get("gif") {
 //!       self.gif_is_a_notation = event.dtd.has_notation(gif);
 //!     }
-//!     // DTDHandler.unparsedEntityDecl: an NDATA entity that names a notation.
+//!     // DTDHandler.unparsedEntityDecl: an NDATA entity that refers to a notation.
 //!     if let Some(logo) = event.pool.get("logo") {
 //!       self.logo_is_unparsed = matches!(event.dtd.general_entity(logo), Some(GeneralEntity::Unparsed { .. }));
 //!     }

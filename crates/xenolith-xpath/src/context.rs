@@ -122,7 +122,7 @@ impl<N> Variables<N> {
   /// The value of a variable, by the namespace its prefix resolved to and its local part.
   #[must_use]
   pub fn get(&self, namespace: Option<&str>, local: &str) -> Option<&Value<N>> {
-    // The key owns its strings; an expression names few variables, so this is cheap enough.
+    // The key owns its strings; an expression refers to few variables, so this is cheap enough.
     self.bindings.get(&(namespace.map(ToOwned::to_owned), local.to_owned()))
   }
 }

@@ -25,6 +25,7 @@ categories = ["parser-implementations", "text-processing"]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
 xenolith-core = { version = "0.0.0", path = "crates/xenolith-core", default-features = false }
+xenolith-dtd = { version = "0.0.0", path = "crates/xenolith-dtd", default-features = false }
 xenolith-parser = { version = "0.0.0", path = "crates/xenolith-parser", default-features = false }
 xenolith-validate = { version = "0.0.0", path = "crates/xenolith-validate", default-features = false }
 xenolith-dom = { version = "0.0.0", path = "crates/xenolith-dom", default-features = false }

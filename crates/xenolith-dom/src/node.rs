@@ -1,6 +1,6 @@
 //! The node model: identity, kinds, and the payload each kind carries.
 //!
-//! Every node lives in a [`Document`](crate::Document)'s [arena](crate#arena) and is named by a [`NodeId`]. It stores
+//! Every node lives in a [`Document`](crate::Document)'s [arena](crate#arena) and is identified by a [`NodeId`]. It stores
 //! its kind and data internally. A caller reads them through the accessors on [`Document`](crate::Document) or a
 //! [`NodeRef`](crate::NodeRef).
 //!
@@ -15,7 +15,7 @@ use xenolith_core::name::{NameId, QName};
 /// node. It carries no reference to the document, so reading through it also needs the document. This is the arena
 /// trade-off, and it keeps a node cheap to hold and to compare.
 ///
-/// A handle names a node of the document that made it and of no other. It records which document that was, so giving
+/// A handle refers to a node of the document that made it and of no other. It records which document that was, so giving
 /// one to a different document is caught instead of reading an unrelated node. A method that returns a
 /// [`Result`](crate::Result) reports [`WRONG_DOCUMENT_ERR`](crate::ExceptionCode::WRONG_DOCUMENT_ERR), and a read
 /// accessor panics.
@@ -35,7 +35,7 @@ impl NodeId {
     Self { document, index }
   }
 
-  /// The document this handle names a node of.
+  /// The document this handle refers to a node of.
   pub(crate) const fn document(self) -> NonZeroU32 {
     self.document
   }

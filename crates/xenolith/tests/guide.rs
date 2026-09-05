@@ -53,12 +53,12 @@ fn every_crate_the_guide_names_is_one_that_exists() {
   assert!(!named.is_empty(), "the guide should name the crates in backticks");
   let workspace = workspace_crates();
   let gone: Vec<&String> = named.iter().filter(|name| !workspace.contains(*name)).collect();
-  assert!(gone.is_empty(), "DEVELOPER-GUIDE.md names {gone:?}, which are not crates of this workspace");
+  assert!(gone.is_empty(), "DEVELOPER-GUIDE.md lists {gone:?}, which are not crates of this workspace");
 }
 
 #[test]
 fn the_commands_the_guide_gives_name_crates_that_exist() {
-  // A `-p <crate>` in the guide is something a reader will type. One naming a crate that has
+  // A `-p <crate>` in the guide is something a reader will type. One giving a crate that has
   // been renamed fails for them rather than here, which is the wrong way round.
   let text = guide();
   let workspace = workspace_crates();

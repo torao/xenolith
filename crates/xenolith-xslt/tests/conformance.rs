@@ -104,7 +104,7 @@ fn suite() -> Option<PathBuf> {
   None
 }
 
-/// The directory the Xalan layout hangs from, whether `XSLTCONF` names the checkout or the
+/// The directory the Xalan layout hangs from, whether `XSLTCONF` points at the checkout or the
 /// `tests` directory inside it.
 fn xalan_root(root: &Path) -> Option<PathBuf> {
   [root.to_path_buf(), root.join("tests")]
@@ -127,7 +127,7 @@ fn cases(root: &Path) -> Vec<Case> {
 
 /// Reads the layout Apache's copy uses.
 ///
-/// A case is named by its *expected result*: `conf-gold/<group>/<name>.out` is the answer to
+/// A case is identified by its *expected result*: `conf-gold/<group>/<name>.out` is the answer to
 /// `conf/<group>/<name>.xsl` over `conf/<group>/<name>.xml`. Going from the gold files rather
 /// than from the stylesheets matters — `conf` also holds the modules the cases import, which are
 /// not cases and would each be counted as one that produces nothing.
@@ -206,7 +206,7 @@ fn catalogued_cases(root: &Path) -> Vec<Case> {
   }
   while let Some((element, major)) = stack.pop() {
     let mut major = major;
-    // Each catalogue names the directory its cases sit under.
+    // Each catalogue gives the directory its cases sit under.
     for child in document.children(element) {
       if document.local_name(child) == Some("major-path") {
         major = document.text_content(child).trim().to_owned();
@@ -341,7 +341,7 @@ fn transform_case(case: &Case) -> Result<Written, String> {
   let reader = Reader::with_system_id(data.as_slice(), &system_id).with_resolver(Files);
   let document = build::parse_reader(reader).map_err(|error| format!("the data: {}", error.message()))?;
 
-  // `document()` names files beside the case's own, so the trees it fetches share the node space
+  // `document()` refers to files beside the case's own, so the trees it fetches share the node space
   // the source document is read through.
   let space = Documents::new();
   let model = DomModel::with_documents(&document, &space);
@@ -637,7 +637,7 @@ fn the_conformance_suite_is_run_and_reported() {
   }
 
   // A threshold nobody has measured is no threshold at all, so one is asserted only when the
-  // caller names it — having seen the report above and decided what it should be.
+  // caller sets it — having seen the report above and decided what it should be.
   if let Some(budget) = std::env::var_os("XSLTCONF_MAX_FAILURES") {
     let budget: usize = budget.to_string_lossy().trim().parse().expect("XSLTCONF_MAX_FAILURES is a number");
     let failed = runs.failed + refusals.failed;

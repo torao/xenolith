@@ -87,7 +87,7 @@
 //! - `async`: the runtime-agnostic [`AsyncReader`], over `futures_io::AsyncRead`. Off by
 //!   default; an application can drive it with any executor and supply its own async I/O.
 //! - `tokio`: adapters that bridge `tokio`'s own `AsyncRead` to the async driver, chiefly
-//!   [`AsyncEntityReader::from_tokio`](resolve::AsyncEntityReader::from_tokio). Enables `async`;
+//!   [`AsyncEntityReader::from_tokio`](async_resolve::AsyncEntityReader::from_tokio). Enables `async`;
 //!   off by default.
 //! - `xml-base`: per-node base URI computation from `xml:base` and the entity's system
 //!   identifier (XML Base); read it with [`Parser::base_uri`].
@@ -118,28 +118,31 @@
 
 #[cfg(feature = "async")]
 pub mod async_reader;
+#[cfg(feature = "async")]
+pub mod async_resolve;
 pub mod config;
-pub mod dtd;
 pub mod entity;
 pub mod event;
 mod namespace;
 pub mod parser;
 pub mod reader;
-pub mod resolve;
 pub mod sax;
 mod scan;
-pub mod stream;
 
 #[cfg(feature = "async")]
 pub use async_reader::{AsyncReader, NoResolver};
 pub use config::{Bounds, ParserConfig};
-pub use dtd::Dtd;
+// The DTD model and its parser are their own crate, usable without a document parser. They are re-exported here
+// because this crate hands `Dtd` values out, through `Parser::dtd` and the `doctype` callback.
+#[cfg(feature = "async")]
+pub use async_resolve::{AsyncEntityReader, AsyncUriResolver};
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
 pub use parser::{Attributes, EventKind, EventRef, Events, Parser, Progress, XmlSpace};
 pub use reader::{Reader, ReaderEvents};
-#[cfg(feature = "async")]
-pub use resolve::{AsyncEntityReader, AsyncUriResolver};
 pub use resolve::{EntityRequest, RequestKind, UriResolver};
 pub use stream::CharStream;
 pub use xenolith_core::attr::AttributeRef;
+pub use xenolith_core::{resolve, stream};
+pub use xenolith_dtd as dtd;
+pub use xenolith_dtd::Dtd;

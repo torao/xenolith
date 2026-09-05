@@ -1,6 +1,6 @@
 //! The DTD validator.
 //!
-//! It checks a document against the DTD the parser read: that the root is the one the `DOCTYPE` names, that every
+//! It checks a document against the DTD the parser read: that the root is the one the `DOCTYPE` declares, that every
 //! element and attribute is declared and used as declared, that content follows the declared model, and that IDs are
 //! unique and every reference resolves. The parser has already done the DTD's parsing-side work (entities, defaults,
 //! tokenized normalization), so this is pure constraint checking, reported through an [`ErrorListener`].
@@ -20,14 +20,23 @@ use crate::{ErrorListener, Validator, ValidityError};
 /// A validator against a document's own DTD.
 ///
 /// Built from the [`Dtd`] once the `DOCTYPE` is read, which [`ValidatingHandler`](crate::ValidatingHandler) does when
-/// asked to validate against the document's own DTD. It owns a copy of the DTD so it can read it while the parser
-/// continues emitting events.
+/// asked to validate against the document's own DTD. It owns a copy of the DTD, and of the [`NamePool`] that DTD's
+/// names were interned in, so it can read both while the parser continues emitting events.
+///
+/// Owning that pool is what lets the validator check a source that interns names elsewhere, a tree walk over a
+/// [`Document`](https://docs.rs/xenolith-dom) among them. Every name a source hands over arrives as a [`QName`] with a
+/// pool to resolve it, so the validator turns it into its lexical form and looks that up in its own pool. The ids the
+/// DTD is keyed by never leave this validator.
 ///
 #[derive(Debug)]
 pub struct DtdValidator {
   dtd: Dtd,
-  /// The declared root element name, matched against the document's root.
-  root: NameId,
+  /// The pool the DTD's names are interned in. Every `NameId` this validator holds belongs to it, and a name arriving
+  /// from a source is interned here before it is compared with anything from the DTD.
+  pool: NamePool,
+  /// The root element name to require, when there is one to require. A `DOCTYPE` declares one; a DTD read on its own
+  /// declares no root, so a schema built from one leaves the check out unless the caller asks for it.
+  root: Option<NameId>,
   root_seen: bool,
   /// Whether the once-per-document checks over the declarations have run.
   declarations_checked: bool,
@@ -63,11 +72,16 @@ enum ContentKind {
 }
 
 impl DtdValidator {
-  /// Creates a validator for `dtd`, whose declared root is `root` (the `DOCTYPE` name).
+  /// Creates a validator for `dtd`, whose names are interned in `pool`.
+  ///
+  /// `root` is the element the document must have at its root, which a `DOCTYPE` declares. Pass `None` for a DTD
+  /// that declares none, and the root goes unchecked.
+  ///
   #[must_use]
-  pub fn new(dtd: Dtd, root: NameId) -> Self {
+  pub fn new(dtd: Dtd, pool: NamePool, root: Option<NameId>) -> Self {
     Self {
       dtd,
+      pool,
       root,
       root_seen: false,
       declarations_checked: false,
@@ -102,19 +116,19 @@ impl DtdValidator {
   /// Checks the declarations themselves, once: the constraints that hold regardless of any document, for example, an
   /// ID attribute's default, one ID per element, the syntactic validity of each declared default value, and no name
   /// repeated in mixed content.
-  fn check_declarations(&self, pool: &NamePool, at: &Location, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
+  fn check_declarations(&self, at: &Location, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
     // Collect first so the borrow of the DTD does not outlive the reports.
     let attlists: Vec<(NameId, Vec<AttDef>)> = self.dtd.attlists().map(|(e, defs)| (e, defs.to_vec())).collect();
 
     for (element, defs) in attlists {
-      let element_name = pool.resolve(element);
+      let element_name = self.pool.resolve(element);
       let mut ids = 0;
       for def in &defs {
         if matches!(def.att_type, AttType::Id) {
           ids += 1;
           // VC: ID Attribute Default. An ID must be #IMPLIED or #REQUIRED.
           if matches!(def.default, DefaultDecl::Fixed(_) | DefaultDecl::Default(_)) {
-            let name = pool.resolve(def.name);
+            let name = self.pool.resolve(def.name);
             let message = format!("the ID attribute \"{name}\" of \"{element_name}\" must be #IMPLIED or #REQUIRED");
             errors.report(ValidityError::new(message, at.clone()))?;
           }
@@ -123,8 +137,8 @@ impl DtdValidator {
         if let AttType::Notation(notations) = &def.att_type {
           for &notation in notations {
             if !self.dtd.has_notation(notation) {
-              let name = pool.resolve(notation);
-              let attr = pool.resolve(def.name);
+              let name = self.pool.resolve(notation);
+              let attr = self.pool.resolve(def.name);
               let message = format!("attribute \"{attr}\" allows notation \"{name}\", which is not declared");
               errors.report(ValidityError::new(message, at.clone()))?;
             }
@@ -133,8 +147,8 @@ impl DtdValidator {
         // VC: Attribute Default Value Syntactically Correct. A declared default must be a legal
         // value for its type. Check it without recording IDs or references.
         if let Some(value) = def.default.value() {
-          if !self.default_value_is_valid(&def.att_type, value, pool) {
-            let name = pool.resolve(def.name);
+          if !self.default_value_is_valid(&def.att_type, value) {
+            let name = self.pool.resolve(def.name);
             let message = format!("the default value \"{value}\" of \"{name}\" is not valid for its declared type");
             errors.report(ValidityError::new(message, at.clone()))?;
           }
@@ -160,8 +174,8 @@ impl DtdValidator {
       let mut seen = Vec::new();
       for name in names {
         if seen.contains(&name) {
-          let element_name = pool.resolve(element);
-          let child = pool.resolve(name);
+          let element_name = self.pool.resolve(element);
+          let child = self.pool.resolve(name);
           let message =
             format!("element \"{child}\" appears more than once in the mixed content of \"{element_name}\"");
           errors.report(ValidityError::new(message, at.clone()))?;
@@ -174,19 +188,19 @@ impl DtdValidator {
   }
 
   /// Whether `value` is a legal value for `att_type`, for checking declared defaults.
-  fn default_value_is_valid(&self, att_type: &AttType, value: &str, pool: &NamePool) -> bool {
+  fn default_value_is_valid(&self, att_type: &AttType, value: &str) -> bool {
     let tokens = || value.split_whitespace();
     match att_type {
       AttType::Cdata => true,
       AttType::Id | AttType::IdRef => xenolith_core::chars::is_name(value),
       AttType::IdRefs | AttType::Entities => tokens().all(xenolith_core::chars::is_name),
       AttType::Entity => {
-        matches!(pool.get(value).and_then(|id| self.dtd.general_entity(id)), Some(GeneralEntity::Unparsed { .. }))
+        matches!(self.pool.get(value).and_then(|id| self.dtd.general_entity(id)), Some(GeneralEntity::Unparsed { .. }))
       }
       AttType::Nmtoken => xenolith_core::chars::is_nmtoken(value),
       AttType::Nmtokens => tokens().all(xenolith_core::chars::is_nmtoken),
       AttType::Enumeration(allowed) | AttType::Notation(allowed) => {
-        pool.get(value).is_some_and(|id| allowed.contains(&id))
+        self.pool.get(value).is_some_and(|id| allowed.contains(&id))
       }
     }
   }
@@ -196,7 +210,6 @@ impl DtdValidator {
     &mut self,
     element: NameId,
     children: &[NameId],
-    pool: &NamePool,
     at: &Location,
     errors: &mut dyn ErrorListener,
   ) -> ControlFlow<()> {
@@ -205,8 +218,8 @@ impl DtdValidator {
       Some(ContentSpec::Any) => ControlFlow::Continue(()),
       Some(ContentSpec::Empty) => {
         if let Some(&child) = children.first() {
-          let name = pool.resolve(child).to_owned();
-          let element = pool.resolve(element).to_owned();
+          let name = self.pool.resolve(child).to_owned();
+          let element = self.pool.resolve(element).to_owned();
           return self.report(errors, at, format!("element \"{element}\" is EMPTY but contains \"{name}\""));
         }
         ControlFlow::Continue(())
@@ -214,8 +227,8 @@ impl DtdValidator {
       Some(ContentSpec::Mixed(allowed)) => {
         for &child in children {
           if !allowed.contains(&child) {
-            let child = pool.resolve(child).to_owned();
-            let element = pool.resolve(element).to_owned();
+            let child = self.pool.resolve(child).to_owned();
+            let element = self.pool.resolve(element).to_owned();
             self.report(
               errors,
               at,
@@ -232,18 +245,21 @@ impl DtdValidator {
         let model = self.models.entry(element).or_insert_with(|| Some(ContentModel::compile(particle)));
         let model = model.as_ref().expect("just inserted");
         if newly_compiled && !model.is_deterministic() {
-          let name = pool.resolve(element).to_owned();
+          let name = self.pool.resolve(element).to_owned();
           self.report(errors, at, format!("the content model of \"{name}\" is not deterministic"))?;
         }
         let model = self.models.get(&element).and_then(Option::as_ref).expect("just inserted");
         match model.matches(children) {
           Ok(()) => ControlFlow::Continue(()),
           Err(failure) => {
-            let element = pool.resolve(element).to_owned();
-            let allowed = names(&failure.allowed, pool);
+            let element = self.pool.resolve(element).to_owned();
+            let allowed = names(&failure.allowed, &self.pool);
             let message = match failure.at {
               Some(child) => {
-                format!("element \"{}\" is not allowed in \"{element}\" here; expected {allowed}", pool.resolve(child))
+                format!(
+                  "element \"{}\" is not allowed in \"{element}\" here; expected {allowed}",
+                  self.pool.resolve(child)
+                )
               }
               None => format!("the content of \"{element}\" is incomplete; expected {allowed}"),
             };
@@ -279,14 +295,14 @@ impl DtdValidator {
       #[cfg(feature = "xml-id")]
       if self.xml_id && crate::ids::is_xml_id(attribute.name, pool) {
         let declared =
-          pool.get(&Self::lexical(pool, attribute.name)).is_some_and(|id| defs.iter().any(|d| d.name == id));
+          self.pool.get(&Self::lexical(pool, attribute.name)).is_some_and(|id| defs.iter().any(|d| d.name == id));
         if !declared {
           crate::ids::check_xml_id(attribute.value, at, &mut self.ids, errors)?;
           continue;
         }
       }
       let lexical = Self::lexical(pool, attribute.name);
-      let def = pool.get(&lexical).and_then(|id| defs.iter().find(|d| d.name == id));
+      let def = self.pool.get(&lexical).and_then(|id| defs.iter().find(|d| d.name == id));
       let Some(def) = def else {
         self.report(errors, at, format!("attribute \"{lexical}\" is not declared for \"{element_lexical}\""))?;
         continue;
@@ -302,15 +318,15 @@ impl DtdValidator {
         }
       }
 
-      self.check_attribute_value(&lexical, &def.att_type, attribute.value, pool, at, errors)?;
+      self.check_attribute_value(&lexical, &def.att_type, attribute.value, at, errors)?;
     }
 
     // VC: Required Attribute.
     for def in &defs {
       if matches!(def.default, DefaultDecl::Required) {
-        let present = attributes.iter().any(|a| pool.get(&Self::lexical(pool, a.name)) == Some(def.name));
+        let present = attributes.iter().any(|a| self.pool.get(&Self::lexical(pool, a.name)) == Some(def.name));
         if !present {
-          let name = pool.resolve(def.name).to_owned();
+          let name = self.pool.resolve(def.name).to_owned();
           self.report(errors, at, format!("required attribute \"{name}\" is missing from \"{element_lexical}\""))?;
         }
       }
@@ -324,7 +340,6 @@ impl DtdValidator {
     lexical: &str,
     att_type: &AttType,
     value: &str,
-    pool: &NamePool,
     at: &Location,
     errors: &mut dyn ErrorListener,
   ) -> ControlFlow<()> {
@@ -365,12 +380,12 @@ impl DtdValidator {
       AttType::Entity | AttType::Entities => {
         for token in value.split_whitespace() {
           // VC: Entity Name. The value must name an unparsed entity.
-          let unparsed = pool.get(token).and_then(|id| self.dtd.general_entity(id));
+          let unparsed = self.pool.get(token).and_then(|id| self.dtd.general_entity(id));
           if !matches!(unparsed, Some(GeneralEntity::Unparsed { .. })) {
             self.report(
               errors,
               at,
-              format!("attribute \"{lexical}\" names \"{token}\", which is not an unparsed entity"),
+              format!("attribute \"{lexical}\" refers to \"{token}\", which is not an unparsed entity"),
             )?;
           }
         }
@@ -397,9 +412,9 @@ impl DtdValidator {
         ControlFlow::Continue(())
       }
       AttType::Enumeration(allowed) | AttType::Notation(allowed) => {
-        let ok = pool.get(value).is_some_and(|id| allowed.contains(&id));
+        let ok = self.pool.get(value).is_some_and(|id| allowed.contains(&id));
         if !ok {
-          let choices = names(allowed, pool);
+          let choices = names(allowed, &self.pool);
           return self.report(errors, at, format!("attribute \"{lexical}\" is \"{value}\", not one of {choices}"));
         }
         ControlFlow::Continue(())
@@ -419,25 +434,24 @@ impl Validator for DtdValidator {
   ) -> ControlFlow<()> {
     if !self.declarations_checked {
       self.declarations_checked = true;
-      self.check_declarations(pool, at, errors)?;
+      self.check_declarations(at, errors)?;
     }
+    // The source interned this name in its own pool, which the DTD's ids say nothing about. Interning the lexical form
+    // here moves it into the one space every comparison below is made in. A name the DTD never declared still gets an
+    // id, and `has_element` is what answers for that.
     let lexical = Self::lexical(pool, name);
-    // The DTD interned its names in this same pool while the DOCTYPE was parsed, so a name it never saw simply is not
-    // there.
-    let element = match pool.get(&lexical) {
-      Some(id) => id,
-      None => {
-        return self.report(errors, at, format!("element \"{lexical}\" is not declared"));
-      }
-    };
+    let element = self.pool.intern(&lexical);
 
-    // VC: Root Element Type.
+    // VC: Root Element Type, when the DTD declares a root to check against.
     if !self.root_seen {
       self.root_seen = true;
-      if element != self.root {
-        let root = pool.resolve(self.root).to_owned();
-        let flow = self.report(errors, at, format!("the root element is \"{lexical}\", but the DTD names \"{root}\""));
-        flow?;
+      if let Some(declared) = self.root {
+        if element != declared {
+          let root = self.pool.resolve(declared).to_owned();
+          let flow =
+            self.report(errors, at, format!("the root element is \"{lexical}\", but the DTD declares \"{root}\""));
+          flow?;
+        }
       }
     }
 
@@ -482,7 +496,7 @@ impl Validator for DtdValidator {
   fn end_element(
     &mut self,
     _name: QName,
-    pool: &NamePool,
+    _pool: &NamePool,
     at: &Location,
     errors: &mut dyn ErrorListener,
   ) -> ControlFlow<()> {
@@ -491,7 +505,7 @@ impl Validator for DtdValidator {
     // element's start tag, which built the validator too late to see it. Whichever it is, there is nothing to check
     // and no reason to bring the process down over it.
     let Some(open) = self.open.pop() else { return ControlFlow::Continue(()) };
-    self.check_content(open.lexical, &open.children, pool, at, errors)
+    self.check_content(open.lexical, &open.children, at, errors)
   }
 
   fn finish(&mut self, errors: &mut dyn ErrorListener) -> ControlFlow<()> {
@@ -508,4 +522,59 @@ impl Validator for DtdValidator {
 /// Renders a list of names as `"a", "b", "c"` for a message.
 fn names(names: &[NameId], pool: &NamePool) -> String {
   names.iter().map(|&n| format!("\"{}\"", pool.resolve(n))).collect::<Vec<_>>().join(", ")
+}
+
+/// A DTD held as a reusable schema, to check any number of documents against.
+///
+/// A [`DtdValidator`] runs over one document and keeps what it gathers along the way, so a schema hands out a fresh
+/// one each time. Build it from a DTD read on its own, and check whatever source the events come from: a reader over
+/// a document, or a walk over a tree already in memory.
+///
+/// A DTD read on its own declares no root element, since it is the `DOCTYPE` in a document that declares one. The root
+/// therefore goes unchecked unless [`with_root`](Self::with_root) asks for it.
+///
+/// # Examples
+///
+/// ```
+/// use xenolith_dtd::DtdReader;
+/// use xenolith_parser::Reader;
+/// use xenolith_validate::{DtdSchema, Validatable};
+///
+/// let (dtd, pool) = DtdReader::new("<!ELEMENT note (#PCDATA)>".as_bytes()).read()?;
+/// let schema = DtdSchema::new(dtd, pool).with_root("note");
+///
+/// let report = Reader::new("<note>hi</note>".as_bytes()).with_validation().with_schema(&schema).run()?;
+/// assert!(report.errors().is_empty());
+///
+/// let report = Reader::new("<other/>".as_bytes()).with_validation().with_schema(&schema).run()?;
+/// assert!(!report.errors().is_empty(), "the root is not the one asked for, and the element is not declared");
+/// # Ok::<(), xenolith_core::Error>(())
+/// ```
+///
+#[derive(Clone, Debug)]
+pub struct DtdSchema {
+  dtd: Dtd,
+  pool: NamePool,
+  root: Option<NameId>,
+}
+
+impl DtdSchema {
+  /// Creates a schema from `dtd`, whose names are interned in `pool`.
+  #[must_use]
+  pub fn new(dtd: Dtd, pool: NamePool) -> Self {
+    Self { dtd, pool, root: None }
+  }
+
+  /// Requires the document's root element to be `name`, the check a `DOCTYPE` would supply.
+  #[must_use]
+  pub fn with_root(mut self, name: &str) -> Self {
+    self.root = Some(self.pool.intern(name));
+    self
+  }
+}
+
+impl crate::Schema for DtdSchema {
+  fn validator(&self) -> Box<dyn Validator> {
+    Box::new(DtdValidator::new(self.dtd.clone(), self.pool.clone(), self.root))
+  }
 }

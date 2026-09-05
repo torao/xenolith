@@ -96,7 +96,7 @@ impl Document {
     id.document() == self.id
   }
 
-  /// Checks that `id` names a node of this document, for the methods that report an error.
+  /// Checks that `id` belongs to a node of this document, for the methods that report an error.
   ///
   fn require_own(&self, id: NodeId) -> Result<()> {
     if self.owns(id) {
@@ -1277,7 +1277,7 @@ impl Document {
     }
   }
 
-  /// The slot `id` names.
+  /// The slot `id` refers to.
   ///
   /// # Panics
   ///
@@ -1335,7 +1335,7 @@ fn first_invalid_name_char(name: &str) -> Option<(char, bool)> {
   }
 }
 
-/// A message for a plain XML name that failed validation, naming the offending character. `subject` says what the
+/// A message for a plain XML name that failed validation, giving the offending character. `subject` says what the
 /// string was meant to be, for example, `"PI target"`.
 ///
 fn invalid_name_message(name: &str, subject: &str) -> String {
@@ -1346,7 +1346,7 @@ fn invalid_name_message(name: &str, subject: &str) -> String {
   }
 }
 
-/// A message for a qualified name that is not a valid `QName`, naming the structural fault or the offending character.
+/// A message for a qualified name that is not a valid `QName`, giving the structural fault or the offending character.
 ///
 fn invalid_qname_message(qualified_name: &str) -> String {
   let parts: Vec<&str> = qualified_name.split(':').collect();
@@ -1549,11 +1549,11 @@ mod tests {
   #[test]
   fn a_qualified_name_error_explains_the_fault() {
     let mut doc = Document::new();
-    // A structural fault names the structure, not a single character.
+    // A structural fault reports the structure, not a single character.
     let two_colons = doc.create_element("a:b:c").unwrap_err();
     assert_eq!(two_colons.code(), ExceptionCode::INVALID_CHARACTER_ERR);
     assert!(two_colons.message().contains("more than one colon"), "message was: {}", two_colons.message());
-    // A bad character inside a part is named.
+    // A bad character inside a part is reported.
     let space = doc.create_element("a b").unwrap_err();
     assert!(space.message().contains("' '"), "message was: {}", space.message());
     // An empty prefix or local part is called out.

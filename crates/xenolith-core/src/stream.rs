@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
-use xenolith_core::chars;
-use xenolith_core::encoding::{self, Decoder};
-use xenolith_core::error::{Error, Location, Result};
+use crate::chars;
+use crate::encoding::{self, Decoder};
+use crate::error::{Error, Location, Result};
 
 /// The most bytes to buffer while determining the encoding before assuming the default.
 ///
@@ -60,7 +60,7 @@ enum State {
 /// # Examples
 ///
 /// ```
-/// use xenolith_parser::CharStream;
+/// use xenolith_core::stream::CharStream;
 ///
 /// let mut stream = CharStream::new().with_system_id("file:///doc.xml");
 /// stream.feed(b"<doc>\r\n  text\r\n</doc>", true)?;
@@ -104,7 +104,7 @@ impl CharStream {
   /// Creates a new character stream that decodes characters from the XML byte sequence being fed to it.
   ///
   /// The stream that constructed with this [`new`](Self::new) attempts to automatically detect the encoding in
-  /// accordance with XML 1.0 Appendix F; see [`xenolith_core::encoding::detect`] for more details.
+  /// accordance with XML 1.0 Appendix F; see [`crate::encoding::detect`] for more details.
   ///
   /// Until the fed byte sequence is long enough to cover the encoding specified in the XML declaration of the entity
   /// (or until the entity ends), [`remainder`](Self::remainder) may return an empty result. If the encoding is already
@@ -224,7 +224,7 @@ impl CharStream {
   /// Input may be split at arbitrary boundaries, including within a single character:
   ///
   /// ```
-  /// use xenolith_parser::CharStream;
+  /// use xenolith_core::stream::CharStream;
   ///
   /// let bytes = "<a>日</a>".as_bytes();
   /// let mut stream = CharStream::new();

@@ -56,7 +56,7 @@ pub trait Decoder: std::fmt::Debug + Send {
   /// regard. In other words, a decoding failure is a fatal error, and substitute characters are never inserted.
   ///
   /// Before returning, the decoder appends every character it could decode from the bytes that precede the failure, so
-  /// `dst` holds the text up to the point of the error and no further. The error names that point: its
+  /// `dst` holds the text up to the point of the error and no further. The error reports that point: its
   /// [`byte_offset`](Error::Encoding) is the index, within `src`, of the first byte that could not be decoded. Since the
   /// failure is fatal there is nothing to resume, but the partial text and the offset are there for a caller that wants
   /// to report where the entity went wrong.
@@ -113,7 +113,7 @@ pub fn lookup(label: &str) -> Option<Box<dyn Decoder>> {
 /// decoder.decode(&[0x63, 0x61, 0x66, 0xE9], &mut text, true)?;
 /// assert_eq!(text, "café");
 ///
-/// // A decoding failure is fatal: XML has no replacement character. The error names the byte
+/// // A decoding failure is fatal: XML has no replacement character. The error reports the byte
 /// // at fault — here the second one.
 /// let mut ascii = encoding::decoder_for("US-ASCII")?;
 /// let err = ascii.decode(&[0x61, 0xE9], &mut String::new(), true).unwrap_err();

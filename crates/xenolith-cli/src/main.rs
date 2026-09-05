@@ -78,7 +78,7 @@ enum Command {
   },
   /// Check a document against the DTD it declares.
   Validate {
-    /// The documents; standard input if none are named.
+    /// The documents; standard input if none are given.
     inputs: Vec<PathBuf>,
   },
   /// Write a document out, indented.
@@ -122,7 +122,7 @@ fn run(command: Command) -> Result<ExitCode, String> {
 
 // --- transform -----------------------------------------------------------------------------------
 
-/// Fetches what a stylesheet names from the filesystem, relative to where it was found.
+/// Fetches what a stylesheet refers to from the filesystem, relative to where it was found.
 struct Files;
 
 impl Loader for Files {
@@ -132,7 +132,7 @@ impl Loader for Files {
   }
 }
 
-/// The filesystem path a `file:` URI names.
+/// The filesystem path a `file:` URI points at.
 ///
 /// The leading slash after the authority is part of the path on a system with one root, and is
 /// not on a system whose paths begin with a drive letter — `file:///tmp/a.xsl` is `/tmp/a.xsl`,
@@ -182,7 +182,7 @@ fn percent_decode(text: &str) -> String {
       }
     }
   }
-  // An escape naming a byte that is not UTF-8 leaves the name unusable; the original is a better
+  // An escape for a byte that is not UTF-8 leaves the name unusable; the original is a better
   // thing to report than a replacement character.
   String::from_utf8(decoded).unwrap_or_else(|_| text.to_owned())
 }
@@ -329,7 +329,7 @@ fn format(input: Option<&Path>, indent: usize, output: Option<&Path>) -> Result<
 
 // --- reading and writing -------------------------------------------------------------------------
 
-/// Reads a named file, or standard input when nothing is named.
+/// Reads the file given, or standard input when none is given.
 fn read(path: Option<&Path>) -> Result<Vec<u8>, String> {
   match path {
     Some(path) => fs::read(path).map_err(|error| format!("{}: {error}", display(path))),
@@ -341,7 +341,7 @@ fn read(path: Option<&Path>) -> Result<Vec<u8>, String> {
   }
 }
 
-/// Writes to a named file, or to standard output when nothing is named.
+/// Writes to the file given, or to standard output when none is given.
 fn write(path: Option<&Path>, bytes: &[u8]) -> Result<(), String> {
   match path {
     Some(path) => fs::write(path, bytes).map_err(|error| format!("{}: {error}", display(path))),
@@ -392,7 +392,7 @@ mod tests {
   #[test]
   fn a_rooted_path_keeps_its_leading_slash() {
     // The bug this exists for: dropping it makes the path relative, and it then resolves
-    // against the working directory instead of naming the file the stylesheet meant.
+    // against the working directory instead of pointing at the file the stylesheet meant.
     assert_eq!(path_of("file:///tmp/styles/base.xsl"), "/tmp/styles/base.xsl");
   }
 

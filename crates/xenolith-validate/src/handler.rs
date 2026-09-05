@@ -136,7 +136,7 @@ impl Handler for ValidatingHandler<'_> {
     if self.use_dtd {
       // The schema is the document's own DTD, complete by this event.
       if let Some(root) = event.name.and_then(|name| event.pool.get(name)) {
-        let validator = DtdValidator::new(event.dtd.clone(), root);
+        let validator = DtdValidator::new(event.dtd.clone(), event.pool.clone(), Some(root));
         #[cfg(feature = "xml-id")]
         let validator = validator.with_xml_id(self.xml_id);
         self.validators.push(Box::new(validator));

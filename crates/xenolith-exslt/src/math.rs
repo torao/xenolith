@@ -173,7 +173,7 @@ fn extreme<M: Model>(value: &Value<M::Node>, context: &Context<'_, M>, which: Ex
 
 /// One of the constants `math:constant` names, rounded to `precision` decimal places.
 ///
-/// EXSLT names E, PI, SQRRT2, LN2, LN10, LOG2E and SQRT1_2 — the spelling of the square root of
+/// EXSLT defines E, PI, SQRRT2, LN2, LN10, LOG2E and SQRT1_2 — the spelling of the square root of
 /// two included, which is theirs and not a slip here. A name it does not know gives NaN, since
 /// there is no number to give.
 fn constant(name: &str, precision: f64) -> f64 {
@@ -223,6 +223,6 @@ mod tests {
   #[test]
   fn a_constant_nobody_named_is_not_a_number() {
     assert!(constant("TAU", 3.0).is_nan());
-    assert!(constant("PI", -1.0).is_nan(), "a precision below zero names no rounding");
+    assert!(constant("PI", -1.0).is_nan(), "a precision below zero asks for no rounding");
   }
 }

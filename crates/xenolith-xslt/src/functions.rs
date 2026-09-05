@@ -193,8 +193,8 @@ pub(crate) fn register<M: Model>(
   functions
     .with("", "document", move |arguments: Vec<Value<M::Node>>, context: &Context<'_, M>| {
       arity("document", &arguments, 1, Some(2))?;
-      // §12.1: a node-set argument names one URI per node, taken from each node's string value;
-      // anything else names one.
+      // §12.1: a node-set argument gives one URI per node, taken from each node's string value;
+      // anything else gives one.
       let wanted: Vec<String> = match &arguments[0] {
         Value::NodeSet(nodes) => nodes.iter().map(|node| context.model.string_value(*node)).collect(),
         other => vec![other.string(context.model)],
@@ -220,7 +220,7 @@ pub(crate) fn register<M: Model>(
       arity("format-number", &arguments, 2, Some(3))?;
       let number = arguments[0].number(context.model);
       let pattern = arguments[1].string(context.model);
-      // A third argument names an xsl:decimal-format; without one, the unnamed default.
+      // A third argument selects an xsl:decimal-format; without one, the unnamed default.
       let name = match arguments.get(2) {
         None => None,
         Some(value) => {
@@ -321,7 +321,7 @@ pub(crate) fn register<M: Model>(
 
 /// `system-property()`: what §12.4 requires, and nothing invented beyond it.
 ///
-/// The three `xsl:` properties are the ones the specification names. Anything else — including a
+/// The three `xsl:` properties are the ones the specification defines. Anything else — including a
 /// property in some other namespace — is the empty string, which is what §12.4 says an unknown
 /// property gives, rather than an error.
 fn system_property<M: Model>(name: &str, context: &Context<'_, M>) -> Value<M::Node> {

@@ -133,7 +133,7 @@ impl Output {
   ///
   /// # Errors
   ///
-  /// If the value is not one this can write — a `method` naming something other than the three.
+  /// If the value is not one this can write — a `method` giving something other than the three.
   pub(crate) fn set(&mut self, setting: Setting, value: &str) -> Result<()> {
     match setting {
       Setting::Method => {
@@ -501,7 +501,7 @@ impl<'a> Writer<'a> {
 /// Turns written text into the bytes an `encoding` asks for.
 ///
 /// UTF-8 needs nothing. Anything else needs the `encodings` feature, and without it this is an
-/// error naming the feature rather than bytes in the wrong encoding under a declaration that
+/// error giving the feature rather than bytes in the wrong encoding under a declaration that
 /// says otherwise — the same answer the parser gives on the way in.
 pub(crate) fn encode(written: &str, encoding: Option<&str>) -> Result<Vec<u8>> {
   let Some(label) = encoding else { return Ok(written.as_bytes().to_vec()) };
@@ -523,7 +523,7 @@ fn transcode(written: &str, label: &str) -> Result<Vec<u8>> {
   Ok(bytes.into_owned())
 }
 
-/// Refuses an encoding other than UTF-8, naming the feature that would provide it.
+/// Refuses an encoding other than UTF-8, giving the feature that would provide it.
 #[cfg(not(feature = "encodings"))]
 fn transcode(written: &str, label: &str) -> Result<Vec<u8>> {
   let _ = written;

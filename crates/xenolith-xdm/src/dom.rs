@@ -11,7 +11,7 @@
 //! A model begins over one document, the one it was built from. XSLT's `document()` brings in
 //! others while a transformation is already running, and they have to join the *same* node space:
 //! the nodes it returns are processed by template rules, compared with nodes of the first
-//! document, and sorted among them. So a node names its document as well as its place in it, and
+//! document, and sorted among them. So a node identifies its document as well as its place in it, and
 //! [`Documents`] is the handle through which a document can be added to a model that is already
 //! in use. A caller who never adds one pays a document index it never looks at.
 
@@ -39,7 +39,7 @@ impl DocumentId {
 
 /// A node in the XPath view of a document.
 ///
-/// Most nodes are a DOM node ([`Tree`](DomNode::Tree)); a text node names the first DOM node of
+/// Most nodes are a DOM node ([`Tree`](DomNode::Tree)); a text node identifies the first DOM node of
 /// its run ([`Text`](DomNode::Text)); a namespace node is synthesized from an element and the
 /// prefix it binds ([`Namespace`](DomNode::Namespace)). Each carries the document it is in, so
 /// that a handle means the same thing in a model holding several.
@@ -52,7 +52,7 @@ pub enum DomNode {
     /// The DOM node itself.
     node: NodeId,
   },
-  /// A text node, named by the first DOM text or CDATA node of its run.
+  /// A text node, identified by the first DOM text or CDATA node of its run.
   Text {
     /// Which document it is in.
     document: DocumentId,
@@ -82,7 +82,7 @@ impl DomNode {
 
 /// Documents a model gains after it was built.
 ///
-/// A handle is shared: a clone names the same set, so whoever fetches a document and whoever
+/// A handle is shared: a clone refers to the same set, so whoever fetches a document and whoever
 /// reads it need not be the same code. That is what lets XSLT's `document()` — a function
 /// registered before the transformation starts, which cannot borrow the model — put a tree
 /// where the model will find it.
@@ -552,7 +552,7 @@ impl<'a> DomModel<'a> {
     }
     let documents: Ref<'_, Vec<Held>> = self.extra.shared.documents.borrow();
     let index = Documents::index(node.document());
-    // A node naming a document this model has never held cannot be produced by the model, and
+    // A node referring to a document this model has never held cannot be produced by the model, and
     // handing one in from elsewhere is the caller mixing two node spaces.
     let Some(held) = documents.get(index) else {
       panic!("a node from document {index} was read by a model that does not hold it");

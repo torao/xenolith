@@ -54,7 +54,7 @@ pub enum ExceptionCode {
   TYPE_MISMATCH_ERR = 17,
 }
 
-/// A failed DOM operation: a [code](ExceptionCode) and a message naming what went wrong.
+/// A failed DOM operation: a [code](ExceptionCode) and a message saying what went wrong.
 ///
 /// <https://www.w3.org/TR/2003/WD-DOM-Level-3-Core-20030226/DOM3-Core.html#core-ID-17189187>
 ///

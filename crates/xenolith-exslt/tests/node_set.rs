@@ -131,7 +131,7 @@ fn a_fragment_that_reaches_a_template_as_a_parameter_converts_too() {
 
 #[test]
 fn without_somewhere_to_put_the_tree_it_says_so() {
-  // Never an answer built from the wrong thing: the message names what to supply.
+  // Never an answer built from the wrong thing: the message says what to supply.
   let body = "<xsl:template match='/'>\
                 <xsl:variable name='frag'><i/></xsl:variable>\
                 <xsl:value-of select='count(exsl:node-set($frag)/i)'/>\

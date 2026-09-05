@@ -46,7 +46,7 @@ impl Collator {
   ///
   /// A tag that cannot be read, or a language there is no data for, falls back to the root
   /// collation rather than being refused: §10 does not make an unknown language an error, and a
-  /// stylesheet that names one still has to sort somehow.
+  /// stylesheet that asks for one still has to sort somehow.
   #[cfg(feature = "icu")]
   pub(crate) fn new(lang: Option<&str>, case_order: CaseOrder) -> Self {
     use icu_collator::preferences::CollationCaseFirst;

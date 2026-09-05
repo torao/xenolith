@@ -25,7 +25,7 @@
 //!
 //! `xsl:strip-space` decides which source whitespace reaches a template rule, and
 //! `xsl:namespace-alias` which namespace a literal result element lands in. An element whose
-//! namespace `extension-element-prefixes` names is an extension element (§14): one is
+//! namespace `extension-element-prefixes` lists is an extension element (§14): one is
 //! implemented — EXSLT's `exsl:document`, which writes a result of its own through a
 //! [`ResultSink`] the caller supplies — and every other defers to its `xsl:fallback` or is
 //! reported, never copied into the result, where it would look like output the stylesheet meant.
@@ -282,7 +282,7 @@ impl Transform {
 
   /// Where `exsl:document` may write a result other than the principal one.
   ///
-  /// Without one, an `exsl:document` is an error naming the file it wanted — see [`NoResults`].
+  /// Without one, an `exsl:document` is an error giving the file it wanted — see [`NoResults`].
   /// The sink is shared rather than given away, so the caller still has it afterwards and can
   /// read what was written.
   #[must_use]
@@ -1241,10 +1241,10 @@ impl<M: Model> Engine<'_, M> {
     };
     match self.namespaces_at(module, element).get(prefix) {
       Some(namespace) => Ok(Some(namespace.to_owned())),
-      // A prefix the stylesheet never bound names nothing, and building the name anyway would
+      // A prefix the stylesheet never bound stands for nothing, and building the name anyway would
       // put a prefix in the result that means nothing there either.
       None => {
-        let message = format!("{what} names {name:?}, and the prefix {prefix:?} is not bound in the stylesheet");
+        let message = format!("{what} gives {name:?}, and the prefix {prefix:?} is not bound in the stylesheet");
         Err(Error::xslt(message))
       }
     }
@@ -1397,7 +1397,7 @@ impl<M: Model> Engine<'_, M> {
     Ok(())
   }
 
-  /// Adds the attributes of the sets an element's `use-attribute-sets` names.
+  /// Adds the attributes of the sets an element's `use-attribute-sets` lists.
   fn use_attribute_sets(
     &mut self,
     module: usize,
@@ -1491,7 +1491,7 @@ impl<M: Model> Engine<'_, M> {
     let attributes: Vec<(String, Option<String>, String)> = document
       .attributes(element)
       .iter()
-      // A namespace declaration is not copied, and neither is the XSLT attribute that names
+      // A namespace declaration is not copied, and neither is the XSLT attribute that gives
       // attribute sets — that is an instruction to this engine, not part of the result.
       .filter(|attribute| {
         document.namespace_uri(*attribute) != Some(xenolith_core::XMLNS_NS_URI)
@@ -1922,7 +1922,7 @@ impl<M: Model> Engine<'_, M> {
     let numeric = match data_type.as_deref() {
       None | Some("text") => false,
       Some("number") => true,
-      // A qualified name here names a type an implementation invented.
+      // A qualified name here stands for a type an implementation invented.
       Some(other) => {
         let message = format!("xsl:sort data-type {other:?} is not one this understands");
         return Err(Error::xslt(message));

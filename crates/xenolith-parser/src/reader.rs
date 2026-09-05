@@ -15,8 +15,8 @@ use crate::config::{Bounds, ParserConfig};
 use crate::entity::{Entity, Limits};
 use crate::event::Event;
 use crate::parser::{EventKind, Parser, Progress};
-use crate::resolve::{RequestKind, UriResolver};
-use crate::stream::CharStream;
+use xenolith_core::resolve::{RequestKind, UriResolver};
+use xenolith_core::stream::CharStream;
 
 /// The read buffer's size, and so how many bytes are read from the source at a time.
 ///
@@ -226,7 +226,7 @@ impl<R: Read> Reader<R> {
     let request = self.parser.pending_entity().expect("the parser requested an entity");
     let kind = request.kind();
     let Some(resolver) = &mut self.resolver else {
-      // Refused here rather than resolved; the message names the opt-in so the caller knows how to allow it.
+      // Refused here rather than resolved; the message gives the opt-in so the caller knows how to allow it.
       let at = self.parser.location();
       let message = format!("{request}: no resolver is configured; call Reader::with_resolver to allow this");
       return Err(Error::well_formedness(message).at(at));
@@ -428,7 +428,7 @@ mod tests {
 
   #[test]
   fn an_explicit_encoding_overrides_sniffing() {
-    // 0xE9 is 'é' in ISO-8859-1 but not valid UTF-8: naming the encoding is what makes it read.
+    // 0xE9 is 'é' in ISO-8859-1 but not valid UTF-8: giving the encoding is what makes it read.
     let bytes: &[u8] = b"<a>caf\xE9</a>";
     let mut reader = Reader::new(bytes).with_encoding("ISO-8859-1").unwrap();
     let mut text = None;
@@ -529,7 +529,7 @@ mod tests {
   struct Fixtures(std::collections::HashMap<&'static str, &'static [u8]>);
 
   impl UriResolver for Fixtures {
-    fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+    fn resolve(&mut self, request: &xenolith_core::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
       let entry = request.name().and_then(|name| self.0.get(name)).map(|bytes| bytes.to_vec());
       Ok(entry.map(|bytes| Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>))
     }
@@ -591,7 +591,7 @@ mod tests {
   struct OwnedEntity(&'static str, Vec<u8>);
 
   impl UriResolver for OwnedEntity {
-    fn resolve(&mut self, request: &crate::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+    fn resolve(&mut self, request: &xenolith_core::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
       if request.name() == Some(self.0) { Ok(Some(Box::new(std::io::Cursor::new(self.1.clone())))) } else { Ok(None) }
     }
   }
@@ -629,7 +629,7 @@ mod tests {
   fn a_streamed_entity_is_stopped_mid_stream_by_the_expansion_limit() {
     struct EndlessResolver;
     impl UriResolver for EndlessResolver {
-      fn resolve(&mut self, _request: &crate::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+      fn resolve(&mut self, _request: &xenolith_core::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
         Ok(Some(Box::new(Endless)))
       }
     }
