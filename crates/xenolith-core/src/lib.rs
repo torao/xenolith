@@ -63,12 +63,15 @@
 //! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
 //! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
+//!
 
 pub mod attr;
 pub mod chars;
 pub mod decl;
 pub mod encoding;
 pub mod error;
+pub mod event;
+pub mod model;
 pub mod name;
 pub mod resolve;
 pub mod stream;

@@ -229,16 +229,7 @@ impl<'a> EventRef<'a> {
   }
 }
 
-/// The `xml:space` handling in effect, taken from the nearest element in scope that set it; see [`Parser::xml_space`].
-///
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum XmlSpace {
-  /// No `xml:space` is in scope, or the nearest one says `default`.
-  #[default]
-  Default,
-  /// `xml:space="preserve"` is in scope.
-  Preserve,
-}
+pub use xenolith_core::event::XmlSpace;
 
 /// The attributes of a start element, a borrowing view that yields [`AttributeRef`]. [`EventRef::StartElement`]
 /// carries one; iterate it with [`iter`](Self::iter) or index it with [`get`](Self::get).

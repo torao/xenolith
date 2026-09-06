@@ -7,11 +7,13 @@
 
 mod builtin;
 mod detect;
+mod encoder;
 #[cfg(feature = "encodings")]
 mod encoding_rs_backend;
 
 pub use builtin::{AsciiDecoder, Latin1Decoder, Utf8Decoder, Utf16Decoder};
 pub use detect::{Detected, Detection, DetectionSource, detect};
+pub use encoder::{Encoder, SingleByteEncoder, Utf8Encoder};
 
 use crate::error::{Error, Location, Result};
 
@@ -195,6 +197,64 @@ fn malformed(encoding: &str, offset: usize) -> Error {
     location: Location::unknown(),
     message: format!("malformed {encoding} sequence"),
     byte_offset: Some(offset),
+  }
+}
+
+/// Returns an encoder for `label`, or an error when this build cannot write that encoding.
+///
+/// The `label` is matched the way [`lookup`] matches it: case-insensitively, with surrounding whitespace ignored.
+///
+/// UTF-8, US-ASCII and ISO-8859-1 are built in. Everything else needs the `encodings` feature. **UTF-16 output is not
+/// available**, which is where the two directions differ: a UTF-16 entity can be read, because a decoder for it is
+/// built in, but not written. The WHATWG Encoding Standard defines no UTF-16 encoder, and a conforming UTF-16 entity
+/// also has to open with a byte order mark, which is the writer's business rather than an encoder's.
+///
+/// # Examples
+///
+/// ```
+/// use xenolith_core::encoding::encoder_for;
+///
+/// let mut ascii = encoder_for("US-ASCII")?;
+/// let mut out = Vec::new();
+///
+/// // Where a character reference is markup, one stands in for what the encoding cannot hold.
+/// ascii.encode_with_references("caf\u{e9}", &mut out)?;
+/// assert_eq!(out, b"caf&#233;");
+///
+/// // Where it is not, the same character is refused rather than written as something else.
+/// assert!(ascii.encode("caf\u{e9}", &mut Vec::new()).is_err());
+/// # Ok::<(), xenolith_core::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`Error::Encoding`] for a label no encoding answers to, and [`Error::UnsupportedFeature`] for one this build would
+/// need the `encodings` feature to write.
+///
+pub fn encoder_for(label: &str) -> Result<Box<dyn Encoder>> {
+  let normalized = label.trim().to_ascii_lowercase();
+  let builtin: Option<Box<dyn Encoder>> = match normalized.as_str() {
+    "utf-8" | "utf8" => Some(Box::new(Utf8Encoder::new())),
+    "us-ascii" | "ascii" | "ansi_x3.4-1968" => Some(Box::new(SingleByteEncoder::ascii())),
+    "iso-8859-1" | "iso8859-1" | "latin1" | "iso_8859-1" => Some(Box::new(SingleByteEncoder::latin1())),
+    _ => None,
+  };
+  if let Some(encoder) = builtin {
+    return Ok(encoder);
+  }
+  if normalized.starts_with("utf-16") || normalized.starts_with("utf16") {
+    return Err(Error::encoding(format!(
+      "{label:?} can be read but not written; no UTF-16 encoder is defined, so write UTF-8 instead"
+    )));
+  }
+  #[cfg(feature = "encodings")]
+  {
+    encoding_rs_backend::encoder_lookup(&normalized)
+      .ok_or_else(|| Error::encoding(format!("no encoding answers to {label:?}")))
+  }
+  #[cfg(not(feature = "encodings"))]
+  {
+    Err(Error::unsupported_feature(format!("writing {label:?}"), "encodings", "write UTF-8 instead"))
   }
 }
 

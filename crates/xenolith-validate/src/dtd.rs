@@ -536,7 +536,7 @@ fn names(names: &[NameId], pool: &NamePool) -> String {
 /// # Examples
 ///
 /// ```
-/// use xenolith_dtd::DtdReader;
+/// use xenolith_parser::dtd::DtdReader;
 /// use xenolith_parser::Reader;
 /// use xenolith_validate::{DtdSchema, Validatable};
 ///

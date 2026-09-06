@@ -99,8 +99,9 @@
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 
 /// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
-pub use xenolith_dtd as dtd;
 pub use xenolith_parser as parser;
+/// The document type definition: its model, its parser, and assembly.
+pub use xenolith_parser::dtd;
 
 /// Validation: the schema-agnostic [`Validator`](validate::Validator) and the DTD validator.
 pub use xenolith_validate as validate;

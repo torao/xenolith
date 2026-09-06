@@ -5,8 +5,10 @@
 
 use xenolith_core::error::Location;
 use xenolith_core::name::NamePool;
-use xenolith_dtd::{AttDef, AttType, ContentParticle, ContentSpec, DefaultDecl, ExternalId, GeneralEntity, Occurs};
-use xenolith_dtd::{Dtd, parse_subset};
+use xenolith_parser::dtd::{
+  AttDef, AttType, ContentParticle, ContentSpec, DefaultDecl, ExternalId, GeneralEntity, Occurs,
+};
+use xenolith_parser::dtd::{Dtd, parse_subset};
 
 #[test]
 fn a_dtd_assembled_by_hand_reads_back_the_way_a_parsed_one_does() {

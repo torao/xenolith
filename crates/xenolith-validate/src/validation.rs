@@ -91,7 +91,7 @@ impl<'h, S: EventSource> ValidatingSource<'h, S> {
       // xml:id checking defaults to the source's parser configuration, so a Reader configured for xml:id validates it
       // without an explicit call. A source with no parser (a tree) leaves it off. Override with `checking_xml_id`.
       #[cfg(feature = "xml-id")]
-      xml_id: source.parser_config().is_some_and(|config| config.xml_id),
+      xml_id: source.defaults_xml_id(),
       source,
       handlers: Vec::new(),
       validators: Vec::new(),

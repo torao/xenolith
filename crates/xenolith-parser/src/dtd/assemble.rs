@@ -2,17 +2,17 @@
 //!
 //! A DTD is rarely one piece of text. An internal subset comes from the `DOCTYPE`, an external subset from a resource
 //! the declaration refers to, and a parameter entity from wherever its own declaration points. [`DtdAssembly`] holds
-//! the text gathered so far and drives [`parse_dtd`](crate::parse_dtd) over it, stopping whenever a piece is still
+//! the text gathered so far and drives [`parse_dtd`](super::parse_dtd) over it, stopping whenever a piece is still
 //! missing and resuming once the caller supplies it.
 //!
 //! Fetching is the caller's business, since only it knows how to reach a resource. A document parser answers by
-//! pausing its own read; [`DtdReader`](crate::DtdReader) answers by reading the resource itself.
+//! pausing its own read; [`DtdReader`](super::DtdReader) answers by reading the resource itself.
 //!
 
 use xenolith_core::error::{Location, Result};
 use xenolith_core::name::NamePool;
 
-use crate::{Dtd, DtdOutcome, ExternalPe, parse_dtd};
+use super::{Dtd, DtdOutcome, ExternalPe, parse_dtd};
 
 /// The DTD text gathered so far and the parse over it.
 ///
@@ -28,7 +28,7 @@ use crate::{Dtd, DtdOutcome, ExternalPe, parse_dtd};
 /// ```
 /// use xenolith_core::error::Location;
 /// use xenolith_core::name::NamePool;
-/// use xenolith_dtd::DtdAssembly;
+/// use xenolith_parser::dtd::DtdAssembly;
 ///
 /// // What the `DOCTYPE` carried, then what the resource it referred to held.
 /// let mut assembly = DtdAssembly::with_internal_subset("<!ELEMENT note (#PCDATA)>");
@@ -52,7 +52,7 @@ use crate::{Dtd, DtdOutcome, ExternalPe, parse_dtd};
 /// ```
 /// use xenolith_core::error::Location;
 /// use xenolith_core::name::NamePool;
-/// use xenolith_dtd::{DtdAssembly, DtdOutcome};
+/// use xenolith_parser::dtd::{DtdAssembly, DtdOutcome};
 ///
 /// let mut assembly = DtdAssembly::new();
 /// assembly.add_external_subset("<!ENTITY % common SYSTEM 'urn:common'>%common;");

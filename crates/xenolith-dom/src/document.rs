@@ -515,6 +515,7 @@ impl Document {
   /// The payload of a node, for crate code that reads a node's kind-specific data directly, such as emitting the tree
   /// as an event stream.
   ///
+  #[cfg(feature = "parse")]
   pub(crate) fn node_data(&self, id: NodeId) -> &NodeData {
     &self.slot(id).data
   }

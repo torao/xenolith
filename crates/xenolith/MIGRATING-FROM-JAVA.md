@@ -287,7 +287,7 @@ writer.write_characters("hi & bye")?;
 writer.write_end_element()?;
 
 assert_eq!(String::from_utf8(out).unwrap(), "<note lang=\"en\">hi &amp; bye</note>");
-# Ok::<(), std::io::Error>(())
+# Ok::<(), xenolith::Error>(())
 ```
 
 ## What is deliberately different

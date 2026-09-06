@@ -176,3 +176,50 @@ mod tests {
     }
   }
 }
+
+/// Returns an encoder for `normalized`, or `None` if this backend doesn't support the encoding.
+///
+/// UTF-16 is absent on purpose. The WHATWG Encoding Standard defines no UTF-16 encoder, so `encoding_rs` offers none
+/// either; writing one would be this crate's work rather than the standard's.
+///
+pub(crate) fn encoder_lookup(normalized: &str) -> Option<Box<dyn super::Encoder>> {
+  let encoding = Encoding::for_label(normalized.as_bytes())?;
+  if encoding.output_encoding() != encoding {
+    // A replaced encoding, which the standard maps to something else on the way out. Refusing it keeps the bytes and
+    // the declared name in step.
+    return None;
+  }
+  Some(Box::new(BackendEncoder { encoding }))
+}
+
+/// Encodes through `encoding_rs`.
+///
+#[derive(Debug)]
+struct BackendEncoder {
+  encoding: &'static Encoding,
+}
+
+impl super::Encoder for BackendEncoder {
+  fn encoding(&self) -> &str {
+    self.encoding.name()
+  }
+
+  fn encode(&mut self, text: &str, out: &mut Vec<u8>) -> Result<()> {
+    let (bytes, _, unmappable) = self.encoding.encode(text);
+    if unmappable {
+      // `encode` substitutes a reference for what it cannot hold, so the substitution says one was needed. Which
+      // character it was takes a second pass, and only a refused write pays for it.
+      let c = text.chars().find(|c| self.encoding.encode(&c.to_string()).2).unwrap_or('\u{fffd}');
+      return Err(super::encoder::unrepresentable(self.encoding.name(), c));
+    }
+    out.extend_from_slice(&bytes);
+    Ok(())
+  }
+
+  fn encode_with_references(&mut self, text: &str, out: &mut Vec<u8>) -> Result<()> {
+    // `encoding_rs` writes a decimal character reference for anything it cannot hold, which is what XML asks for.
+    let (bytes, _, _) = self.encoding.encode(text);
+    out.extend_from_slice(&bytes);
+    Ok(())
+  }
+}

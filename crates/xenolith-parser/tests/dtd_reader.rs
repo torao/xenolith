@@ -4,7 +4,7 @@ use std::io::Read;
 
 use xenolith_core::Error;
 use xenolith_core::resolve::{EntityRequest, UriResolver};
-use xenolith_dtd::{ContentSpec, DtdReader, GeneralEntity};
+use xenolith_parser::dtd::{ContentSpec, DtdReader, GeneralEntity};
 
 #[test]
 fn reads_declarations_from_a_source_of_its_own() {

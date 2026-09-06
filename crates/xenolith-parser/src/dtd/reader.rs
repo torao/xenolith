@@ -9,8 +9,8 @@ use xenolith_core::name::NamePool;
 use xenolith_core::resolve::{EntityRequest, RequestKind, UriResolver};
 use xenolith_core::stream::CharStream;
 
-use crate::Dtd;
-use crate::assemble::DtdAssembly;
+use super::Dtd;
+use super::assemble::DtdAssembly;
 
 /// Reads a DTD that stands on its own, apart from any document.
 ///
@@ -28,7 +28,7 @@ use crate::assemble::DtdAssembly;
 /// # Examples
 ///
 /// ```
-/// use xenolith_dtd::DtdReader;
+/// use xenolith_parser::dtd::DtdReader;
 ///
 /// let (dtd, pool) = DtdReader::new("<!ELEMENT note (#PCDATA)>".as_bytes()).read()?;
 /// assert!(dtd.has_element(pool.get("note").expect("declared")));
@@ -116,7 +116,7 @@ impl<R: Read> DtdReader<R> {
 /// Fetches one external parameter entity through `resolver`, returning its text, or `None` when it is declined.
 fn fetch_parameter_entity(
   resolver: &mut Option<Box<dyn UriResolver>>,
-  pe: &crate::ExternalPe,
+  pe: &super::ExternalPe,
   base: Option<&str>,
 ) -> Result<Option<String>> {
   let Some(resolver) = resolver.as_deref_mut() else {

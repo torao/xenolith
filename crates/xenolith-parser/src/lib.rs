@@ -121,6 +121,7 @@ pub mod async_reader;
 #[cfg(feature = "async")]
 pub mod async_resolve;
 pub mod config;
+pub mod dtd;
 pub mod entity;
 pub mod event;
 mod namespace;
@@ -131,11 +132,9 @@ mod scan;
 
 #[cfg(feature = "async")]
 pub use async_reader::{AsyncReader, NoResolver};
-pub use config::{Bounds, ParserConfig};
-// The DTD model and its parser are their own crate, usable without a document parser. They are re-exported here
-// because this crate hands `Dtd` values out, through `Parser::dtd` and the `doctype` callback.
 #[cfg(feature = "async")]
 pub use async_resolve::{AsyncEntityReader, AsyncUriResolver};
+pub use config::{Bounds, ParserConfig};
 pub use entity::{Entity, EntityKind, EntityStack, Limits};
 pub use event::{Attribute, Event};
 pub use parser::{Attributes, EventKind, EventRef, Events, Parser, Progress, XmlSpace};
@@ -144,5 +143,7 @@ pub use resolve::{EntityRequest, RequestKind, UriResolver};
 pub use stream::CharStream;
 pub use xenolith_core::attr::AttributeRef;
 pub use xenolith_core::{resolve, stream};
-pub use xenolith_dtd as dtd;
-pub use xenolith_dtd::Dtd;
+// The DTD lives in this crate as its own module: the model is `xenolith_core::model::dtd`, re-exported through `dtd`,
+// and the DTD parser sits beside the document parser. `Dtd` is re-exported at the crate root because this crate hands
+// `Dtd` values out, through `Parser::dtd` and the `doctype` callback.
+pub use dtd::Dtd;

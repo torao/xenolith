@@ -1,18 +1,27 @@
-//! Escaping character data and attribute values.
+//! Writing text, attribute values, and CDATA sections so that they read back unchanged.
 //!
-//! Serialization must turn the characters a value happens to contain back into markup that
-//! parses to the same value. The two contexts differ: in text `<`, `&` and `>` are the markup
-//! characters, while in a double-quoted attribute the quote and the whitespace that attribute
-//! normalization would fold also have to be written as references.
+//! Escaping makes the round trip work: read the output back, and the value you wrote comes out again. What to rewrite
+//! depends on where it is written.
+//!
+//! In text, `<` and `&` start markup, so you write them as references (XML 1.0 §2.4). A carriage return is written as
+//! one too. Line-end normalization folds a literal one into a line feed (§2.11), and a reference survives that.
+//!
+//! In an attribute value, the delimiting quote joins them, and so do tab, line feed, and carriage return.
+//! Attribute-value normalization folds each of those into a space (§3.3.3). Text can hold a tab or a line feed as-is,
+//! because nothing folds them there.
+//!
+//! A CDATA section escapes nothing. Its content is written as-is, and only the `]]>` that would close it early is
+//! split across two sections (§2.7).
+//!
 
-/// Appends `text` as character data, escaping the markup-significant characters.
+/// Appends `text` as character data, escaping what would otherwise start markup (XML 1.0 §2.4).
 pub(crate) fn push_text(out: &mut String, text: &str) {
   for c in text.chars() {
     match c {
       '&' => out.push_str("&amp;"),
       '<' => out.push_str("&lt;"),
-      // `>` only has to be escaped to break up `]]>`, but escaping every one is simpler and
-      // always correct.
+      // §2.4 requires `>` as a reference only where it would close a `]]>`, and for compatibility at that. Writing
+      // every one that way is simpler and correct everywhere.
       '>' => out.push_str("&gt;"),
       // A literal carriage return would be folded to a line feed on the next parse; keep it as
       // a reference so the round trip is exact.
@@ -22,8 +31,8 @@ pub(crate) fn push_text(out: &mut String, text: &str) {
   }
 }
 
-/// Appends `value` as the contents of a double-quoted attribute, escaping what that context and
-/// attribute-value normalization require.
+/// Appends `value` as the content of a double-quoted attribute, escaping what the delimiter and attribute-value
+/// normalization require (XML 1.0 §3.3.3).
 pub(crate) fn push_attribute(out: &mut String, value: &str) {
   for c in value.chars() {
     match c {
@@ -40,8 +49,8 @@ pub(crate) fn push_attribute(out: &mut String, value: &str) {
   }
 }
 
-/// Appends `data` inside a CDATA section, splitting it so an embedded `]]>` cannot close the
-/// section early.
+/// Appends `data` inside a CDATA section, splitting it so an embedded `]]>` cannot close the section early
+/// (XML 1.0 §2.7).
 pub(crate) fn push_cdata(out: &mut String, data: &str) {
   out.push_str("<![CDATA[");
   let mut rest = data;
