@@ -2,8 +2,17 @@
 
 use std::cmp::Ordering;
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{DomModel, ExpandedName, Model, NodeKind};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// The document element of a parsed document, as an XPath node.
 fn document_element(model: &DomModel<'_>) -> xenolith_xdm::DomNode {
@@ -12,7 +21,7 @@ fn document_element(model: &DomModel<'_>) -> xenolith_xdm::DomNode {
 
 #[test]
 fn the_root_holds_the_document_element() {
-  let doc = build::parse("<doc/>".as_bytes()).unwrap();
+  let doc = parse_document("<doc/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let root = model.root_node();
   assert_eq!(model.kind(root), NodeKind::Root);
@@ -25,7 +34,7 @@ fn the_root_holds_the_document_element() {
 
 #[test]
 fn adjacent_text_and_cdata_merge_into_one_text_node() {
-  let doc = build::parse("<a>one<![CDATA[two]]>three<b/>four</a>".as_bytes()).unwrap();
+  let doc = parse_document("<a>one<![CDATA[two]]>three<b/>four</a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let a = document_element(&model);
   let kinds: Vec<_> = model.children(a).iter().map(|&n| model.kind(n)).collect();
@@ -37,14 +46,14 @@ fn adjacent_text_and_cdata_merge_into_one_text_node() {
 
 #[test]
 fn string_value_of_an_element_is_all_its_text() {
-  let doc = build::parse("<a>x<b>y</b>z</a>".as_bytes()).unwrap();
+  let doc = parse_document("<a>x<b>y</b>z</a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   assert_eq!(model.string_value(document_element(&model)), "xyz");
 }
 
 #[test]
 fn attributes_are_reached_by_the_attribute_axis_not_as_children() {
-  let doc = build::parse("<a x='1' y='2'>t</a>".as_bytes()).unwrap();
+  let doc = parse_document("<a x='1' y='2'>t</a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let a = document_element(&model);
   // Only the text node is a child.
@@ -60,7 +69,7 @@ fn attributes_are_reached_by_the_attribute_axis_not_as_children() {
 
 #[test]
 fn namespace_declarations_are_not_attributes_but_namespace_nodes() {
-  let doc = build::parse("<a xmlns='urn:d' xmlns:p='urn:p' x='1'/>".as_bytes()).unwrap();
+  let doc = parse_document("<a xmlns='urn:d' xmlns:p='urn:p' x='1'/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let a = document_element(&model);
   // xmlns and xmlns:p are namespace nodes, not attributes; only x is an attribute.
@@ -82,7 +91,7 @@ fn namespace_declarations_are_not_attributes_but_namespace_nodes() {
 
 #[test]
 fn a_namespaced_element_reports_its_expanded_name() {
-  let doc = build::parse("<p:a xmlns:p='urn:p'/>".as_bytes()).unwrap();
+  let doc = parse_document("<p:a xmlns:p='urn:p'/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let name = model.expanded_name(document_element(&model)).unwrap();
   assert_eq!(name, ExpandedName { namespace: Some("urn:p".to_owned()), local: "a".to_owned() });
@@ -90,7 +99,7 @@ fn a_namespaced_element_reports_its_expanded_name() {
 
 #[test]
 fn document_order_ranks_root_element_namespaces_attributes_then_children() {
-  let doc = build::parse("<a xmlns:p='urn:p' x='1'><b/>t</a>".as_bytes()).unwrap();
+  let doc = parse_document("<a xmlns:p='urn:p' x='1'><b/>t</a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let root = model.root_node();
   let a = document_element(&model);
@@ -111,7 +120,7 @@ fn document_order_ranks_root_element_namespaces_attributes_then_children() {
 
 #[test]
 fn the_node_accessor_maps_a_dom_text_node_to_its_run() {
-  let doc = build::parse("<a>one<![CDATA[two]]></a>".as_bytes()).unwrap();
+  let doc = parse_document("<a>one<![CDATA[two]]></a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let a = document_element(&model);
   let text = model.children(a)[0];

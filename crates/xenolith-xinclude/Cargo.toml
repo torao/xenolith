@@ -13,11 +13,12 @@ categories.workspace = true
 [features]
 default = []
 # Decode included text resources in encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1.
-encodings = ["xenolith-core/encodings", "xenolith-dom/encodings"]
+encodings = ["xenolith-core/encodings"]
 
 [dependencies]
 xenolith-core = { workspace = true }
-xenolith-dom = { workspace = true, features = ["parse"] }
+xenolith-dom = { workspace = true }
+# Reads an included resource into a tree; the DOM crate itself depends on no parser.
 
 [dev-dependencies]
 xenolith-serialize = { workspace = true }

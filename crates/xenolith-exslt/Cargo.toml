@@ -40,7 +40,8 @@ xenolith-xslt = { workspace = true }
 regex = { workspace = true, optional = true }
 
 [dev-dependencies]
-xenolith-dom = { workspace = true, features = ["parse"] }
+xenolith-dom = { workspace = true }
+# The tests and doctests read documents into a tree through the parser.
 
 [lints]
 workspace = true

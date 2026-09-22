@@ -27,8 +27,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use xenolith::dom::build;
-use xenolith::parser::Reader;
+use xenolith::dom::build::DomBuilder;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::parser::StreamSource;
 use xenolith::serialize::Serializer;
 use xenolith::transform::{Source, Transformer};
 use xenolith::validate::Validatable;
@@ -244,7 +245,7 @@ fn xpath(expression: &str, input: Option<&Path>, bindings: &[String], fail_on_em
   }
 
   let source = read(input)?;
-  let document = build::parse(source.as_slice()).map_err(|error| where_it_was(input, &error))?;
+  let document = parse_document(source.as_slice()).map_err(|error| where_it_was(input, &error))?;
   let model = DomModel::new(&document);
   let compiled = query.compile(expression).map_err(|error| error.message().to_owned())?;
   let value = compiled.evaluate(&model, model.root_node()).map_err(|error| error.message().to_owned())?;
@@ -287,9 +288,12 @@ fn validate(inputs: &[PathBuf]) -> Result<ExitCode, String> {
   let mut all_valid = true;
   for input in named {
     let source = read(input)?;
-    let report = Reader::new(source.as_slice())
+    // A command-line tool has no reason to leave a check out, so both the declared DTD and xml:id are asked for. The
+    // run checks xml:id only when told to; the parser's own xml:id setting normalizes the values, which is separate.
+    let report = StreamSource::new(source.as_slice())
       .with_validation()
       .validating_dtd()
+      .checking_xml_id(true)
       .run()
       .map_err(|error| where_it_was(input, &error))?;
     let name = input.map_or_else(|| "<stdin>".to_owned(), display);
@@ -318,7 +322,7 @@ fn validate(inputs: &[PathBuf]) -> Result<ExitCode, String> {
 
 fn format(input: Option<&Path>, indent: usize, output: Option<&Path>) -> Result<ExitCode, String> {
   let source = read(input)?;
-  let document = build::parse(source.as_slice()).map_err(|error| where_it_was(input, &error))?;
+  let document = parse_document(source.as_slice()).map_err(|error| where_it_was(input, &error))?;
   let Some(root) = document.document_element() else {
     return Err("the document has no element to write".to_owned());
   };
@@ -383,6 +387,13 @@ fn percent_encode(path: &str) -> String {
 fn where_it_was(input: Option<&Path>, error: &xenolith::Error) -> String {
   let name = input.map_or_else(|| "<stdin>".to_owned(), display);
   format!("{name}: {}", error.message())
+}
+
+/// Reads a document's bytes into a tree through the parser and the builder.
+fn parse_document(bytes: &[u8]) -> Result<xenolith::dom::Document, xenolith::Error> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(bytes).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith::Error::internal)
 }
 
 #[cfg(test)]

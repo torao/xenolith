@@ -1,10 +1,19 @@
 //! Extension functions, and the output method a stylesheet asks for.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::{Context, Functions, Value};
 use xenolith_xslt::{OutputMethod, Stylesheet, Transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps template bodies in an `xsl:stylesheet` that binds `my` to `urn:my`.
 fn sheet(body: &str) -> String {
@@ -17,7 +26,7 @@ fn sheet(body: &str) -> String {
 /// Runs a stylesheet with a couple of extension functions registered, and takes the text.
 fn run(body: &str, xml: &str) -> Result<String, xenolith_core::Error> {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl")?;
-  let doc = build::parse(xml.as_bytes())?;
+  let doc = parse_document(xml.as_bytes())?;
   let model = DomModel::new(&doc);
 
   let functions = Functions::new()
@@ -70,7 +79,7 @@ fn a_function_whose_prefix_is_not_bound_says_so() {
   let text = "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">\
               <xsl:template match=\"/\"><xsl:value-of select=\"other:f()\"/></xsl:template></xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(text.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).unwrap();
+  let doc = parse_document("<a/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let functions = Functions::new();
   let error = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect_err("fails");
@@ -112,7 +121,7 @@ fn the_text_method_writes_the_character_data_and_nothing_else() {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").unwrap();
   assert_eq!(stylesheet.output_method(), OutputMethod::Text);
 
-  let doc = build::parse("<a><b>content</b></a>".as_bytes()).unwrap();
+  let doc = parse_document("<a><b>content</b></a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let result = Transform::new().run(&stylesheet, &model, model.root_node()).unwrap();
   // The element the stylesheet built is not written; only what it contains.

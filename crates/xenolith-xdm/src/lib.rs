@@ -7,16 +7,20 @@
 //!
 //! [`Model`] is that view, as a trait, so the evaluator can run over any tree that presents one
 //! — the DOM today, a result tree fragment or a streaming source later (see `ROADMAP.md`,
-//! decision 3). [`DomModel`] is the implementation over [`xenolith_dom`]: it merges text,
+//! decision 3). [`DomModel`] is the implementation over [`xenolith_core::dom`]: it merges text,
 //! synthesizes namespace nodes, and orders every node, without changing the DOM it borrows.
 //!
 //! # Examples
 //!
 //! ```
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::{DomModel, Model, NodeKind};
 //!
-//! let doc = build::parse("<doc><p>one</p><p>two</p></doc>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<doc><p>one</p><p>two</p></doc>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let doc = builder.into_document()?;
 //! let model = DomModel::new(&doc);
 //! let root = model.root_node();
 //!
@@ -24,7 +28,7 @@
 //! let element = model.children(root)[0];
 //! assert_eq!(model.kind(element), NodeKind::Element);
 //! assert_eq!(model.string_value(element), "onetwo");
-//! # Ok::<(), xenolith_core::Error>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 //! # Specifications

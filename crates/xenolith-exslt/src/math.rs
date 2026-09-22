@@ -14,7 +14,9 @@
 //! # Examples
 //!
 //! ```
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::DomModel;
 //! use xenolith_xpath::Functions;
 //! use xenolith_xslt::{Stylesheet, Transform};
@@ -27,7 +29,9 @@
 //!   "file:///s.xsl",
 //! )?;
 //!
-//! let doc = build::parse("<r><n>3</n><n>11</n><n>7</n></r>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<r><n>3</n><n>11</n><n>7</n></r>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! let model = DomModel::new(&doc);
 //! let functions = xenolith_exslt::register(Functions::new());
 //!

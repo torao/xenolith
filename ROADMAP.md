@@ -136,7 +136,7 @@ Rust による XML 1.0 / XPath 1.0 / XSLT 1.0 の実装計画。Java の XML API
 | Java | xenolith 対応 | 備考 |
 |---|---|---|
 | SAX2 `ContentHandler` ほか | `Handler` トレイト（push） | 実装は pull の上に薄く載せる |
-| StAX `XMLStreamReader` | `Reader` イテレータ（pull） | **こちらを一次 API とする** |
+| StAX `XMLStreamReader` | `StreamSource` イテレータ（pull） | **こちらを一次 API とする** |
 | StAX `XMLStreamWriter` | `Writer` | シリアライザと共用 |
 | DOM Level 3 Core | `dom` モジュール | **W3C IDL をそのまま踏襲**（決定 3） |
 | `DocumentBuilderFactory` | `DocumentBuilder` + ビルダーパターン | |
@@ -397,7 +397,7 @@ xenolith/
 **1a. 文字ストリームと実体スタック** ✅ 完了
 - `CharStream`: `Decoder` の上に載る文字ソース。符号化判定（Appendix F）、`\r\n` / `\r` の改行正規化（**チャンク境界をまたぐ CR LF を含む**）、`Char` 検査、行・列・オフセット追跡、消費済みバッファの圧縮
 - **消費は `advance` を呼ぶまで起きない**。不完全トークンは何もせず次の入力を待ち、トークン先頭から再スキャンする（決定 7 の再開方式）
-- `Entity` / `EntityStack`: 実体ごとの system ID と基底 URI、位置報告は最内実体、`Limits`（深さ・展開回数・展開文字数）、WFC "No Recursion" の検出
+- `Entity` / `EntityStack`: 実体ごとの system ID と基底 URI、位置報告は最内実体、`EntityLimits`（深さ・展開回数・展開文字数。`ParserConfig::limits.entities`）、WFC "No Recursion" の検出
 - **成果物**: `xenolith-parser` クレート（テスト 26 + doctest 7）
 
 **1b. Sans-I/O トークナイザ／パーサコア** ✅ 完了
@@ -411,8 +411,8 @@ xenolith/
 
 **1c. ドライバとイベント API** ✅ 完了
 - カーソル API（`Parser` のアクセサが借用を返す）を一次、`Event`（所有）と `Iterator` をその上に
-- `Reader<R: Read>` 同期ドライバ、`AsyncReader<R: AsyncRead>`（feature `tokio`、既定 OFF）
-- `Limits::max_element_depth` を追加（要素ネストの上限。1b では未保護だった）
+- `StreamSource<R: Read>` 同期ドライバ、`AsyncReader<R: AsyncRead>`（feature `tokio`、既定 OFF）
+- `DocumentLimits::max_element_depth` を追加（要素ネストの上限。`ParserConfig::limits.document`。1b では未保護だった）
 - **入力の刻み方とドライバの種類によって結果が変わらないこと**を全ケースで検証（1・2・3・5・64 バイト刻み × 3 ドライバ）
 - xmlconf ハーネス（`XMLCONF` 環境変数で実行、CI では毎回取得）。DOCTYPE を含むケースは Phase 2 まで skip として計上
 - **成果物**: テスト 92 + 統合 12 + doctest 16
@@ -430,7 +430,7 @@ xenolith/
 **2a-ii. NeedEntity 機構と外部一般実体** ✅ 完了
 - 決定 7 の I/O 境界: `Progress::NeedEntity` + `EntityRequest` + `UriResolver`（同期）/ `AsyncUriResolver`（非同期）
 - パーサは外部一般実体の参照で停止し `pending_entity()` を公開、ドライバが解決して `provide_entity(bytes)` / `decline_entity()` を呼ぶ。パーサは符号化判定とテキスト宣言の除去・検証を行う
-- `Reader::with_resolver` / `AsyncReader::with_resolver`。**リゾルバ未設定なら外部実体は拒否**（XXE 対策の安全既定）
+- `StreamSource::with_resolver` / `AsyncReader::with_resolver`。**リゾルバ未設定なら外部実体は拒否**（XXE 対策の安全既定）
 - 外部実体は現状「一括読み込み」（本文はストリーム、外部実体は全読み）
 - **完了条件**: xmlconf の外部一般実体ケースを通す（valid 266 / not-wf 761、0 失敗）
 
@@ -458,7 +458,7 @@ xenolith/
 **2c. XML Base / xml:id**（決定 6）✅ 完了
 - ノードごとの基底 URI 計算（起点は実体の system ID、`xml:base` で上書き）。`xml:base` 値は RFC 3986 §5.3 で親の基底に対して解決。`Parser::base_uri()` で取得
 - `xml:id` の ID 型扱い（トークン化正規化を適用）と `Parser::xml_id()`。NCName 検査・一意性検査は検証層が担い、**2b の ID 機構（`ids` テーブル）を共用** — DTD 宣言の `ID` と同じ ID 空間で衝突を検出。DTD の有無を問わず検査（DTD あり: `DtdValidator`、なし: `XmlIdValidator`）
-- `ParserConfig` の実行時フラグ（`set_config` / `Reader::with_config`）と feature `xml-base` / `xml-id`（既定オフ。有効時はフラグ既定オン）
+- `ParserConfig` の実行時フラグ（`set_config` / `StreamSource::with_config`）と feature `xml-base` / `xml-id`（既定オフ。有効時はフラグ既定オン）
 - **成果物**: パーサに `ParserConfig` と `base_uri()` / `xml_id()`、検証に `XmlIdValidator` と共用 ID 検査（パーサテスト +3、検証統合テスト +6）
 - **完了条件**: XML Base（system ID 起点・`xml:base` 継承・相対解決・オフ切替）と xml:id（一意 NCName 受理・重複検出・非 NCName 検出・正規化・未宣言でも非エラー・宣言 ID との衝突）を、仕様の例に沿った的を絞ったテストで確認
 - **既知の範囲**: 外部実体境界での基底 URI（外部実体内の要素が実体自身の URI を基底とする XML Base §4 の規定）は未対応 — 外部実体は既定無効かつ resolver 必須のため優先度は低い。W3C の xml:id 1.0 / XML Base 公式スイートの取り込みは後続（他スイート同様 env var 方式で）
@@ -495,7 +495,7 @@ xenolith/
 - **成果物**: `build` モジュールと `base_uri`（ユニット +1、統合テスト 10）
 - **完了条件**: 代表的な文書（名前空間・DTD・PI/コメント/CDATA・xml:id・xml:base）が DOM に載り、走査・ID 検索・基底 URI 取得が通る
 
-**3d. シリアライザ**（`xenolith-serialize`）✅ 完了
+**3d. シリアライザ**（`xenolith-serialize`）✅ 完了 → のちに `Serializer` は削除し、ツリーの出力は `DomSource` + `io::write::XmlWriter`（ファサードは `Writer`）に置き換えた。名前空間の補完とインデントは現状なく、必要ならイベント列を整えるユーティリティ handler として用意する
 - `Serializer`（ビルダー: `with_xml_declaration` / `with_standalone` / `with_indent`）で DOM 部分木を XML テキストへ。`to_string` と `write<W: io::Write>`
 - **エスケープ**: テキスト（`& < >`、`\r`）と属性値（`& < "`、`\t \n \r` を文字参照）、CDATA の `]]>` 分割
 - **名前空間修復**: 宣言が in-scope に無い接頭辞・既定名前空間を要素に補って整形式化（`create_element_ns` のみで作った木も直列化可能）。既存の xmlns 属性は重複させない
@@ -506,7 +506,7 @@ xenolith/
 
 **3e. push/StAX アダプタとラウンドトリップ**✅ 完了
 - **SAX 相当の push アダプタ**（`xenolith-parser` の `sax` モジュール）: `Handler` トレイト（既定実装つき）と `drive(reader, handler)`。要素イベントは `&Parser` を渡し、名前・名前空間・属性をアクセサで読む
-- **StAX Writer**（`xenolith-serialize` の `XmlWriter`）: `write_start_element` / `write_attribute` / `write_characters` / `write_cdata` / `write_comment` / `write_processing_instruction` / `write_end_element`。開始タグ直後の終了は `<a/>` に畳む。エスケープは自動
+- **StAX Writer**（現在は `io::write::WriterSource` がアプリの呼び出しをイベントにし、`io::write::XmlWriter` がそのイベントをバイト列に書く）: `write_start_element` / `write_attribute` / `write_characters` / `write_cdata` / `write_comment` / `write_processing_instruction` / `write_end_element`。開始タグ直後の終了は `<a/>` に畳む。エスケープは自動
 - **DOCTYPE の外部 ID 往復を解消**: パーサに `doctype_public_id()` / `doctype_system_id()` を追加し、ビルダーが DocumentType に取り込む → シリアライザで往復
 - **成果物**: `sax` モジュール（ユニット 2 + doctest 1）、`XmlWriter`（ユニット 5 + doctest 1）、往復統合テスト
 - **完了条件（Phase 3 全体）✅**: パース → DOM → 直列化のラウンドトリップが情報を落とさない（名前空間・属性・混在内容・コメント・PI・CDATA・DOCTYPE 外部 ID を往復で確認）
@@ -978,7 +978,7 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 | 3 | API 設計 | **W3C 規定のインタフェースは踏襲、それ以外は Rust 的に再設計** | DOM Level 3 Core はメソッド名・例外コードまで規定どおり（命名のみ snake_case）。live NodeList も維持。パーサ設定・変換駆動・エラー通知・CLI は型付きビルダーと `Result` で再設計し、ファクトリ + 文字列 feature 方式は採らない |
 | 4 | 非 UTF エンコーディング | **外部ライブラリに委譲** | 自前は UTF-8/16・ASCII・Latin-1 まで。以降は `encoding_rs`（feature `encodings`、既定 ON）。`Decoder` トレイトで抽象化し差し替え可能に。出力側は符号化不能文字を文字参照へフォールバック |
 | 5 | EXSLT | **最初から入れる** | Phase 5 で拡張関数の登録機構を先に作り、EXSLT をその最初の利用者にする。RTF は `exsl:node-set()` でゼロコピー昇格できる内部表現にする。Phase 6.5 として common → strings → math → sets → functions → dates → regex の順に実装 |
-| 6 | XInclude / XML Base / xml:id | **必須。feature + 実行時フラグで切替** | XML Base と xml:id は Phase 2c、XInclude は Phase 3.5（XPointer framework / `element()` / `xmlns()` を含む）。基底 URI の起点は実体の system ID なので **Phase 1 の実体スタックに system ID を持たせる**。XInclude の実行時既定は無効（JAXP 準拠）、XML Base / xml:id は既定有効 |
+| 6 | XInclude / XML Base / xml:id | **必須。実行時の設定で切替（Cargo feature にはしない）** | XML Base と xml:id は Phase 2c、XInclude は Phase 3.5（XPointer framework / `element()` / `xmlns()` を含む）。XML Base / xml:id はパーサ設定 `ParserConfig::extensions` で切り替え、既定は有効。基底 URI の起点は実体の system ID なので **Phase 1 の実体スタックに system ID を持たせる**。XInclude の実行時既定は無効（JAXP 準拠） |
 | 7 | パーサの I/O とイベント API | **Sans-I/O コア + 同期／非同期ドライバ。カーソル API が一次、所有イベント `Iterator` はその上のラッパ** | 下記「決定 7 の詳細」。`tokio` は feature（既定 OFF）に隔離 |
 | 8 | 検証と XSD | **検証はスキーマ非依存レイヤー（`xenolith-validate`）。XSD は将来トラックとして設計余地のみ確保** | `Validator` / `ErrorListener` を DTD・XSD 共通に。DTD 検証器が最初の実装。XSD（`xenolith-xsd`）は本線完了後、実用サブセットから。後付けで既存を作り直さない設計 |
 | 9 | 未規定動作の扱い | **「仕様が未定義」「本実装が選択」「ビルド/環境依存」を文書上はっきり区別し、実測レポートをテストとして出力する** | 下記「決定 9 の詳細」 |
@@ -1024,7 +1024,7 @@ cargo test -p xenolith --all-features --test behaviour -- --nocapture
 
 ```
 xenolith-parser                        I/O を一切持たない状態機械
-  ├── Reader<R: Read>                   同期ドライバ（既定）
+  ├── StreamSource<R: Read>                   同期ドライバ（既定）
   ├── AsyncReader<R: AsyncRead>         非同期ドライバ（feature = "tokio"、既定 OFF）
   └── SliceReader<'a>                   メモリ上のバイト列
 ```
@@ -1075,7 +1075,7 @@ pub trait ErrorListener {                           // warning / error(recoverab
 }
 ```
 
-`ValidatingReader = Reader + Box<dyn Validator>` が、読み取ったイベントをパースと検証の両方へ流す。この `Validator` を実装すれば何でも検証器になる。
+`ValidatingReader = StreamSource + Box<dyn Validator>` が、読み取ったイベントをパースと検証の両方へ流す。この `Validator` を実装すれば何でも検証器になる。
 
 **想定する実装例（拡張性の実証）**:
 

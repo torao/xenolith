@@ -4,11 +4,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_serialize::Serializer;
 use xenolith_xdm::{Documents, DomModel};
 use xenolith_xpath::Functions;
 use xenolith_xslt::{LoadedDocuments, Loader, Stylesheet, Transform, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -36,7 +45,7 @@ impl Loader for Shelf {
 /// Transforms `xml`, with `shelf` available to `document()`.
 fn run_with_shelf(body: &str, xml: &str, shelf: &[(&str, &str)]) -> Result<String> {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///dir/s.xsl")?;
-  let source = build::parse(xml.as_bytes())?;
+  let source = parse_document(xml.as_bytes())?;
   let documents = Documents::new();
   let model = DomModel::with_documents(&source, &documents);
   let available = Rc::new(LoadedDocuments::new(&documents, Shelf::new(shelf)));
@@ -48,7 +57,7 @@ fn run_with_shelf(body: &str, xml: &str, shelf: &[(&str, &str)]) -> Result<Strin
 /// Transforms `xml` with no document source at all, and serializes the result.
 fn run(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   Serializer::new().to_string(result.document(), result.root())

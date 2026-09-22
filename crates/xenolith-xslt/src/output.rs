@@ -23,7 +23,7 @@
 use std::collections::HashSet;
 
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::{Document, NodeId, NodeType};
+use xenolith_core::dom::{Document, NodeId, NodeType};
 
 use crate::stylesheet::OutputMethod;
 

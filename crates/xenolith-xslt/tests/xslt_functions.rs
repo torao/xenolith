@@ -1,10 +1,19 @@
 //! The functions XSLT adds to XPath (XSLT 1.0 §12.4, §15).
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::{Context, Functions, Value};
 use xenolith_xslt::{Stylesheet, Transform, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -14,7 +23,7 @@ fn sheet(body: &str) -> String {
 /// Transforms `xml` and takes the text of the result.
 fn run(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms").text()
 }
@@ -22,7 +31,7 @@ fn run(body: &str, xml: &str) -> String {
 /// The message a transformation fails with.
 fn error(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect_err("fails").message().to_owned()
 }
@@ -136,7 +145,7 @@ fn function_available_sees_an_extension_the_caller_registered() {
      xmlns:my=\"urn:my\">{body}</xsl:stylesheet>"
   );
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = Functions::new().with("urn:my", "shout", |arguments: Vec<Value<_>>, context: &Context<'_, _>| {
     Ok(Value::String(arguments[0].string(context.model).to_uppercase()))
@@ -158,7 +167,7 @@ fn a_registered_function_cannot_shadow_one_of_xpaths_own() {
   // The core library is consulted first, so registering `count` in no namespace changes nothing.
   let body = "<xsl:template match=\"/\"><xsl:value-of select=\"count(//a)\"/></xsl:template>";
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<r><a/><a/></r>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<r><a/><a/></r>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = Functions::new().with("", "count", |_: Vec<Value<_>>, _: &Context<'_, _>| Ok(Value::Number(99.0)));
 
@@ -197,7 +206,7 @@ fn every_instruction_named_as_available_is_one_that_runs() {
 
     let body = format!("<xsl:template match=\"/\"><xsl:{instruction}/></xsl:template>");
     let stylesheet = Stylesheet::compile(sheet(&body).as_bytes(), "file:///s.xsl").expect("compiles");
-    let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+    let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
     let model = DomModel::new(&doc);
     if let Err(error) = transform(&stylesheet, &model, model.root_node()) {
       assert!(matches!(error, Error::Xslt { .. }));

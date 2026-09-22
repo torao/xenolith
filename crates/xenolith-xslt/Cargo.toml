@@ -21,18 +21,16 @@ encodings = ["dep:encoding_rs"]
 
 [dependencies]
 xenolith-core = { workspace = true }
-xenolith-dom = { workspace = true, features = ["parse"] }
+xenolith-dom = { workspace = true }
 xenolith-xdm = { workspace = true }
 xenolith-xpath = { workspace = true }
+# Reads stylesheets and the documents `document()` fetches into trees; the DOM crate depends on no parser.
 icu_collator = { workspace = true, optional = true }
 icu_locale_core = { workspace = true, optional = true }
 encoding_rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 xenolith-serialize = { workspace = true }
-# The conformance harness drives the parser itself, to give it a resolver for the DTDs that sit
-# beside the suite's data files.
-xenolith-parser = { workspace = true }
 
 [lints]
 workspace = true

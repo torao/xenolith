@@ -1,10 +1,19 @@
 //! The instructions that build result nodes: element, attribute, comment, PI, copy, copy-of.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_serialize::Serializer;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{ResultTree, Stylesheet, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -22,7 +31,7 @@ fn serialized(result: &ResultTree) -> String {
 
 fn result(body: &str, xml: &str) -> ResultTree {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms")
 }
@@ -30,7 +39,7 @@ fn result(body: &str, xml: &str) -> ResultTree {
 /// The message a transformation fails with.
 fn error(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let error = transform(&stylesheet, &model, model.root_node()).expect_err("fails");
   assert!(matches!(error, Error::Xslt { .. }), "{}", error.message());

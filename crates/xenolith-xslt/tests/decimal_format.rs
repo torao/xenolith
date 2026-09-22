@@ -1,8 +1,17 @@
 //! `format-number()` and `xsl:decimal-format` (XSLT 1.0 §12.3).
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{Stylesheet, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -12,7 +21,7 @@ fn sheet(body: &str) -> String {
 /// Transforms `xml` and takes the text of the result.
 fn run(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms").text()
 }
@@ -20,7 +29,7 @@ fn run(body: &str, xml: &str) -> String {
 /// The message a transformation fails with.
 fn error(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect_err("fails").message().to_owned()
 }
@@ -98,7 +107,7 @@ fn a_decimal_format_name_may_be_in_a_namespace() {
                   </xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   assert_eq!(transform(&stylesheet, &model, model.root_node()).expect("transforms").text(), "1,5");
 }

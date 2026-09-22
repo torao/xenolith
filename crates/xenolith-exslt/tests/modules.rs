@@ -1,9 +1,18 @@
 //! The EXSLT modules, run through the XSLT engine the way a stylesheet reaches them.
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::Functions;
 use xenolith_xslt::{Stylesheet, Transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// The namespace declarations a stylesheet needs to reach every module.
 const PREFIXES: &str = "xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" \
@@ -15,7 +24,7 @@ const PREFIXES: &str = "xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" \
 fn run(body: &str, xml: &str) -> String {
   let source = format!("<xsl:stylesheet version=\"1.0\" {PREFIXES}>{body}</xsl:stylesheet>");
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = xenolith_exslt::register(Functions::new());
   Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect("transforms").text()
@@ -32,7 +41,7 @@ fn error(expression: &str, xml: &str) -> String {
   let body = format!("<xsl:template match='/'><xsl:value-of select=\"{expression}\"/></xsl:template>");
   let source = format!("<xsl:stylesheet version=\"1.0\" {PREFIXES}>{body}</xsl:stylesheet>");
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = xenolith_exslt::register(Functions::new());
   Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect_err("fails").message().to_owned()
@@ -210,7 +219,7 @@ fn a_function_of_a_module_this_build_lacks_is_reported_rather_than_guessed() {
      </xsl:stylesheet>"
   );
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(NUMBERS.as_bytes()).expect("well-formed");
+  let doc = parse_document(NUMBERS.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = xenolith_exslt::register(Functions::new());
   let error = Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect_err("fails");

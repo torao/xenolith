@@ -4,9 +4,18 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{ResultSink, Stylesheet, Transform, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// A sink that keeps what it was given, so a test can look at it.
 #[derive(Default)]
@@ -40,7 +49,7 @@ fn sheet(body: &str) -> String {
 /// Runs a stylesheet with a collecting sink, giving the principal result and the secondary ones.
 fn run(body: &str, xml: &str) -> (String, BTreeMap<String, String>) {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///dir/s.xsl").expect("compiles");
-  let document = build::parse(xml.as_bytes()).expect("well-formed");
+  let document = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&document);
   let sink = Rc::new(RefCell::new(Collected::default()));
   let result = Transform::new()
@@ -54,7 +63,7 @@ fn run(body: &str, xml: &str) -> (String, BTreeMap<String, String>) {
 /// The message a transformation fails with.
 fn error(body: &str, xml: &str, sink: Option<Rc<RefCell<dyn ResultSink>>>) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///dir/s.xsl").expect("compiles");
-  let document = build::parse(xml.as_bytes()).expect("well-formed");
+  let document = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&document);
   let mut run = Transform::new();
   if let Some(sink) = sink {
@@ -138,7 +147,7 @@ fn a_stylesheet_can_ask_whether_it_is_there() {
               <xsl:text>,</xsl:text>\
               <xsl:value-of select=\"element-available('exsl:invented')\"/></xsl:template>";
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///dir/s.xsl").expect("compiles");
-  let document = build::parse("<r/>".as_bytes()).expect("well-formed");
+  let document = parse_document("<r/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&document);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   assert_eq!(result.text(), "true,false");
@@ -155,7 +164,7 @@ fn without_the_extension_prefix_it_is_a_literal_result_element() {
        xmlns:exsl=\"http://exslt.org/common\">{body}</xsl:stylesheet>"
   );
   let stylesheet = Stylesheet::compile(plain.as_bytes(), "file:///dir/s.xsl").expect("compiles");
-  let document = build::parse("<r/>".as_bytes()).expect("well-formed");
+  let document = parse_document("<r/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&document);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   assert!(result.serialize().contains("document"), "{}", result.serialize());

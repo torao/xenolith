@@ -51,11 +51,15 @@ where
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::DomModel;
 /// use xenolith_xpath::{Context, Functions, Namespaces, Value, Variables, evaluate_in, parse};
 ///
-/// let doc = build::parse("<a/>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 ///
 /// // A closure is a Function, so this is all it takes to add one.

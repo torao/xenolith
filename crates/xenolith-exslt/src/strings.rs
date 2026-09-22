@@ -15,7 +15,9 @@
 //!
 //! ```
 //! use std::rc::Rc;
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::{DomModel, Documents};
 //! use xenolith_xpath::Functions;
 //! use xenolith_xslt::{DocumentSource, Stylesheet, Transform, TreeSpace};
@@ -30,7 +32,9 @@
 //!   "file:///s.xsl",
 //! )?;
 //!
-//! let source = build::parse("<a/>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! let documents = Documents::new();
 //! let model = DomModel::with_documents(&source, &documents);
 //! let space: Rc<dyn DocumentSource<_>> = Rc::new(TreeSpace::new(&documents));
@@ -49,7 +53,7 @@
 use std::rc::Rc;
 
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::Document;
+use xenolith_core::dom::Document;
 use xenolith_xdm::Model;
 use xenolith_xpath::{Context, Functions, Value};
 use xenolith_xslt::DocumentSource;

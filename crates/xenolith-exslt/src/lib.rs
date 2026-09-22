@@ -16,7 +16,9 @@
 //! live there because a module only exists when its feature does, and so does its example.)
 //!
 //! ```
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::DomModel;
 //! use xenolith_xpath::Functions;
 //! use xenolith_xslt::{Stylesheet, Transform};
@@ -28,7 +30,9 @@
 //!   "file:///s.xsl",
 //! )?;
 //!
-//! let doc = build::parse("<a/>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! let model = DomModel::new(&doc);
 //! // Whatever the caller already has, with every EXSLT module this build was made with.
 //! let functions = xenolith_exslt::register(Functions::new());
@@ -123,12 +127,16 @@ pub fn register<M: Model>(functions: Functions<M>) -> Functions<M> {
 ///
 /// ```
 /// use std::rc::Rc;
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::{DomModel, Documents, DomNode};
 /// use xenolith_xpath::Functions;
 /// use xenolith_xslt::{DocumentSource, TreeSpace};
 ///
-/// let source = build::parse("<a/>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let documents = Documents::new();
 /// let model = DomModel::with_documents(&source, &documents);
 /// let space: Rc<dyn DocumentSource<DomNode>> = Rc::new(TreeSpace::new(&documents));

@@ -1,14 +1,23 @@
 //! The core function library (XPath 1.0 §4), evaluated against a document.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{DomModel, Model};
 use xenolith_xpath::{Value, XPath};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// An expression's result over `xml`, converted to a string the way XPath would. The prefix `p`
 /// is bound, since the sample document uses it.
 fn value(xml: &str, expression: &str) -> String {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
   let value = query.evaluate(&model, model.root_node()).expect("evaluates");
@@ -17,7 +26,7 @@ fn value(xml: &str, expression: &str) -> String {
 
 /// The string-values of the nodes an expression selects, in document order.
 fn text(xml: &str, expression: &str) -> String {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
   match query.evaluate(&model, model.root_node()).expect("evaluates") {
@@ -28,7 +37,7 @@ fn text(xml: &str, expression: &str) -> String {
 
 /// The message of the error an expression fails with.
 fn error(xml: &str, expression: &str) -> String {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let query = XPath::new().compile(expression).expect("parses");
   let error = query.evaluate(&model, model.root_node()).expect_err("fails");

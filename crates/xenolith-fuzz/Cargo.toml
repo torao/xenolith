@@ -17,9 +17,8 @@ publish = false
 # The features the properties need named outright, as the CLI does — see the note in ci.yml about
 # why this crate is left out of the workspace-wide no-default-features runs.
 xenolith-core = { workspace = true }
-xenolith-parser = { workspace = true, features = ["encodings", "xml-base", "xml-id"] }
-xenolith-validate = { workspace = true, features = ["encodings", "xml-id"] }
-xenolith-dom = { workspace = true, features = ["parse"] }
+xenolith-validate = { workspace = true, features = ["encodings"] }
+xenolith-dom = { workspace = true }
 xenolith-serialize = { workspace = true }
 xenolith-xdm = { workspace = true }
 xenolith-xpath = { workspace = true }

@@ -1,4 +1,4 @@
-//! The XPath data model over one or more [`xenolith_dom`] documents.
+//! The XPath data model over one or more [`xenolith_core::dom`] documents.
 //!
 //! The DOM is close to the XPath model but not the same, so this view adjusts three things as it
 //! reads (never writing): a run of adjacent text and CDATA nodes reads as one text node; every
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use xenolith_core::name::{NameId, XML_NS_URI, XMLNS_NS_URI};
-use xenolith_dom::{Document, NodeId, NodeType};
+use xenolith_core::dom::{Document, NodeId, NodeType};
 
 use crate::{ExpandedName, Model, NodeKind};
 
@@ -130,18 +130,28 @@ impl Documents {
   /// # Examples
   ///
   /// ```
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::Document;
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::{Documents, DomModel, Model};
   ///
-  /// let primary = build::parse("<a/>".as_bytes())?;
+  /// // Reads a small document into a tree.
+  /// fn parse(xml: &str) -> Result<Document, Box<dyn std::error::Error>> {
+  ///   let mut builder = DomBuilder::new();
+  ///   StreamSource::new(xml.as_bytes()).with_handler(&mut builder).emit()?;
+  ///   Ok(builder.into_document()?)
+  /// }
+  ///
+  /// let primary = parse("<a/>")?;
   /// let documents = Documents::new();
   /// let model = DomModel::with_documents(&primary, &documents);
   ///
-  /// let second = build::parse("<b>text</b>".as_bytes())?;
+  /// let second = parse("<b>text</b>")?;
   /// let root = documents.add("urn:second", second);
   /// assert_eq!(model.string_value(root), "text");
   /// assert_eq!(documents.find("urn:second"), Some(root), "asked for again, it is the same tree");
-  /// # Ok::<(), xenolith_core::Error>(())
+  /// # Ok::<(), Box<dyn std::error::Error>>(())
   /// ```
   pub fn add(&self, uri: &str, document: Document) -> DomNode {
     let root = document.document_node();

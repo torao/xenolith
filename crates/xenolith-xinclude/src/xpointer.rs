@@ -10,7 +10,7 @@
 //! wins. The full `xpointer()` scheme (XPath) is not supported.
 
 use xenolith_core::chars::is_ncname;
-use xenolith_dom::{Document, NodeId, NodeType};
+use xenolith_core::dom::{Document, NodeId, NodeType};
 
 /// Selects the element a pointer identifies in `doc`, if any.
 pub(crate) fn select(doc: &Document, xpointer: &str) -> Option<NodeId> {

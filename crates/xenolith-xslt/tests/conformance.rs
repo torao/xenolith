@@ -53,12 +53,29 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use xenolith_dom::build;
-use xenolith_parser::Reader;
-use xenolith_parser::resolve::{EntityRequest, UriResolver};
+use xenolith_core::event::{EventCursor, EventHandler};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
+use xenolith_core::io::resolve::{EntityRequest, UriResolver};
 use xenolith_xdm::{Documents, DomModel};
 use xenolith_xpath::Functions;
 use xenolith_xslt::{LoadedDocuments, Loader, OutputMethod, Stylesheet, Transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  parse_reader(StreamSource::new(xml))
+}
+
+/// Reads a prepared reader into a tree, so a system identifier or a resolver can be set first.
+fn parse_reader<R: std::io::Read>(mut source: StreamSource<'_, R>) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  // The builder is a local, so it cannot be installed on a source made elsewhere; the run is driven here and each
+  // event handed to it as it arrives.
+  let mut builder = DomBuilder::new();
+  while let Some(event) = source.next()? {
+    builder.handle(&event)?;
+  }
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// How a case's result is to be compared with what it expected.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,13 +211,13 @@ fn files_under(root: &Path, extension: &str) -> Vec<(String, PathBuf)> {
 /// real XML before a single case is judged.
 fn catalogued_cases(root: &Path) -> Vec<Case> {
   let Ok(source) = std::fs::read(root.join("catalog.xml")) else { return Vec::new() };
-  let Ok(document) = build::parse(source.as_slice()) else {
+  let Ok(document) = parse_document(source.as_slice()) else {
     eprintln!("the catalogue could not be parsed");
     return Vec::new();
   };
 
   let mut cases = Vec::new();
-  let mut stack: Vec<(xenolith_dom::NodeId, String)> = Vec::new();
+  let mut stack: Vec<(xenolith_core::dom::NodeId, String)> = Vec::new();
   if let Some(top) = document.document_element() {
     stack.push((top, String::new()));
   }
@@ -229,8 +246,8 @@ fn catalogued_cases(root: &Path) -> Vec<Case> {
 
 /// Reads one `test-case`.
 fn read_case(
-  document: &xenolith_dom::Document,
-  element: xenolith_dom::NodeId,
+  document: &xenolith_core::dom::Document,
+  element: xenolith_core::dom::NodeId,
   root: &Path,
   major: &str,
 ) -> Option<Case> {
@@ -338,8 +355,8 @@ fn transform_case(case: &Case) -> Result<Written, String> {
   };
   // The system identifier is what a declared DTD beside the data file is resolved against.
   let system_id = case.data.as_deref().map_or_else(|| "urn:empty".to_owned(), system_id);
-  let reader = Reader::with_system_id(data.as_slice(), &system_id).with_resolver(Files);
-  let document = build::parse_reader(reader).map_err(|error| format!("the data: {}", error.message()))?;
+  let reader = StreamSource::with_system_id(data.as_slice(), &system_id).with_resolver(Files);
+  let document = parse_reader(reader).map_err(|error| format!("the data: {}", error.message()))?;
 
   // `document()` refers to files beside the case's own, so the trees it fetches share the node space
   // the source document is read through.
@@ -391,7 +408,7 @@ fn normalize_indented(xml: &str, indented: bool) -> Option<String> {
     // Whitespace outside the document element is layout rather than content — XML allows it
     // there and gives it no meaning — so a blank line between the declaration and the root is
     // not a difference of any kind.
-    if document.node_type(child) == xenolith_dom::NodeType::TEXT_NODE {
+    if document.node_type(child) == xenolith_core::dom::NodeType::TEXT_NODE {
       continue;
     }
     canonical(&document, child, indented, &mut written);
@@ -400,8 +417,8 @@ fn normalize_indented(xml: &str, indented: bool) -> Option<String> {
 }
 
 /// Parses XML, wrapping it first if it is a fragment rather than a document.
-fn parse_loosely(xml: &str) -> Option<xenolith_dom::Document> {
-  if let Ok(document) = build::parse(xml.as_bytes())
+fn parse_loosely(xml: &str) -> Option<xenolith_core::dom::Document> {
+  if let Ok(document) = parse_document(xml.as_bytes())
     && document.document_element().is_some()
   {
     return Some(document);
@@ -411,14 +428,14 @@ fn parse_loosely(xml: &str) -> Option<xenolith_dom::Document> {
     Some((head, rest)) if head.trim_start().starts_with("<?xml") => rest,
     _ => xml,
   };
-  build::parse(format!("<xenolith-wrapper>{body}</xenolith-wrapper>").as_bytes()).ok()
+  parse_document(format!("<xenolith-wrapper>{body}</xenolith-wrapper>").as_bytes()).ok()
 }
 
 /// Writes one node in the canonical form described on [`normalize`].
-fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, indented: bool, into: &mut String) {
+fn canonical(document: &xenolith_core::dom::Document, node: xenolith_core::dom::NodeId, indented: bool, into: &mut String) {
   use std::fmt::Write as _;
   match document.node_type(node) {
-    xenolith_dom::NodeType::ELEMENT_NODE => {
+    xenolith_core::dom::NodeType::ELEMENT_NODE => {
       let _ = write!(into, "<{}", expanded(document, node));
       let mut attributes: Vec<String> = document
         .attributes(node)
@@ -436,7 +453,7 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
       // Where an indenting processor may have put whitespace: between an element's children,
       // when they are elements. Text of its own is never touched, here or in the writer.
       let among_elements = indented
-        && document.children(node).any(|child| document.node_type(child) == xenolith_dom::NodeType::ELEMENT_NODE);
+        && document.children(node).any(|child| document.node_type(child) == xenolith_core::dom::NodeType::ELEMENT_NODE);
       for child in document.children(node) {
         if among_elements && is_only_whitespace(document, child) {
           continue;
@@ -445,14 +462,14 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
       }
       let _ = write!(into, "</{}>", expanded(document, node));
     }
-    xenolith_dom::NodeType::TEXT_NODE | xenolith_dom::NodeType::CDATA_SECTION_NODE => {
+    xenolith_core::dom::NodeType::TEXT_NODE | xenolith_core::dom::NodeType::CDATA_SECTION_NODE => {
       // A CDATA section is a way of writing text, not a different kind of content.
       into.push_str(document.node_value(node).unwrap_or_default());
     }
-    xenolith_dom::NodeType::COMMENT_NODE => {
+    xenolith_core::dom::NodeType::COMMENT_NODE => {
       let _ = write!(into, "<!--{}-->", document.node_value(node).unwrap_or_default());
     }
-    xenolith_dom::NodeType::PROCESSING_INSTRUCTION_NODE => {
+    xenolith_core::dom::NodeType::PROCESSING_INSTRUCTION_NODE => {
       let _ = write!(into, "<?{} {}?>", document.node_name(node), document.node_value(node).unwrap_or_default());
     }
     _ => {}
@@ -460,13 +477,13 @@ fn canonical(document: &xenolith_dom::Document, node: xenolith_dom::NodeId, inde
 }
 
 /// Whether a node is a text node holding nothing but whitespace.
-fn is_only_whitespace(document: &xenolith_dom::Document, node: xenolith_dom::NodeId) -> bool {
-  document.node_type(node) == xenolith_dom::NodeType::TEXT_NODE
+fn is_only_whitespace(document: &xenolith_core::dom::Document, node: xenolith_core::dom::NodeId) -> bool {
+  document.node_type(node) == xenolith_core::dom::NodeType::TEXT_NODE
     && document.node_value(node).unwrap_or_default().trim().is_empty()
 }
 
 /// A name as the data model has it: the namespace URI and the local part, with no prefix.
-fn expanded(document: &xenolith_dom::Document, node: xenolith_dom::NodeId) -> String {
+fn expanded(document: &xenolith_core::dom::Document, node: xenolith_core::dom::NodeId) -> String {
   let local = document.local_name(node).unwrap_or_default();
   match document.namespace_uri(node) {
     Some(uri) => format!("{{{uri}}}{local}"),
@@ -475,7 +492,7 @@ fn expanded(document: &xenolith_dom::Document, node: xenolith_dom::NodeId) -> St
 }
 
 /// Whether an attribute is an `xmlns` declaration rather than an attribute of the element.
-fn is_namespace_declaration(document: &xenolith_dom::Document, attribute: xenolith_dom::NodeId) -> bool {
+fn is_namespace_declaration(document: &xenolith_core::dom::Document, attribute: xenolith_core::dom::NodeId) -> bool {
   document.prefix(attribute) == Some("xmlns") || document.node_name(attribute) == "xmlns"
 }
 

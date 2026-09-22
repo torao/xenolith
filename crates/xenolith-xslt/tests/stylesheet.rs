@@ -3,9 +3,18 @@
 use std::collections::HashMap;
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{DomModel, Model};
 use xenolith_xslt::{Loader, Stylesheet};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -40,7 +49,7 @@ impl Loader for Modules {
 
 /// The priority and precedence of the rule chosen for the first `b` element of `xml`.
 fn chosen(stylesheet: &Stylesheet, xml: &str, mode: Option<&str>) -> Option<(f64, i32)> {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let root = model.children(model.root_node())[0];
   let node = model.children(root).into_iter().find(|&n| model.qualified_name(n).as_deref() == Some("b"))?;
@@ -95,7 +104,7 @@ fn among_equals_the_last_declaration_wins() {
   let stylesheet = compile("<xsl:template match=\"b\" priority=\"1\"/><xsl:template match=\"*\" priority=\"1\"/>");
   // Both match with priority 1; the specification calls this an error and lets an
   // implementation recover by taking the last, which is what happens.
-  let doc = build::parse("<a><b/></a>".as_bytes()).unwrap();
+  let doc = parse_document("<a><b/></a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let root = model.children(model.root_node())[0];
   let b = model.children(root)[0];
@@ -124,7 +133,7 @@ fn a_prefix_in_a_pattern_means_what_the_stylesheet_declares() {
   let stylesheet = Stylesheet::compile(text.as_bytes(), "file:///s.xsl").expect("compiles");
 
   // The document uses a different prefix for the same namespace; only the namespace matters.
-  let doc = build::parse("<a xmlns:q='urn:d'><q:b/></a>".as_bytes()).unwrap();
+  let doc = parse_document("<a xmlns:q='urn:d'><q:b/></a>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let root = model.children(model.root_node())[0];
   let b = model.children(root)[0];

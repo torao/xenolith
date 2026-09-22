@@ -1,9 +1,9 @@
 //! XInclude 1.0 processing for xenolith.
 //!
-//! XInclude is a post-processing pass over a [DOM](xenolith_dom): it finds `xi:include`
+//! XInclude is a post-processing pass over a [DOM](xenolith_core::dom): it finds `xi:include`
 //! elements and replaces each with the resource it names, so a document can be assembled from
 //! parts. This crate expands a tree in place, on top of the base URIs the
-//! [builder](xenolith_dom::build) recorded — `href` resolves against the base URI in effect
+//! [builder](xenolith_core::dom::build) recorded — `href` resolves against the base URI in effect
 //! where the `xi:include` sits.
 //!
 //! Fetching a resource is I/O, and the same attack surface as an external entity, so it is not
@@ -34,7 +34,9 @@
 //! ```
 //! use std::collections::HashMap;
 //! use xenolith_core::Error;
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xinclude::{Loader, XInclude};
 //!
 //! // A loader backed by a map, standing in for a filesystem or a catalogue.
@@ -45,10 +47,13 @@
 //!   }
 //! }
 //!
-//! let mut doc = build::parse_with_system_id(
+//! let mut builder = DomBuilder::new();
+//! StreamSource::with_system_id(
 //!   "<doc><xi:include href='part.xml' xmlns:xi='http://www.w3.org/2001/XInclude'/></doc>".as_bytes(),
 //!   "file:///doc.xml",
-//! )?;
+//! )
+//! .with_handler(&mut builder).emit()?;
+//! let mut doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! let mut loader = Map([("file:///part.xml", &b"<p>included</p>"[..])].into_iter().collect());
 //! XInclude::new().with_base_fixup(false).expand(&mut doc, &mut loader)?;
 //!

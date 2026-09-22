@@ -9,21 +9,16 @@
 
 ## Layout
 
-13 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
+8 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
 
 | Crate | 責務 |
 |---|---|
-| `xenolith-core` | 全層が使う語彙。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI、文字デコード、push イベント語彙（`core::event`）、XML コア構造の模型（`core::model`、DTD の宣言モデルなど） |
-| `xenolith-parser` | XML 1.0 のプルパーサ。DTD の構文解析（sans-I/O）・組み立て・走査を `dtd` モジュールに持ち、DOCTYPE を検出するとそれで解析して外部サブセットとパラメータ実体を取得する。実体解決、SAX 相当の push アダプタ、sans-I/O コア |
-| `xenolith-validate` | スキーマ非依存の `Validator` / `ErrorListener` と、その最初の実装である DTD 検証器 |
-| `xenolith-dom` | アリーナ木。`Vec<NodeSlot>` + `Copy` な `NodeId`。W3C DOM Level 3 Core の名前を保つ |
-| `xenolith-serialize` | DOM 部分木から整形式 XML へ。エスケープ、名前空間修復、StAX 相当の `XmlWriter` |
+| `xenolith` | 本体。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI（平場）、イベント語彙・strict 検証・スキーマ非依存の `Schema`/`Validator` 契約と `xml:id` 検証（`event`）、XML 1.0 のプルパーサ・文字デコード・実体解決・SAX 相当の push アダプタ・シリアライザと StAX 相当の `XmlWriter`（`io`）、DTD の宣言モデル・構文解析・検証器（`dtd`）、アリーナ木（`dom`）、それらを繋いだ `Reader` / `Writer`（クレート直下） |
 | `xenolith-xinclude` | `xi:include` の展開。XPointer の framework / `element()` / `xmlns()` |
 | `xenolith-xdm` | XPath データモデル。`Model` トレイトと DOM 実装 |
 | `xenolith-xpath` | XPath 1.0。字句、構文、評価器、コア関数、拡張関数の登録機構 |
 | `xenolith-xslt` | XSLT 1.0。パターン、スタイルシート、エンジン、`xsl:output` |
 | `xenolith-exslt` | EXSLT 各モジュール。エンジンには組み込まず、拡張関数として登録する |
-| `xenolith` | ファサード。全層の再輸出と `javax.xml.transform` 相当の `transform` モジュール |
 | `xenolith-cli` | コマンドライン。実行ファイル名は `xenolith` |
 | `xenolith-fuzz` | ファジングで検査する性質と、その種コーパス |
 
@@ -38,7 +33,7 @@
 DOM の上ではなく**データモデル**の上で動く。隣接テキストの併合、名前空間ノードの合成、文書順の全順序。ここが
 腑に落ちればエンジンの 2,000 行超が読め、落ちなければどこも読めない。
 
-以降は `xenolith-dom` → `xenolith-xpath` → `xenolith-xslt` の順。**`xenolith-parser` は最後でよい。** 最も
+以降は `xenolith` の `dom` → `xenolith-xpath` → `xenolith-xslt` の順。**`xenolith` の `io::parse` は最後でよい。** 最も
 難しいが、最も外部検証が効いており、実装を疑う理由ができるまで読む必要はない。
 
 各クレートの `lib.rs` 冒頭は方向づけとして書いてある。まずそこを読み、そこが指すモジュールへ進む。
@@ -88,7 +83,7 @@ CI と同じものをローカルで走らせられる。プッシュ前にこ�
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features
 cargo test --workspace --all-features
-cargo test --workspace --exclude xenolith-cli --exclude xenolith-fuzz --no-default-features
+cargo test --workspace --no-default-features
 cargo doc --workspace --no-deps --all-features
 cargo build --workspace --all-features    # MSRV 1.85 のツールチェインで
 ```
@@ -100,7 +95,7 @@ cargo build --workspace --all-features    # MSRV 1.85 のツールチェイン�
 
 ```bash
 # W3C XML 適合スイート（パーサと検証器）
-XMLCONF=xmlconf cargo test -p xenolith-parser --test conformance -- --nocapture
+XMLCONF=xmlconf cargo test -p xenolith --test parser_conformance -- --nocapture
 
 # OASIS/Xalan XSLT 適合スイート
 git clone --depth 1 https://github.com/apache/xalan-test.git xslt-conformance
@@ -135,11 +130,11 @@ Linux で走らせる。
 
 | Layer | 外部の証拠 |
 |---|---|
-| `xenolith-parser` | W3C XML 適合スイート（整形式判定） |
-| `xenolith-validate` | 同スイートの invalid 群。検出できない 8 件は理由付きで `KNOWN_DEVIATIONS` に記録 |
+| `xenolith` の `io::parse` | W3C XML 適合スイート（整形式判定） |
+| `xenolith` の `dtd::validate` | 同スイートの invalid 群。検出できない 8 件は理由付きで `KNOWN_DEVIATIONS` に記録 |
 | `xenolith-xpath` | JDK の `javax.xml.xpath` との差分テスト、プロパティテスト、ファジング |
 | `xenolith-xslt` | OASIS/Xalan 適合スイート |
-| `xenolith-dom` / `xenolith-serialize` | ファジングの往復性質（書いたものが読み戻せ、同じ木になる） |
+| `xenolith` の `dom` / `io::write` | ファジングの往復性質（書いたものが読み戻せ、同じ木になる） |
 | `xenolith-xdm` / `xenolith-xinclude` / `xenolith-exslt` / `xenolith-cli` | 自前のテストのみ |
 
 ## Adding to the workspace

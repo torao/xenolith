@@ -4,7 +4,10 @@
 use std::cell::RefCell;
 
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::{Document, NodeId, build};
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::dom::{Document, NodeId};
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{Documents, DomNode};
 
 /// Fetches the bytes of a stylesheet module given by an absolute URI.
@@ -167,7 +170,9 @@ impl<N> DocumentSource<N> for NoDocuments {
 /// documents that model cannot read:
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::{DomModel, Documents};
 /// use xenolith_xslt::{LoadedDocuments, Loader};
 /// # use xenolith_core::error::Result;
@@ -179,7 +184,9 @@ impl<N> DocumentSource<N> for NoDocuments {
 ///   }
 /// }
 ///
-/// let source = build::parse("<a/>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let documents = Documents::new();
 /// let model = DomModel::with_documents(&source, &documents);
 /// let available = LoadedDocuments::new(&documents, FromMemory);
@@ -207,7 +214,7 @@ impl<L: Loader> DocumentSource<DomNode> for LoadedDocuments<L> {
       return Ok(Some(found));
     }
     let source = self.loader.borrow_mut().load(uri)?;
-    let document = build::parse_with_system_id(source.as_slice(), uri)?;
+    let document = parse_with_system_id(source.as_slice(), uri)?;
     Ok(Some(self.documents.add(uri, document)))
   }
 
@@ -225,7 +232,9 @@ impl<L: Loader> DocumentSource<DomNode> for LoadedDocuments<L> {
 ///
 /// ```
 /// use std::rc::Rc;
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::{DomModel, Documents};
 /// use xenolith_xpath::Functions;
 /// use xenolith_xslt::{Stylesheet, Transform, TreeSpace};
@@ -237,7 +246,9 @@ impl<L: Loader> DocumentSource<DomNode> for LoadedDocuments<L> {
 ///   "file:///s.xsl",
 /// )?;
 ///
-/// let source = build::parse("<a/>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let documents = Documents::new();
 /// let model = DomModel::with_documents(&source, &documents);
 /// let space = Rc::new(TreeSpace::new(&documents));
@@ -281,4 +292,13 @@ impl DocumentSource<DomNode> for TreeSpace {
 fn adopt_into(documents: &Documents, document: Document, root: NodeId) -> DomNode {
   let uri = format!("urn:xenolith:result-tree-fragment:{}", documents.len());
   documents.add_rooted(&uri, document, root)
+}
+
+/// Reads a document's bytes into a tree, with `system_id` as its base URI, through the parser and the builder.
+///
+/// The DOM crate depends on no parser, so this wiring lives with the consumer that reads documents.
+pub(crate) fn parse_with_system_id(bytes: &[u8], system_id: &str) -> Result<Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::with_system_id(bytes, system_id).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(Error::internal)
 }

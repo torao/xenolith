@@ -54,7 +54,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::{Document, NodeId, NodeType};
+use xenolith_core::dom::{Document, NodeId, NodeType};
 use xenolith_xdm::{Model, NodeKind};
 use xenolith_xpath::{Context, Expr, Functions, Namespaces, PathStart, Value, Variables};
 
@@ -177,7 +177,9 @@ impl ResultTree {
   /// # Examples
   ///
   /// ```
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::DomModel;
   /// use xenolith_xslt::{Stylesheet, transform};
   ///
@@ -189,7 +191,9 @@ impl ResultTree {
   ///   "file:///s.xsl",
   /// )?;
   ///
-  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let mut builder = DomBuilder::new();
+  /// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+  /// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
   /// let model = DomModel::new(&doc);
   /// let result = transform(&stylesheet, &model, model.root_node())?;
   /// assert_eq!(result.serialize(), "<p>text<br></p>", "the HTML method leaves br open");
@@ -222,7 +226,9 @@ impl ResultTree {
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::DomModel;
 /// use xenolith_xslt::{Stylesheet, transform};
 ///
@@ -234,7 +240,9 @@ impl ResultTree {
 ///   "file:///s.xsl",
 /// )?;
 ///
-/// let doc = build::parse("<people><name>Ada</name><name>Alan</name></people>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<people><name>Ada</name><name>Alan</name></people>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 /// let result = transform(&stylesheet, &model, model.root_node())?;
 /// assert_eq!(result.text(), "Ada;Alan;");
@@ -310,7 +318,9 @@ impl Transform {
   /// # Examples
   ///
   /// ```
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::DomModel;
   /// use xenolith_xslt::{Stylesheet, Transform};
   ///
@@ -322,7 +332,9 @@ impl Transform {
   ///   "file:///s.xsl",
   /// )?;
   ///
-  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let mut builder = DomBuilder::new();
+  /// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+  /// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
   /// let model = DomModel::new(&doc);
   ///
   /// let default = Transform::new().run(&stylesheet, &model, model.root_node())?;
@@ -366,7 +378,9 @@ impl Transform {
   /// # Examples
   ///
   /// ```
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::DomModel;
   /// use xenolith_xpath::{Context, Functions, Value};
   /// use xenolith_xslt::{Stylesheet, Transform};
@@ -379,7 +393,9 @@ impl Transform {
   ///   "file:///s.xsl",
   /// )?;
   ///
-  /// let doc = build::parse("<a/>".as_bytes())?;
+  /// let mut builder = DomBuilder::new();
+  /// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+  /// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
   /// let model = DomModel::new(&doc);
   ///
   /// // The set is tied to the model it will run against, so it is built after it.
@@ -417,7 +433,9 @@ impl Transform {
   /// ```
   /// use std::rc::Rc;
   /// use xenolith_core::error::Result;
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::{DomModel, Documents};
   /// use xenolith_xpath::Functions;
   /// use xenolith_xslt::{LoadedDocuments, Loader, Stylesheet, Transform};
@@ -439,7 +457,9 @@ impl Transform {
   ///   "file:///s.xsl",
   /// )?;
   ///
-  /// let source = build::parse("<a/>".as_bytes())?;
+  /// let mut builder = DomBuilder::new();
+  /// StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+  /// let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
   /// // The handle is shared: the model reads what the source fetches.
   /// let documents = Documents::new();
   /// let model = DomModel::with_documents(&source, &documents);
@@ -2306,7 +2326,7 @@ fn describe<N>(value: &Value<N>) -> &'static str {
 
 /// The result tree is built by this engine, so a DOM refusal is a bug here rather than
 /// something a stylesheet did.
-fn dom_error(error: xenolith_dom::DomException) -> Error {
+fn dom_error(error: xenolith_core::dom::DomException) -> Error {
   Error::internal(format!("building the result tree: {error}"))
 }
 
@@ -2350,7 +2370,7 @@ mod tests {
   #[test]
   fn the_depth_guard_is_reached_before_the_stack_is() {
     let stylesheet = Stylesheet::compile(ENDLESS.as_bytes(), "file:///s.xsl").expect("compiles");
-    let document = xenolith_dom::build::parse("<a/>".as_bytes()).expect("well-formed");
+    let document = crate::loader::parse_with_system_id(b"<a/>", "urn:test").expect("well-formed");
     let model = xenolith_xdm::DomModel::new(&document);
 
     let _ = stack_probe::take();

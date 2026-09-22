@@ -19,8 +19,8 @@ path = "src/main.rs"
 [dependencies]
 # The whole library, with everything on: a command-line tool has no reason to leave a capability
 # out, and someone reaching for it wants it to just work.
-xenolith = { workspace = true, features = ["encodings", "parse", "icu", "exslt", "xinclude", "xml-base", "xml-id"] }
-xenolith-validate = { workspace = true, features = ["encodings", "xml-id"] }
+xenolith = { workspace = true, features = ["encodings", "icu", "exslt", "xinclude"] }
+xenolith-validate = { workspace = true, features = ["encodings"] }
 # Argument parsing. Only this binary depends on it, so nobody using the library pays for it.
 clap = { workspace = true }
 

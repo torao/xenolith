@@ -435,12 +435,16 @@ mod tests {
   /// back as unknown.
   #[test]
   fn the_named_core_functions_are_the_ones_that_are_dispatched() {
-    use xenolith_dom::build;
+    use xenolith_core::event::{EventCursor, EventSource};
+    use xenolith_core::dom::build::DomBuilder;
+    use xenolith_core::io::StreamSource;
     use xenolith_xdm::DomModel;
 
     use crate::context::{Namespaces, Variables};
 
-    let document = build::parse("<a/>".as_bytes()).expect("well-formed");
+    let mut builder = DomBuilder::new();
+    StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit().expect("well-formed");
+    let document = builder.into_document().expect("a tree");
     let model = DomModel::new(&document);
     let namespaces = Namespaces::new();
     let variables = Variables::new();

@@ -18,23 +18,18 @@ every check CI runs.
 
 ## Crates
 
-Depend on [`xenolith`](crates/xenolith) — one dependency that gathers the layers under one
-name. The work is split into focused crates so that a caller who wants only the parser does not
-compile the collation tables or the transformation engine, and the facade re-exports them:
+Depend on [`xenolith`](crates/xenolith) — XML itself, in one crate. The layers built on top of
+it are separate crates, so a caller who wants only XML does not compile the collation tables or
+the transformation engine:
 
 ```rust
-use xenolith::parser::Reader; // the parser lives in its own crate, reached through the facade
+use xenolith::io::StreamSource; // reading is `io`
 use xenolith::{Error, QName}; // shared primitives are at the crate root
 ```
 
 | Crate | Status | Contents |
 | --- | --- | --- |
-| [`xenolith`](crates/xenolith) | facade | the entry point; re-exports the layers below under one name |
-| [`xenolith-core`](crates/xenolith-core) | Phase 0 | errors and locations, XML character classes, interned names, RFC 3986 URIs, character decoding |
-| [`xenolith-parser`](crates/xenolith-parser) | Phase 3e | a namespace-aware XML pull parser with a full DTD (internal and external subsets, parameter entities), entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, a SAX-style push adapter, and a sans-I/O core |
-| [`xenolith-validate`](crates/xenolith-validate) | Phase 2c | a schema-agnostic validation framework (`Validator` / `Schema` / `ErrorListener`) with a DTD validator as its first implementation: content models, attribute and ID/IDREF constraints, root-element checking, and `xml:id` |
-| [`xenolith-dom`](crates/xenolith-dom) | Phase 4a | an arena-based DOM tree (`Vec<NodeSlot>` + `NodeId`) with a W3C-shaped, Rust-idiomatic API: node kinds (attributes included), navigation, values, mutation with `DOMException`, live `NodeList` / `NamedNodeMap`, `getElementsByTagName(NS)`, `getElementById`, namespace checks, base URIs (XML Base), and `build` to make a tree from parsed XML |
-| [`xenolith-serialize`](crates/xenolith-serialize) | Phase 3e | a serializer from a DOM subtree to well-formed XML text (escaping, optional XML declaration and indentation, namespace repair) and a StAX-style streaming `XmlWriter`; UTF-8 output |
+| [`xenolith`](crates/xenolith) | Phase 3e | the body of the library: errors and locations, XML character classes, interned names, RFC 3986 URIs; the event vocabulary, the schema-agnostic `Schema`/`Validator` contract and `xml:id` validation (`event`); a namespace-aware XML pull parser with character decoding, entity resolution via a resolver, attribute defaults, optional XML Base / `xml:id`, a SAX-style push adapter and a sans-I/O core (`io`); the DTD's model, its parser and its validator — content models, attribute and ID/IDREF constraints, root-element checking (`dtd`); an arena-based DOM tree (`dom`); a serializer from a tree to well-formed XML text with escaping, optional indentation and namespace repair, and a StAX-style streaming `XmlWriter` (`io::write`) |
 | [`xenolith-xinclude`](crates/xenolith-xinclude) | Phase 3.5c | XInclude processing over a DOM: `xi:include` with `parse="xml"`/`"text"`, href resolution against the base URI, XPointer subresource selection (shorthand and `element()`), `xi:fallback`, recursion with loop detection and limits, and base URI / language fixup; resources are fetched through a caller-supplied `Loader` |
 | [`xenolith-xdm`](crates/xenolith-xdm) | Phase 4d | the XPath 1.0 data model: a `Model` trait (the seven node kinds, the axis primitives, document order, string-values) and a DOM implementation that merges text and synthesizes namespace nodes without changing the tree |
 | [`xenolith-xpath`](crates/xenolith-xpath) | Phase 4e | XPath 1.0, complete: a lexer that settles the language's context-dependent tokens, a recursive-descent parser, and an evaluator over the data model — all thirteen axes, node tests, predicates, the four value types and their conversions, and the whole core function library, behind a compile-once `XPath` |
@@ -42,8 +37,9 @@ use xenolith::{Error, QName}; // shared primitives are at the crate root
 | [`xenolith-exslt`](crates/xenolith-exslt) | Phase 6.5g | EXSLT extension functions, one feature per module: `math`, `sets`, `strings`, `dates` (reading an ISO 8601 date or time apart), `regexp` (a linear-time matcher: no backreferences, and no pattern that can be made to run for ever) and `common` (`object-type()`, `node-set()`). Nothing is built into the engine — these are registered the way any caller's functions are. `exsl:document`, which writes a result other than the principal one, is carried out by the engine through a `ResultSink` the caller supplies; without one it is refused rather than writing to a path the stylesheet chose. `functions`, where a stylesheet declares a function of its own, is still to come |
 | [`xenolith-cli`](crates/xenolith-cli) | Phase 7b | the command-line tool, installed as `xenolith`: `transform`, `xpath`, `validate` and `format`. A binary, not a library — nothing you depend on pulls in an argument parser |
 
-Every library crate is re-exported through the facade. `xenolith-cli` is the exception: it is a
-binary, installed rather than depended on, and what it puts on the path is called `xenolith`.
+Each layer depends only on the ones below it. `xenolith-cli` is the exception to being depended
+on at all: it is a binary, installed rather than depended on, and what it puts on the path is
+called `xenolith`.
 
 ## The command line
 
@@ -88,7 +84,7 @@ with `-D warnings`. Anything that is part of ordinary use additionally carries a
 cargo test --workspace --all-features --doc
 ```
 
-The Java migration guide is included into the facade's documentation rather than only linked, so
+The Java migration guide is included into the crate's documentation rather than only linked, so
 its examples are compiled and run by that same command. A guide that had drifted from the API
 fails the build instead of misleading a reader.
 
@@ -104,7 +100,6 @@ cargo test --workspace --no-default-features
 | Feature | Default | Effect |
 |---|---|---|
 | `encodings` | on | Encodings beyond UTF-8, UTF-16, US-ASCII and ISO-8859-1, via `encoding_rs`. Without it those report an error giving the feature |
-| `parse` | on | `dom::build`, which turns parsed XML into a DOM tree |
 | `exslt` | on | `exslt`, the EXSLT extension functions. Each module has a feature of its own on that crate, and `function-available()` answers from the registry, so it agrees with the build without anything keeping the two in step |
 | `icu` | on | Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it a text sort compares by Unicode code point. XSLT 1.0 §10 leaves the collating sequence to the processor, so this changes the *answer*, not just the speed — see the behaviour report |
 | `xinclude` | off | `xinclude`, which expands `xi:include` over a DOM. Off by default: it fetches resources |
@@ -145,7 +140,7 @@ curl -O https://www.w3.org/XML/Test/xmlts20130923.tar.gz && tar xf xmlts20130923
 ```
 
 This exercises both halves: the parser against the well-formed and not-well-formed cases, and
-`xenolith-validate` against the invalid cases (89 of 97 detected; the remaining 8 are recorded
+the DTD validator against the invalid cases (89 of 97 detected; the remaining 8 are recorded
 as documented deviations). CI fetches the suite on every push. Cases needing machinery a phase
 does not yet have are counted as skipped and reported, never silently passed.
 
@@ -281,7 +276,7 @@ Every Rust example in it is compiled and run by `cargo test --doc`, so a guide t
 from the API would fail the build rather than mislead a reader.
 
 In short: the APIs follow their Java counterparts where the names carry meaning, so what you know
-transfers. `org.w3c.dom` is in [`xenolith-dom`](crates/xenolith-dom), `javax.xml.xpath` in
+transfers. `org.w3c.dom` is in [`xenolith`](crates/xenolith)'s `dom` module, `javax.xml.xpath` in
 [`xenolith-xpath`](crates/xenolith-xpath) — `XPath` is the environment, `XPathExpression` the
 compiled expression, `Namespaces` the `NamespaceContext`, `Variables` the
 `XPathVariableResolver` — and `javax.xml.transform` in `xenolith::transform`:

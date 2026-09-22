@@ -1,10 +1,19 @@
 //! What a stylesheet says about processing: whitespace, namespace aliases, and being read by a
 //! processor older than it was written for (XSLT 1.0 §3.4, §7.1.1, §2.5, §15).
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_serialize::Serializer;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{Stylesheet, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps top-level content in an `xsl:stylesheet` of a given version.
 fn sheet_version(version: &str, body: &str) -> String {
@@ -21,7 +30,7 @@ fn run(body: &str, xml: &str) -> String {
 fn run_version(version: &str, body: &str, xml: &str) -> String {
   let source = sheet_version(version, body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms").text()
 }
@@ -30,7 +39,7 @@ fn run_version(version: &str, body: &str, xml: &str) -> String {
 fn markup(body: &str, xml: &str) -> String {
   let source = sheet_version("1.0", body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   Serializer::new().to_string(result.document(), result.root())
@@ -40,7 +49,7 @@ fn markup(body: &str, xml: &str) -> String {
 fn error(body: &str, xml: &str) -> String {
   let source = sheet_version("1.0", body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect_err("fails").message().to_owned()
 }
@@ -134,7 +143,7 @@ fn a_namespace_alias_sends_one_namespace_into_the_result_as_another() {
                   <xsl:template match='/'><out:template match='x'/></xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   let written = Serializer::new().to_string(result.document(), result.root());
@@ -151,7 +160,7 @@ fn a_namespace_alias_may_name_the_default_namespace() {
                   <xsl:template match='/'><out:thing/></xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   let written = Serializer::new().to_string(result.document(), result.root());
@@ -166,7 +175,7 @@ fn without_an_alias_a_literal_element_keeps_its_namespace() {
                   <xsl:template match='/'><o:thing/></xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   let written = Serializer::new().to_string(result.document(), result.root());
@@ -183,7 +192,7 @@ fn a_namespace_declaration_of_the_stylesheet_is_never_copied_to_the_result() {
                   <xsl:template match='/'><out/></xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   assert_eq!(Serializer::new().to_string(result.document(), result.root()), "<out/>");
@@ -220,7 +229,7 @@ fn an_unknown_element_with_no_fallback_is_still_reported() {
   let body = "<xsl:template match='/'><xsl:perform-magic/></xsl:template>";
   let source = sheet_version("2.0", body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let error = transform(&stylesheet, &model, model.root_node()).expect_err("fails");
   assert!(error.message().contains("perform-magic"), "{}", error.message());
@@ -247,7 +256,7 @@ fn a_version_that_is_not_a_number_is_read_as_one_point_zero() {
   let body = "<xsl:template match='/'><xsl:perform-magic/></xsl:template>";
   let source = sheet_version("tomorrow", body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   assert!(transform(&stylesheet, &model, model.root_node()).is_err());
 }
@@ -266,7 +275,7 @@ fn with_extensions(body: &str) -> String {
 fn extension_markup(body: &str) -> Result<String, String> {
   let source = with_extensions(body);
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   match transform(&stylesheet, &model, model.root_node()) {
     Ok(result) => Ok(Serializer::new().to_string(result.document(), result.root())),
@@ -298,7 +307,7 @@ fn an_element_of_a_namespace_that_was_not_declared_is_a_literal_result_element()
   let source = "<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform' \
                 xmlns:o='urn:o'><xsl:template match='/'><o:thing/></xsl:template></xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   let written = Serializer::new().to_string(result.document(), result.root());
@@ -317,7 +326,7 @@ fn the_declaration_reaches_only_the_element_it_is_on_and_below() {
                   </xsl:template>\
                 </xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   // The one outside the declaration is a literal result element and comes out; the one inside
   // is an extension element and stops the transformation.

@@ -11,15 +11,18 @@ is what the code does.
 
 | Java | Here |
 |---|---|
-| `javax.xml.parsers.DocumentBuilder` | [`dom::build::parse`](xenolith_dom::build::parse) |
-| `org.w3c.dom.Document`, `Node`, `Element` | [`dom::Document`](xenolith_dom::Document) and a `Copy` [`NodeId`](xenolith_dom::NodeId) |
-| `org.w3c.dom.DOMException` | [`dom::DomException`](xenolith_dom::DomException) |
-| `javax.xml.stream.XMLStreamReader` (StAX) | [`parser::Reader`](xenolith_parser::Reader) |
-| `org.xml.sax.ContentHandler` + `SAXParser` | [`parser::sax::Handler`](xenolith_parser::sax::Handler) + [`EventSource::emit`](xenolith_parser::sax::EventSource::emit) |
-| `org.xml.sax.EntityResolver` | [`parser::resolve::UriResolver`](xenolith_parser::resolve::UriResolver) |
-| `setValidating(true)`, `javax.xml.validation` | [`Validatable::with_validation`](xenolith_validate::Validatable::with_validation), [`Validator`](xenolith_validate::Validator) |
-| `javax.xml.stream.XMLStreamWriter` | [`serialize::XmlWriter`](xenolith_serialize::XmlWriter) |
-| `LSSerializer` / `Transformer` used to print a tree | [`serialize::Serializer`](xenolith_serialize::Serializer) |
+| `javax.xml.parsers.DocumentBuilder` | [`dom::build::DomBuilder`](xenolith_core::dom::build::DomBuilder), driven by [`parser::StreamSource`](xenolith_core::io::StreamSource) |
+| `org.w3c.dom.Document`, `Node`, `Element` | [`dom::Document`](xenolith_core::dom::Document) and a `Copy` [`NodeId`](xenolith_core::dom::NodeId) |
+| `org.w3c.dom.DOMException` | [`dom::DomException`](xenolith_core::dom::DomException) |
+| `javax.xml.stream.XMLStreamReader` (StAX) | [`parser::StreamSource`](xenolith_core::io::StreamSource) |
+| `org.xml.sax.ContentHandler` + `SAXParser` | [`event::EventHandler`](xenolith_core::event::EventHandler) + [`EventCursor::emit`](xenolith_core::event::EventCursor::emit) |
+| `org.xml.sax.EntityResolver` | [`parser::resolve::UriResolver`](xenolith_core::io::resolve::UriResolver) |
+| `org.xml.sax.ErrorHandler` | the `Result` of [`EventCursor::emit`](xenolith_core::event::EventCursor::emit); a validity violation is a [`ValidityError`](xenolith_core::event::validate::ValidityError) in a report |
+| `org.xml.sax.ext.LexicalHandler` | the `Comment`, `Cdata` and `Doctype` events |
+| `org.xml.sax.DTDHandler`, `ext.DeclHandler` | the parsed [`Dtd`](xenolith_core::dtd::Dtd) the `Doctype` event carries |
+| `setValidating(true)`, `javax.xml.validation` | [`ValidatorSet`](xenolith_core::event::validate::ValidatorSet), [`Validator`](xenolith_core::event::validate::Validator) |
+| `javax.xml.stream.XMLStreamWriter` | [`io::write::WriterSource`](xenolith_core::io::write::WriterSource) + [`io::write::XmlWriter`](xenolith_core::io::write::XmlWriter) |
+| `LSSerializer` / `Transformer` used to print a tree | [`Writer`](xenolith_core::Writer), or [`DomSource`](xenolith_core::dom::DomSource) + [`io::write::XmlWriter`](xenolith_core::io::write::XmlWriter) |
 | `XPathFactory.newInstance().newXPath()` | [`xpath::XPath::new`](xenolith_xpath::XPath::new) |
 | `NamespaceContext` | [`XPath::with_namespace`](xenolith_xpath::XPath::with_namespace) |
 | `XPathVariableResolver` | [`xpath::Variables`](xenolith_xpath::Variables) |
@@ -42,9 +45,13 @@ String title = root.getFirstChild().getTextContent();
 ```
 
 ```rust
-use xenolith::dom::build;
+use xenolith::dom::build::DomBuilder;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::io::StreamSource;
 
-let doc = build::parse("<book><title>Dune</title></book>".as_bytes())?;
+let mut builder = DomBuilder::new();
+StreamSource::new("<book><title>Dune</title></book>".as_bytes()).with_handler(&mut builder).emit()?;
+let doc = builder.into_document().map_err(xenolith::Error::internal)?;
 let root = doc.document_element().unwrap();
 let title = doc.node(root).first_child().unwrap();
 
@@ -77,13 +84,13 @@ while (reader.hasNext()) {
 ```
 
 ```rust
-use xenolith::parser::{EventKind, Reader};
+use xenolith::io::{TokenKind, StreamSource};
 
-let mut reader = Reader::new("<doc>one<i>two</i></doc>".as_bytes());
+let mut reader = StreamSource::new("<doc>one<i>two</i></doc>".as_bytes());
 let mut text = String::new();
 while let Some(kind) = reader.advance()? {
-  if kind == EventKind::Text {
-    if let Some(chars) = reader.parser().event_ref().and_then(|e| e.text()) {
+  if kind == TokenKind::Text {
+    if let Some(chars) = reader.parser().token_ref().and_then(|e| e.text()) {
       text.push_str(chars);
     }
   }
@@ -93,10 +100,17 @@ assert_eq!(text, "onetwo");
 ```
 
 The accessors borrow the parser's buffers, so an event is readable until the next `advance` and
-costs nothing per event. When one has to outlive the call, `Event::capture` copies it and
-`Reader::events` gives an iterator of owned events.
+costs nothing per event. An event that has to outlive the call is copied by the handler that
+receives it, which keeps only the parts it needs.
 
 ## Reading a document as a push of events
+
+The parser itself is pull: you ask for the next event. Push is the same parser with the asking
+done for you — [`emit`](xenolith_core::event::EventCursor::emit) runs a source to the end and
+hands each event to an `EventHandler`. Both shapes are one parser, so it is a choice of shape,
+not of capability. Note that this is SAX-*style* push, not an implementation of the
+[SAX API](http://www.saxproject.org/): of the SAX handlers, only `ContentHandler` has a
+counterpart of its own, and the rest are answered by data you can query.
 
 `ContentHandler`, without the ceremony of `DefaultHandler` — every method already does nothing,
 so a handler overrides what it cares about:
@@ -115,8 +129,8 @@ class Titles extends DefaultHandler {
 ```
 
 ```rust
-use xenolith::parser::sax::{CharactersEvent, EventSource, Handler, StartElementEvent};
-use xenolith::parser::Reader;
+use xenolith::io::StreamSource;
+use xenolith::event::{EventRef, EventCursor, EventHandler, EventSource};
 
 #[derive(Default)]
 struct Titles {
@@ -124,23 +138,52 @@ struct Titles {
   found: Vec<String>,
 }
 
-impl Handler for Titles {
-  fn start_element(&mut self, event: StartElementEvent<'_>) {
-    self.in_title = event.pool.resolve(event.name.local()) == "title";
-  }
-  fn characters(&mut self, event: CharactersEvent<'_>) {
-    if self.in_title {
-      self.found.push(event.text.to_owned());
+impl EventHandler for Titles {
+  fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
+    match event {
+      EventRef::StartElement(event) => self.in_title = event.local == "title",
+      EventRef::Characters(event) if self.in_title => self.found.push(event.text.to_owned()),
+      _ => {}
     }
+    Ok(())
   }
 }
 
-let mut reader = Reader::new("<books><title>Dune</title><title>Emma</title></books>".as_bytes());
+let mut reader = StreamSource::new("<books><title>Dune</title><title>Emma</title></books>".as_bytes());
 let mut titles = Titles::default();
-reader.emit(&mut titles)?;
+reader.with_handler(&mut titles).emit()?;
 
 assert_eq!(titles.found, ["Dune", "Emma"]);
 # Ok::<(), xenolith::Error>(())
+```
+
+### `EntityResolver`
+
+Resolving an external entity is a reader's concern, not a content callback: implement
+`UriResolver` and hand it to the source with `with_resolver`. Nothing is resolved until you do,
+since fetching what a document names is the XML external-entity (XXE) attack surface.
+
+### `ErrorHandler`
+
+There is no handler to register and no severity to inspect: the line SAX draws between a fatal
+violation and a recoverable one falls out of the types. A well-formedness violation is an `Err`
+from `emit` and the run stops; a validity violation is recorded as a `ValidityError` that a
+`Validator` keeps while the run goes on. A handler has the same channel: returning `Err` from
+`handle` refuses the document, and that error is what `emit` returns. Where nothing is wrong and
+the handler simply has all it wanted, it returns `false` from `should_continue` instead, and the
+run ends successfully.
+
+### `DTDHandler` and `DeclHandler`
+
+Notations, unparsed entities, and the element, attribute and entity declarations are not pushed
+one at a time. The parser reads the whole DTD into a `Dtd` and hands it to the `Doctype` event,
+which it reports once the `DOCTYPE` and both subsets are read — so the DTD is complete when it
+arrives, and a handler that wanted only the DTD can stop there:
+
+```rust
+fn should_continue(&self) -> bool {
+  !self.done // set on the Doctype event; the document body is never read
+}
 ```
 
 ## XPath
@@ -152,11 +195,15 @@ double n = (Double) expr.evaluate(doc, XPathConstants.NUMBER);
 ```
 
 ```rust
-use xenolith::dom::build;
+use xenolith::dom::build::DomBuilder;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::io::StreamSource;
 use xenolith::xdm::{DomModel, Model};
 use xenolith::xpath::XPath;
 
-let doc = build::parse("<list><item>a</item><item>b</item></list>".as_bytes())?;
+let mut builder = DomBuilder::new();
+StreamSource::new("<list><item>a</item><item>b</item></list>".as_bytes()).with_handler(&mut builder).emit()?;
+let doc = builder.into_document().map_err(xenolith::Error::internal)?;
 let model = DomModel::new(&doc);
 
 let expression = XPath::new().compile("count(//item)")?;
@@ -176,11 +223,15 @@ so an expression yielding the wrong type is not a `ClassCastException` at run ti
 Binding a prefix replaces `NamespaceContext`, one binding at a time:
 
 ```rust
-use xenolith::dom::build;
+use xenolith::dom::build::DomBuilder;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::io::StreamSource;
 use xenolith::xdm::{DomModel, Model};
 use xenolith::xpath::XPath;
 
-let doc = build::parse("<r xmlns:d='urn:d'><d:a>found</d:a></r>".as_bytes())?;
+let mut builder = DomBuilder::new();
+StreamSource::new("<r xmlns:d='urn:d'><d:a>found</d:a></r>".as_bytes()).with_handler(&mut builder).emit()?;
+let doc = builder.into_document().map_err(xenolith::Error::internal)?;
 let model = DomModel::new(&doc);
 
 // The document's prefix and the expression's need not agree — only the namespace does.
@@ -240,11 +291,14 @@ factory.newDocumentBuilder().parse(in); // errors reach the ErrorHandler
 ```
 
 ```rust
-use xenolith::parser::Reader;
-use xenolith::validate::Validatable;
+use xenolith::event::validate::ValidatorSet;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::io::StreamSource;
 
 let xml = "<!DOCTYPE a [<!ELEMENT a (b)>]><a><c/></a>";
-let report = Reader::new(xml.as_bytes()).with_validation().validating_dtd().run()?;
+let mut validation = ValidatorSet::new().validating_dtd(true);
+StreamSource::new(xml.as_bytes()).with_handler(&mut validation).emit()?;
+let report = validation.report();
 
 // Two violations, not one: `c` is not declared, and `a` was declared to hold a `b`.
 assert!(!report.is_valid());
@@ -255,29 +309,57 @@ assert!(report.errors().iter().any(|error| error.message().contains("c")));
 The distinction Java draws between a fatal error and a recoverable one is kept, but it is in the
 types rather than in which `ErrorHandler` method is called: a well-formedness error is the `Err`
 of the call and stops the parse, a validity error is collected into the
-[`Report`](xenolith_validate::Report) and the document is read to the end. A document with no
+[`Report`](xenolith_core::event::validate::Report) and the document is read to the end. A document with no
 `DOCTYPE` is neither valid nor invalid — `had_dtd()` says which case you are in, so "nothing to
 check against" cannot be mistaken for a pass.
 
 ## Writing XML
 
-From a tree, the way `LSSerializer` or an identity `Transformer` is used in Java:
+From a tree, the way `LSSerializer` or an identity `Transformer` is used in Java. A walk over the tree reports it as
+events, and the writer writes them:
 
 ```rust
-use xenolith::dom::build;
-use xenolith::serialize::Serializer;
+use xenolith::dom::DomSource;
+use xenolith::dom::build::DomBuilder;
+use xenolith::event::{EventCursor, EventSource};
+use xenolith::io::StreamSource;
+use xenolith::io::write::XmlWriter;
 
-let doc = build::parse("<r><a><b>x</b></a></r>".as_bytes())?;
-let root = doc.document_element().unwrap();
+let mut builder = DomBuilder::new();
+StreamSource::new("<r><a><b>x</b></a></r>".as_bytes()).with_handler(&mut builder).emit()?;
+let doc = builder.into_document().map_err(xenolith::Error::internal)?;
 
-assert_eq!(Serializer::new().with_indent("  ").to_string(&doc, root), "<r>\n  <a>\n    <b>x</b>\n  </a>\n</r>");
+let mut writer = XmlWriter::new(Vec::new());
+DomSource::new(&doc).with_handler(&mut writer).emit()?;
+assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "<r><a><b>x</b></a></r>");
+# Ok::<(), xenolith::Error>(())
+```
+
+Writing without a tree, the way `XMLStreamWriter` is used: the calls go to a `WriterSource`, and the handlers installed
+on it decide where they land — an `XmlWriter` for XML text, a `DomBuilder` for a tree, a validator to check them on the
+way.
+
+```rust
+use xenolith::event::EventSource;
+use xenolith::io::write::{WriterSource, XmlWriter};
+
+let mut writer = XmlWriter::new(Vec::new());
+{
+  let mut doc = WriterSource::new().with_handler(&mut writer);
+  doc.write_start_element("r")?;
+  doc.write_attribute("x", "1");
+  doc.write_characters("t & u")?;
+  doc.write_end_element()?;
+  doc.end_document()?;
+}
+assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "<r x=\"1\">t &amp; u</r>");
 # Ok::<(), xenolith::Error>(())
 ```
 
 Call by call, as `XMLStreamWriter`:
 
 ```rust
-use xenolith::serialize::XmlWriter;
+use xenolith::io::write::XmlWriter;
 
 let mut out = Vec::new();
 let mut writer = XmlWriter::new(&mut out);
@@ -306,13 +388,14 @@ error carries the location it happened at. There is no unchecked
 
 **No `ErrorListener` and no `ErrorHandler` to register.** Anything fatal is the `Err` of the
 call, and what `xsl:message` said comes back beside the result. The "forgot to register the
-listener, lost the diagnostics" path does not exist. Validation keeps a listener-shaped seam —
-[`ErrorListener`](xenolith_validate::ErrorListener) decides whether to carry on after a
-recoverable violation — because there the choice is real.
+listener, lost the diagnostics" path does not exist. Validation is no exception: a
+[`Validator`](xenolith_core::event::validate::Validator) keeps each recoverable violation itself and hands
+them back from [`errors`](xenolith_core::event::validate::Validator::errors), and one that would rather stop
+at the first refuses the document with `Err` like any other handler.
 
 **Nothing is fetched unless you say how.** Java resolves external entities by default, which is
 why every hardening guide begins by turning that off; here a parser with no
-[`UriResolver`](xenolith_parser::resolve::UriResolver) fetches nothing, and so does a
+[`UriResolver`](xenolith_core::io::resolve::UriResolver) fetches nothing, and so does a
 transformation with no resolver. XXE is not a setting you have to remember.
 
 **An arena, not a graph of objects.** `NodeId` is a `Copy` index; document order is an integer

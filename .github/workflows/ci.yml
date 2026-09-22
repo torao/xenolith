@@ -56,10 +56,6 @@ jobs:
       - run: cargo test -p xenolith-parser --no-default-features --features tokio
       # Each optional layer built on its own, so a feature that only compiles alongside another
       # does not slip through the all-features and no-features runs.
-      - run: cargo test -p xenolith-parser --no-default-features --features xml-base
-      - run: cargo test -p xenolith-parser --no-default-features --features xml-id
-      - run: cargo test -p xenolith-validate --no-default-features --features xml-id
-      - run: cargo test -p xenolith-dom --no-default-features --features parse
       - run: cargo test -p xenolith-xinclude --no-default-features --features encodings
       # `icu` changes what xsl:sort *answers*, not just how fast it is, so the build without it
       # is exercised rather than assumed to behave the same.

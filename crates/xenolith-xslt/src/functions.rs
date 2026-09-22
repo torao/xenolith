@@ -60,7 +60,7 @@ pub(crate) struct Running<N: Copy + Eq + std::hash::Hash> {
   /// Where `document()` gets a tree from, and where a result tree fragment goes to become one.
   documents: RefCell<Rc<dyn DocumentSource<N>>>,
   /// What each result tree fragment was adopted as, so one fragment is one tree.
-  adopted: RefCell<HashMap<xenolith_dom::NodeId, N>>,
+  adopted: RefCell<HashMap<xenolith_core::dom::NodeId, N>>,
   /// The `xsl:decimal-format` declarations `format-number()` reads its symbols from.
   ///
   /// The unnamed default is always here, whether the stylesheet declared one or not, so a
@@ -94,17 +94,17 @@ impl<N: Copy + Eq + std::hash::Hash> Running<N> {
 
   /// The node a result tree fragment became when it was adopted, so that asking twice gives the
   /// same tree rather than two that say the same thing.
-  pub(crate) fn adopted(&self, fragment: xenolith_dom::NodeId) -> Option<N> {
+  pub(crate) fn adopted(&self, fragment: xenolith_core::dom::NodeId) -> Option<N> {
     self.adopted.borrow().get(&fragment).copied()
   }
 
   /// Remembers what a fragment was adopted as.
-  pub(crate) fn remember_adopted(&self, fragment: xenolith_dom::NodeId, node: N) {
+  pub(crate) fn remember_adopted(&self, fragment: xenolith_core::dom::NodeId, node: N) {
     self.adopted.borrow_mut().insert(fragment, node);
   }
 
   /// Puts a tree the transformation built into the model's node space.
-  pub(crate) fn adopt(&self, document: xenolith_dom::Document, root: xenolith_dom::NodeId) -> Result<Option<N>> {
+  pub(crate) fn adopt(&self, document: xenolith_core::dom::Document, root: xenolith_core::dom::NodeId) -> Result<Option<N>> {
     self.documents.borrow().adopt(document, root)
   }
 

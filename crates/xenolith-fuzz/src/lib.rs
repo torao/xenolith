@@ -28,12 +28,20 @@
 
 use std::io::Read;
 
-use xenolith_dom::build;
-use xenolith_parser::{EventRef, Reader};
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::{EventRef, StreamSource};
 use xenolith_validate::Validatable;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::XPath;
 use xenolith_xslt::{Stylesheet, Transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn build_tree(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// How deep a fuzzed transformation may recurse before it is stopped.
 ///
@@ -53,7 +61,7 @@ const SUBJECT: &[u8] = br#"<?xml version="1.0"?>
 /// The accessors are called rather than only the events counted: an event that cannot be read is
 /// as much a bug as one that cannot be reached, and reading is where the borrowed buffers are.
 pub fn parse_document(data: &[u8]) {
-  let mut reader = Reader::with_system_id(data, "urn:fuzz");
+  let mut reader = StreamSource::with_system_id(data, "urn:fuzz");
   loop {
     match reader.advance() {
       Ok(Some(_)) => {
@@ -86,7 +94,7 @@ pub fn parse_document(data: &[u8]) {
 /// The same parser, driven a byte at a time, so a token split across two reads is exercised —
 /// which the slice above never does.
 pub fn parse_document_in_pieces(data: &[u8]) {
-  let mut reader = Reader::new(OneByteAtATime(data, 0));
+  let mut reader = StreamSource::new(OneByteAtATime(data, 0));
   while let Ok(Some(_)) = reader.advance() {}
 }
 
@@ -110,7 +118,7 @@ impl Read for OneByteAtATime<'_> {
 /// against — `xml:id` is checked whether or not a DTD declares anything — so "errors imply a
 /// DTD" would be a property that is not true, and a fuzzer would rightly find it.
 pub fn validate_document(data: &[u8]) {
-  if let Ok(report) = Reader::new(data).with_validation().validating_dtd().run() {
+  if let Ok(report) = StreamSource::new(data).with_validation().validating_dtd().run() {
     let _ = report.is_valid();
     for error in report.errors() {
       let _ = error.message();
@@ -125,11 +133,11 @@ pub fn validate_document(data: &[u8]) {
 /// comes back gives the same text. A document that survives parsing but cannot be written down
 /// again is a bug that no test of documents a person wrote is likely to reach.
 pub fn build_and_serialize(data: &[u8]) {
-  let Ok(document) = build::parse(data) else { return };
+  let Ok(document) = build_tree(data) else { return };
   let Some(root) = document.document_element() else { return };
   let written = xenolith_serialize::Serializer::new().to_string(&document, root);
 
-  let reread = build::parse(written.as_bytes())
+  let reread = build_tree(written.as_bytes())
     .unwrap_or_else(|error| panic!("what the serializer wrote will not parse: {}\n{written}", error.message()));
   let Some(reread_root) = reread.document_element() else {
     panic!("what the serializer wrote has no document element: {written}");
@@ -162,7 +170,7 @@ pub fn compile_expression(text: &str) {
 /// Parsing an expression and running one are different machinery, and only the second reaches the
 /// axes, the conversions and the function library.
 pub fn evaluate_expression(text: &str) {
-  let Ok(document) = build::parse(SUBJECT) else { return };
+  let Ok(document) = build_tree(SUBJECT) else { return };
   let model = DomModel::new(&document);
   let Ok(expression) = XPath::new().with_namespace("p", "urn:p").compile(text) else { return };
   if let Ok(value) = expression.evaluate(&model, model.root_node()) {
@@ -176,7 +184,7 @@ pub fn evaluate_expression(text: &str) {
 /// Compiles a stylesheet and runs it over a fixed document.
 pub fn transform(data: &[u8]) {
   let Ok(stylesheet) = Stylesheet::compile(data, "urn:fuzz") else { return };
-  let Ok(document) = build::parse(SUBJECT) else { return };
+  let Ok(document) = build_tree(SUBJECT) else { return };
   let model = DomModel::new(&document);
   let Ok(result) = Transform::new().with_max_depth(FUZZ_MAX_DEPTH).run(&stylesheet, &model, model.root_node()) else {
     return;

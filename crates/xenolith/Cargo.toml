@@ -1,6 +1,6 @@
 [package]
 name = "xenolith"
-description = "A native Rust implementation of XML processing and XSLT 1.0, aiming for parity with Java's XML APIs"
+description = "A native Rust implementation of XML 1.0: a namespace-aware pull parser, a DOM tree, DTD validation and serialization"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,68 +8,31 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 keywords.workspace = true
-# The facade is the whole of it, so it is the one crate every category is true of: it decodes
-# character encodings, and XSLT is a template language — a listing of 773 crates where a native
-# Rust XSLT processor is worth being visible.
-categories = ["parser-implementations", "text-processing", "encoding", "template-engine"]
+# Character decoding — sniffing an encoding and turning bytes into characters — lives here.
+categories = ["encoding", "parser-implementations", "text-processing"]
 
 [features]
-default = ["encodings", "parse", "icu", "exslt"]
-# EXSLT extension functions for XSLT: xenolith::exslt. Inter-crate dependencies have their
-# default features off (see the feature policy in ROADMAP.md), so the modules are named here —
-# without this the crate would be present with nothing in it, and every EXSLT call would fail.
-exslt = [
-  "dep:xenolith-exslt",
-  "xenolith-exslt/common",
-  "xenolith-exslt/dates",
-  "xenolith-exslt/math",
-  "xenolith-exslt/regexp",
-  "xenolith-exslt/sets",
-  "xenolith-exslt/strings",
-]
-# Language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without it, a text sort
-# compares by Unicode code point; see `tests/behaviour.rs`.
-icu = ["xenolith-xslt/icu"]
-# Encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
-encodings = [
-  "xenolith-core/encodings",
-  "xenolith-parser/encodings",
-  "xenolith-validate/encodings",
-  "xenolith-dom/encodings",
-  "xenolith-xinclude?/encodings",
-  "xenolith-xslt/encodings",
-]
-# Build a DOM from parsed XML: xenolith::dom::build.
-parse = ["xenolith-dom/parse"]
-# XInclude processing: xenolith::xinclude. A resource-fetching layer, so opt-in.
-xinclude = ["dep:xenolith-xinclude"]
-# The asynchronous reader, over tokio's AsyncRead.
-tokio = ["xenolith-parser/tokio"]
-# Per-node base URI computation from xml:base and the entity's system id (XML Base).
-xml-base = ["xenolith-parser/xml-base"]
-# xml:id as an ID-typed attribute, and its NCName/uniqueness checking in validation.
-xml-id = ["xenolith-parser/xml-id", "xenolith-validate/xml-id"]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
+encodings = ["dep:encoding_rs"]
+# A runtime-agnostic asynchronous driver, `io::read::AsyncReader`, over `futures_io::AsyncRead`. An application can
+# implement its own async I/O against it without pulling in any runtime.
+async = ["dep:futures-io"]
+# tokio adapters for the async driver, chiefly `AsyncEntityReader::from_tokio`. Enables `async`.
+tokio = ["async", "dep:tokio", "dep:tokio-util"]
 
 [dependencies]
-xenolith-core = { workspace = true }
-xenolith-parser = { workspace = true }
-xenolith-validate = { workspace = true }
-xenolith-dom = { workspace = true }
-xenolith-serialize = { workspace = true }
-xenolith-xdm = { workspace = true }
-xenolith-xpath = { workspace = true }
-xenolith-xslt = { workspace = true }
-xenolith-xinclude = { workspace = true, optional = true }
-xenolith-exslt = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
+futures-io = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
-
-# The end-to-end benchmarks: the facade is where every layer is reachable at once, which is what
-# a caller's own numbers look like. `cargo test --benches` runs each once, so they cannot rot.
-[[bench]]
-name = "pipeline"
-harness = false
+tokio = { workspace = true, features = ["macros", "rt"] }
+tokio-test = "0.4"
+# A minimal, runtime-agnostic block_on for testing the async driver without a full runtime.
+pollster = "0.4"
 
 [lints]
 workspace = true

@@ -2,10 +2,19 @@
 
 #![cfg(feature = "dates")]
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::Functions;
 use xenolith_xslt::{Stylesheet, Transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// The namespace declarations these stylesheets need.
 const PREFIXES: &str = "xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" \
@@ -16,7 +25,7 @@ fn value_of(expression: &str) -> String {
   let body = format!("<xsl:template match='/'><xsl:value-of select=\"{expression}\"/></xsl:template>");
   let source = format!("<xsl:stylesheet version=\"1.0\" {PREFIXES}>{body}</xsl:stylesheet>");
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let functions = xenolith_exslt::register(Functions::new());
   Transform::new().run_with(&stylesheet, &model, model.root_node(), functions).expect("transforms").text()

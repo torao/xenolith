@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_serialize::Serializer;
 use xenolith_xinclude::{Loader, XInclude};
 
@@ -30,7 +32,12 @@ const XI: &str = " xmlns:xi=\"http://www.w3.org/2001/XInclude\"";
 
 /// Parses `main` at `file:///d/doc.xml`, expands it with `files`, and serializes the root.
 fn run(main: &str, files: &[(&str, &str)], xi: XInclude) -> Result<String, Error> {
-  let mut doc = build::parse_with_system_id(main.as_bytes(), "file:///d/doc.xml").expect("well-formed");
+  let mut builder = DomBuilder::new();
+  StreamSource::with_system_id(main.as_bytes(), "file:///d/doc.xml")
+    .with_handler(&mut builder)
+    .emit()
+    .expect("well-formed");
+  let mut doc = builder.into_document().expect("a tree");
   let mut loader = Files::new(files);
   xi.expand(&mut doc, &mut loader)?;
   Ok(Serializer::new().to_string(&doc, doc.document_element().unwrap()))

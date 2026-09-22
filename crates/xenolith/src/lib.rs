@@ -1,202 +1,160 @@
-//! xenolith: XML processing and XSLT 1.0 in Rust.
+//! An XML 1.0 processor library: a namespace-aware parser, a DOM tree, DTD validation, and serialization.
 //!
-//! This is the entry-point crate. The work is split across focused crates — so a caller who
-//! wants only the parser does not compile the collation tables or the transformation engine —
-//! and gathered here under one name and one dependency. Depend on `xenolith` and reach the
-//! layers through their modules:
+//! This crate implements XML 1.0 Fifth Edition and Namespaces in XML 1.0. It reads XML from a byte stream and reports
+//! it as an event stream, validates the event stream, constructs a tree from those events, validates documents against
+//! a DTD, and writes out trees or event streams as text. It includes functionality for character decoding, entity
+//! resolution, DTD processing, and checking constraints regarding well-formedness and validity.
 //!
-//! - [`parser`] — the XML pull parser: readers, events, entity resolution, the DTD.
-//! - [`validate`] — validation: a schema-agnostic `Validator` and the DTD validator.
-//! - [`dom`] — an arena-based DOM tree: nodes, navigation, mutation, and `dom::build` to make
-//!   one from parsed XML.
-//! - [`serialize`] — writing a DOM subtree back to XML text.
-//! - [`xdm`] — the XPath data model: a node-model trait and its DOM implementation.
-//! - [`xpath`] — XPath 1.0: compiling an expression and evaluating it.
-//! - [`transform`] — `javax.xml.transform`'s shape: compile a stylesheet once, set parameters,
-//!   run it over as many documents as you like.
-//! - [`xslt`] — XSLT 1.0: patterns, stylesheets, the engine, and writing the result.
-//! - `exslt` (feature `exslt`) — EXSLT extension functions for XSLT.
-//! - `xinclude` (feature `xinclude`) — expanding `xi:include` over a DOM.
-//! - the primitives every layer shares — [`Error`], [`QName`] and their neighbours — are
-//!   re-exported at the crate root, with [`chars`], [`encoding`] and [`uri`] beside them.
+//! What it does:
 //!
-// The guide's examples build a DOM from XML, so it is documented only where `parse` is; the
-// sentence pointing at it is written with the same condition rather than left to dangle.
-#![cfg_attr(
-  feature = "parse",
-  doc = "Coming from Java, start at [`migrating_from_java`]: it maps each JAXP API onto its",
-  doc = "counterpart here and says where it deliberately differs."
-)]
+//! - Reads a document as events, pulled one at a time or pushed to handlers.
+//! - Builds a DOM tree from events, and reports a tree back as events.
+//! - Checks a document against the DTD it declares, or against a DTD held as a schema of its own.
+//! - Writes a tree, or a sequence of events, as well-formed XML text.
 //!
-//! What is still to come is in `ROADMAP.md`.
+//! Nothing is fetched unless the caller says how. An external entity or an external DTD subset is read only through a
+//! [`UriResolver`](io::resolve::UriResolver) the caller installs, and a document that refers to one without a resolver
+//! is refused with a reason rather than read as though the reference were absent. Entity expansion is bounded by
+//! [`Limits`](io::Limits), whatever the document declares.
+//!
+//! # Key features
+//!
+//! - [`event`]: Event-related vocabulary. This includes the [`EventRef`](event::EventRef),
+//!   [`EventHandler`](event::EventHandler), and [`EventSource`](event::EventSource) traits shared by all producers and
+//!   consumers; the strict check that separates XML from Loose XML; and the [`Validator`] contract implemented by
+//!   schemas. Events store names and text as `&str`.
+//! - [`io`]: Input/output processing. It employs a *sans-I/O pattern* where the [`Parser`](io::Parser) itself does not
+//!   manage I/O; instead, a [`StreamSource`](io::StreamSource) drives the parser via [`std::io::Read`]. When the
+//!   `async` feature is enabled, an `AsyncReader` performs similar processing asynchronously. It also covers character
+//!   decoding, character streams per entity, XML and text declarations, entity resolution, and [`io::write`] for
+//!   serialization.
+//! - [`dtd`]: The Document Type Definition. [`dtd::model`] stores declarations as data, while [`dtd::read`] parses
+//!   them from a `DOCTYPE` or a standalone DTD. [`dtd::validate`] allows for document validation based on a DTD.
+//! - [`dom`]: Document Object Model. It maintains a collection of nodes — identified by [`NodeId`](dom::NodeId) (which
+//!   implements the `Copy` trait) — using an *arena structure*. Tools are provided such as [`dom::build`] for
+//!   constructing a tree from events, and [`DomSource`](dom::DomSource) for outputting a tree as events.
+//!
+//! Primitives shared across these four modules:
+//!
+//! - [`error`]: Errors; each holds the [`Location`] (positional information) within the entity where the error
+//!   occurred.
+//! - [`chars`]: Character classes and name production rules from XML 1.0 Fifth Edition.
+//! - [`name`]: Interned names using a string pool, [`QName`], and [`ExpandedName`].
+//! - [`attr`]: [`Attributes`]; a view of element attributes that is independent of how the attributes were generated.
+//! - [`uri`]: Reference and resolution handling based on RFC 3986; forms the basis for base URI handling.
+//!
+//! XPath, XSLT, and XInclude are provided as separate crates built upon this crate.
+//!
+//! # Getting Started
+//!
+//! The [`Reader`] reads a byte stream to generate events or a tree, and the [`Writer`] writes out a tree. These
+//! components should be integrated with the aforementioned modules to ensure strict lexical validation and serve as
+//! the primary entry points for usage, unless a specific component needs to operate in isolation.
+//!
+//! At the next layer down, it is able to construct an event pipeline using an [`EventSource`](event::EventSource) —
+//! which generates [`EventRef`](event::EventRef)s — and an [`EventHandler`](event::EventHandler) — which receives them.
+//! [`io::StreamSource`] wraps any [`std::io::Read`] implementation and passes generated events to registered handlers.
+//! Handlers can include components such as [`DomBuilder`](dom::build::DomBuilder) (for tree construction),
+//! [`Validator`] (for event stream validation), or custom implementations of [`EventHandler`](event::EventHandler).
+//! Using [`emit`](event::EventCursor::emit) triggers a SAX-style "push" behavior that processes the entire stream,
+//! whereas using [`next`](event::EventCursor::next) enables a StAX-style "pull" behavior that retrieves events one by
+//! one.
+//! At an even lower layer, [`io::Parser`] allows the caller to manually supply byte data via
+//! [`feed`](io::Parser::feed) to extract the next event.
+//!
 //!
 //! # Examples
 //!
-//! ```
-//! use xenolith::parser::{EventKind, Reader};
+//! You can also use the parser and primitives independently. They support operations such as identifying the encoding,
+//! decoding byte sequences, validating names, and resolving relative references based on the entity's URI.
 //!
-//! let mut reader = Reader::new("<greeting xml:lang='en'>Hello</greeting>".as_bytes());
+//! ```
+//! use xenolith::io::encoding;
+//! use xenolith::{NamePool, UriReference, chars};
+//!
+//! let bytes = b"\xEF\xBB\xBF<doc href='sub/part.xml'/>";
+//!
+//! // 1. Sniff, then skip the byte-order mark the decoder must not see.
+//! let detected = encoding::detect(bytes).or_default();
+//! assert_eq!(detected.encoding, "UTF-8");
+//! let mut decoder = encoding::decoder_for(&detected.encoding)?;
 //! let mut text = String::new();
-//! while let Some(kind) = reader.advance()? {
-//!   if kind == EventKind::Text {
-//!     if let Some(chars) = reader.parser().event_ref().and_then(|e| e.text()) {
-//!       text.push_str(chars);
-//!     }
-//!   }
-//! }
-//! assert_eq!(text, "Hello");
+//! decoder.decode(&bytes[detected.bom_length..], &mut text, true)?;
+//! assert!(text.starts_with("<doc"));
+//!
+//! // 2. Names are validated against XML 1.0 Fifth Edition, then interned.
+//! assert!(chars::is_name("doc"));
+//! let mut pool = NamePool::new();
+//! let doc = pool.intern("doc");
+//! assert_eq!(pool.resolve(doc), "doc");
+//!
+//! // 3. Relative references resolve against the base URI of the entity.
+//! let base = UriReference::parse("file:///docs/main.xml")?;
+//! let href = UriReference::parse("sub/part.xml")?;
+//! assert_eq!(base.resolve(&href).to_string(), "file:///docs/sub/part.xml");
 //! # Ok::<(), xenolith::Error>(())
 //! ```
 //!
 //! # Feature flags
 //!
-//! - `encodings` (default): encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1. Without it, an
-//!   `xsl:output` giving another encoding is an error saying so, never bytes in one encoding
-//!   under a declaration giving another.
-//! - `parse` (default): [`dom::build`], which turns parsed XML into a tree.
-//! - `exslt` (default): the `exslt` module, with every EXSLT module this crate knows of.
-//! - `icu` (default): language-aware collation for `xsl:sort`, from CLDR through ICU4X. Without
-//!   it a text sort compares by Unicode code point. XSLT 1.0 §10 leaves the collating sequence to
-//!   the processor, so this changes the *answer*, not just the speed.
-//! - `xinclude`: the `xinclude` module. Off by default, because it fetches resources.
-//! - `tokio`: the asynchronous reader, [`parser::AsyncReader`], over `tokio`'s `AsyncRead`.
-//! - `xml-base`: per-node base URI computation from `xml:base` (XML Base).
-//! - `xml-id`: `xml:id` as an ID-typed attribute, checked for NCName validity and uniqueness.
+//! Each feature gate corresponds to crates implemented as an external library rather than part of the core XML
+//! functionality; thus, you can choose whether to include them in the compilation via flags.
+//!
+//! - `encodings` (default): Enables character encodings supported by [`encoding_rs`]. If this is not specified, only
+//!   UTF-8, UTF-16, US-ASCII, and ISO-8859-1 are available; attempting to use other encodings will result in an
+//!   [`Error::UnsupportedFeature`] error.
+//! - `async`: Enables an `AsyncReader` based on `futures_io::AsyncRead` that is agnostic of the runtime. Applications
+//!   can drive this using any execution environment (executor) and provide their own asynchronous I/O implementation.
+//!   Adding the `tokio` feature enables the `async` feature and includes an adapter that bridges the reader with
+//!   `tokio`'s own `AsyncRead` trait.
 //!
 //! # Specifications
 //!
-//! Every layer lists the documents it was written from, at dated URLs so that the text read
-//! while writing it can still be found. Together they are:
+//! These were implemented based on the following documents. The dates listed indicate when the documents were last
+//! updated at the time of access.
 //!
-//! | Document | Version | Where |
-//! |---|---|---|
-//! | [XML 1.0 (Fifth Edition)] | REC 2008-11-26 | [`parser`], [`validate`], [`serialize`], [`core`](xenolith_core) |
-//! | [Namespaces in XML 1.0 (Third Edition)] | REC 2009-12-08 | [`parser`], [`serialize`], [`xdm`], [`xpath`] |
-//! | [XPath 1.0] | REC 1999-11-16 | [`xdm`], [`xpath`] |
-//! | [DOM Level 3 Core] | REC 2004-04-07 | [`dom`] |
-//! | [XInclude 1.0 (Second Edition)] | REC 2006-11-15 | `xinclude` |
-//! | [XPointer Framework] / [`element()`][xptr-element] / [`xmlns()`][xptr-xmlns] | REC 2003-03-25 | `xinclude` |
-//! | [XML Base (Second Edition)] | REC 2009-01-28 | [`parser`], [`dom`], `xinclude` |
-//! | [xml:id 1.0] | REC 2005-09-09 | [`parser`], [`validate`] |
-//! | [XSLT 1.0] | REC 1999-11-16 | [`xslt`], [`transform`] |
-//! | [EXSLT] | community spec, undated | `exslt` |
-//! | [XML Schema Part 2: Datatypes] | REC 2004-10-28 | `exslt` (`dates`) |
-//! | [RFC 3986] | STD 66, 2005-01 | [`core`](xenolith_core) |
+//! - [XML 1.0 (Fifth Edition)] — W3C Recommendation (26 November 2008). The entirety of [`io`] and [`dtd`] (documents,
+//!   DTDs, entities, and well-formedness constraints); [`chars`] holds character classes and production rules, and
+//!   [`io::encoding`] holds the rules from §4.3.3 for determining document encoding.
+//! - [Namespaces in XML 1.0 (Third Edition)] — W3C Recommendation (8 December 2009). Prefix resolution and namespace
+//!   constraints; [`name`] holds models for `QName`, prefixes, and expanded-names.
+//! - [XML Base (Second Edition)] — W3C Recommendation (28 January 2009). Computation of per-node base URIs based on
+//!   `xml:base` and entity system identifiers; accessed via [`Parser::base_uri`](io::Parser::base_uri).
+//! - [xml:id 1.0] — W3C Recommendation (9 September 2005). `xml:id` as an ID-type attribute with token normalization;
+//!   accessed via [`Parser::xml_id`](io::Parser::xml_id).
+//! - [DOM Level 3 Core] — W3C Recommendation (7 April 2004). The structure presented by [`dom`] (not the IDL itself).
+//! - [RFC 3986] — Uniform Resource Identifier (URI): Generic Syntax (January 2005). [`uri`] refers to the reference
+//!   resolution described in §5.3.
+//!
+//! The parser has been verified against the [W3C XML Conformance Test Suite]. Please refer to the developer guide for
+//! instructions on how to run it.
 //!
 //! [XML 1.0 (Fifth Edition)]: https://www.w3.org/TR/2008/REC-xml-20081126/
 //! [Namespaces in XML 1.0 (Third Edition)]: https://www.w3.org/TR/2009/REC-xml-names-20091208/
-//! [XPath 1.0]: https://www.w3.org/TR/1999/REC-xpath-19991116/
-//! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
-//! [XInclude 1.0 (Second Edition)]: https://www.w3.org/TR/2006/REC-xinclude-20061115/
-//! [XPointer Framework]: https://www.w3.org/TR/2003/REC-xptr-framework-20030325/
-//! [xptr-element]: https://www.w3.org/TR/2003/REC-xptr-element-20030325/
-//! [xptr-xmlns]: https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/
 //! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
 //! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
-//! [XSLT 1.0]: https://www.w3.org/TR/1999/REC-xslt-19991116
-//! [EXSLT]: http://exslt.org/
-//! [XML Schema Part 2: Datatypes]: https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/
+//! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
+//! [W3C XML Conformance Test Suite]: https://www.w3.org/XML/Test/
+//! [`encoding_rs`]: https://docs.rs/encoding_rs
+//!
 
-/// The XML pull parser: [`Reader`](parser::Reader), events, entity resolution, and the DTD.
-pub use xenolith_parser as parser;
-/// The document type definition: its model, its parser, and assembly.
-pub use xenolith_parser::dtd;
+pub mod _design;
+pub mod attr;
+pub mod chars;
+pub mod dom;
+pub mod dtd;
+pub mod error;
+pub mod event;
+pub mod io;
+pub mod name;
+pub mod uri;
 
-/// Validation: the schema-agnostic [`Validator`](validate::Validator) and the DTD validator.
-pub use xenolith_validate as validate;
+mod facade;
 
-/// The DOM tree: an arena of nodes with a W3C-shaped, Rust-idiomatic API.
-pub use xenolith_dom as dom;
-
-/// Serialization: a DOM subtree to well-formed XML text.
-pub use xenolith_serialize as serialize;
-
-/// The XPath 1.0 data model: a node-model trait and its DOM implementation.
-pub use xenolith_xdm as xdm;
-
-/// XPath 1.0: the lexer, the parser, and the expression tree.
-pub use xenolith_xpath as xpath;
-
-/// XSLT 1.0: patterns, stylesheets, the transformation engine and what `xsl:output` asks for.
-pub use xenolith_xslt as xslt;
-
-/// EXSLT extension functions for XSLT. Behind the `exslt` feature.
-#[cfg(feature = "exslt")]
-pub use xenolith_exslt as exslt;
-
-/// XInclude: expanding `xi:include` over a DOM. Behind the `xinclude` feature.
-#[cfg(feature = "xinclude")]
-pub use xenolith_xinclude as xinclude;
-
-pub mod transform;
-
-/// Coming from Java: where each JAXP API landed, and where it deliberately did not.
-///
-/// The guide is `MIGRATING-FROM-JAVA.md` beside this crate. It is included here rather than only
-/// linked so that every Rust example in it is compiled and run by `cargo test --doc` — a
-/// migration guide that has drifted from the API is worse than none.
-#[cfg(all(doc, feature = "parse"))]
-#[doc = include_str!("../MIGRATING-FROM-JAVA.md")]
-pub mod migrating_from_java {}
-
-pub use xenolith_core::{Error, Location, Result, Severity};
-pub use xenolith_core::{ExpandedName, NameId, NamePool, QName, UriReference, XML_NS_URI, XMLNS_NS_URI};
-pub use xenolith_core::{chars, encoding, error, name, uri};
-
-#[cfg(test)]
-mod tests {
-  use crate::parser::{EventKind, Reader};
-
-  #[test]
-  fn the_facade_reaches_the_parser() {
-    let mut reader = Reader::new("<a><b/></a>".as_bytes());
-    let mut starts = 0;
-    while let Some(kind) = reader.advance().unwrap() {
-      if kind == EventKind::StartElement {
-        starts += 1;
-      }
-    }
-    assert_eq!(starts, 2);
-  }
-
-  #[test]
-  fn the_facade_reaches_the_dom() {
-    let mut doc = crate::dom::Document::new();
-    let root = doc.create_element("a").unwrap();
-    doc.append_child(doc.document_node(), root).unwrap();
-    assert_eq!(doc.document_element(), Some(root));
-  }
-
-  #[cfg(feature = "parse")]
-  #[test]
-  fn the_facade_builds_a_dom_from_xml() {
-    let doc = crate::dom::build::parse("<a><b>x</b></a>".as_bytes()).unwrap();
-    let root = doc.document_element().unwrap();
-    assert_eq!(doc.node_name(root), "a");
-    assert_eq!(doc.text_content(root), "x");
-  }
-
-  #[test]
-  fn the_facade_parses_an_xpath_expression() {
-    let expr = crate::xpath::parse("//a[1]").unwrap();
-    assert_eq!(expr.to_string(), "/descendant-or-self::node()/child::a[1]");
-  }
-
-  #[test]
-  fn the_facade_serializes_a_dom() {
-    let mut doc = crate::dom::Document::new();
-    let a = doc.create_element("a").unwrap();
-    doc.append_child(doc.document_node(), a).unwrap();
-    assert_eq!(crate::serialize::Serializer::new().to_string(&doc, a), "<a/>");
-  }
-
-  #[test]
-  fn core_primitives_are_at_the_root() {
-    // A name and a URI resolve through the crate root, without reaching for the inner crates.
-    let mut pool = crate::NamePool::new();
-    let a = pool.intern("a");
-    assert_eq!(pool.resolve(a), "a");
-    assert_eq!(crate::uri::resolve("file:///d/x.xml", "y.xml").unwrap(), "file:///d/y.xml");
-  }
-}
+pub use attr::{Attribute, AttributeList, AttributeRef, Attributes};
+pub use error::{Error, Location, Result};
+pub use event::validate::{Schema, Validator, ValidityError};
+pub use facade::{Reader, Writer};
+pub use name::{ExpandedName, NameId, NamePool, QName, XML_NS_URI, XMLNS_NS_URI};
+pub use uri::UriReference;

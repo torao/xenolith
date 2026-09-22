@@ -29,11 +29,15 @@ use xenolith_xpath::{Axis, BinaryOp, Expr, NameTest, Namespaces, NodeTest, Path,
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::{DomModel, Model, NodeKind};
 /// use xenolith_xslt::Pattern;
 ///
-/// let doc = build::parse("<r><a><b/></a></r>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<r><a><b/></a></r>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 /// let b = model
 ///   .children(model.children(model.children(model.root_node())[0])[0])[0];

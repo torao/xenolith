@@ -29,11 +29,15 @@
 //! string — converted between those as the operators demand.
 //!
 //! ```
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::DomModel;
 //! use xenolith_xpath::XPathExpression;
 //!
-//! let doc = build::parse("<list><item>a</item><item>b</item></list>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<list><item>a</item><item>b</item></list>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! let model = DomModel::new(&doc);
 //!
 //! let query = XPathExpression::compile("//item[2]")?;
@@ -162,11 +166,15 @@ pub fn evaluate<M: Model>(expr: &Expr, model: &M, node: M::Node) -> Result<Value
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::DomModel;
 /// use xenolith_xpath::{Namespaces, Value, Variables, evaluate_with, parse};
 ///
-/// let doc = build::parse("<a><b>x</b></a>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a><b>x</b></a>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 /// let variables = Variables::new().with("want", Value::String("x".to_owned()));
 ///

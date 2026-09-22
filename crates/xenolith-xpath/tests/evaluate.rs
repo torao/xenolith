@@ -1,14 +1,23 @@
 //! Evaluating XPath 1.0 expressions: axes, node tests, predicates, operators and conversions.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{DomModel, DomNode, Model, NodeKind};
 use xenolith_xpath::{Value, Variables, XPath};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Evaluates `expression` over `xml` and hands the result to `render`. The prefix `p` and the
 /// variable `$want` are bound, since the cases below use them.
 fn with<T>(xml: &str, expression: &str, render: impl FnOnce(&DomModel<'_>, Value<DomNode>) -> T) -> T {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let query = XPath::new().with_namespace("p", "urn:p").compile(expression).expect("parses");
   let variables = Variables::new().with("want", Value::String("2".into()));
@@ -39,7 +48,7 @@ fn value(xml: &str, expression: &str) -> String {
 
 /// The message of the error an expression fails with, with nothing bound.
 fn error(xml: &str, expression: &str) -> String {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let query = XPath::new().compile(expression).expect("parses");
   let error = query.evaluate(&model, model.root_node()).expect_err("fails");

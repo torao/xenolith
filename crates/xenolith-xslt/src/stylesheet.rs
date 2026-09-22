@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use xenolith_core::error::{Error, Result};
 use xenolith_core::uri;
-use xenolith_dom::{Document, NodeId, NodeType, build};
+use xenolith_core::dom::{Document, NodeId, NodeType};
 use xenolith_xdm::{ExpandedName, Model, NodeKind};
 use xenolith_xpath::{Namespaces, Variables};
 
@@ -33,7 +33,9 @@ pub const XSLT_NAMESPACE: &str = "http://www.w3.org/1999/XSL/Transform";
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::{DomModel, Model};
 /// use xenolith_xslt::Stylesheet;
 ///
@@ -47,7 +49,9 @@ pub const XSLT_NAMESPACE: &str = "http://www.w3.org/1999/XSL/Transform";
 /// assert_eq!(stylesheet.templates().len(), 2);
 ///
 /// // For a `b` inside an `a`, the second rule wins: it is the more specific pattern, and says so.
-/// let doc = build::parse("<a><b/></a>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<a><b/></a>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 /// let b = model.children(model.children(model.root_node())[0])[0];
 /// let chosen = stylesheet.template_for(&model, b, None)?.expect("a rule matches");
@@ -674,7 +678,7 @@ impl Stylesheet {
 
   /// Parses a module and adds it, returning its index.
   fn load_module(&mut self, source: &[u8], system_id: &str) -> Result<usize> {
-    let document = build::parse_with_system_id(source, system_id)?;
+    let document = crate::loader::parse_with_system_id(source, system_id)?;
     // §2.5: a stylesheet whose version is not 1.0 was written for a later XSLT, and this must
     // read it forgivingly rather than refuse it. A version that is not a number at all is not
     // a later XSLT, so it is read as 1.0 and its unknown elements stay errors.
@@ -1414,8 +1418,9 @@ mod tests {
     )
     .expect("compiles");
 
-    let document = build::parse(
+    let document = crate::loader::parse_with_system_id(
       br#"<r xmlns:p="urn:p" k="v" j="w"><a><b/><c>text</c></a><p:d/><!--c--><?pi data?><?other d?></r>"#.as_slice(),
+      "urn:test",
     )
     .expect("well-formed");
     let model = DomModel::new(&document);

@@ -21,7 +21,9 @@
 //!
 //! ```
 //! use std::rc::Rc;
-//! use xenolith_dom::build;
+//! use xenolith_core::event::{EventCursor, EventSource};
+//! use xenolith_core::dom::build::DomBuilder;
+//! use xenolith_core::io::StreamSource;
 //! use xenolith_xdm::{DomModel, Documents};
 //! use xenolith_xpath::Functions;
 //! use xenolith_xslt::{Stylesheet, Transform, TreeSpace};
@@ -37,7 +39,9 @@
 //!   "file:///s.xsl",
 //! )?;
 //!
-//! let source = build::parse("<a/>".as_bytes())?;
+//! let mut builder = DomBuilder::new();
+//! StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder).emit()?;
+//! let source = builder.into_document().map_err(xenolith_core::Error::internal)?;
 //! // One handle, shared: the model reads what the transformation puts in.
 //! let documents = Documents::new();
 //! let model = DomModel::with_documents(&source, &documents);

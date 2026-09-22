@@ -1,10 +1,25 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# The crates under review while the core event vocabulary is settled. The layers built on top of
+# it are parked in `exclude` below and come back one at a time, so a change to the vocabulary is
+# not a change to every crate at once.
+members = ["crates/xenolith"]
 # The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
-# rather than by every `cargo build --workspace`. The properties they check are in
-# `crates/xenolith-fuzz`, which is a member and is tested like everything else.
-exclude = ["fuzz"]
+# rather than by every `cargo build --workspace`.
+#
+# The rest are parked, not abandoned: each returns to `members` once the vocabulary it builds on
+# has settled. A parked crate is not compiled, so its manifest and its use of the workspace's
+# inherited fields are not read either.
+exclude = [
+  "fuzz",
+  "crates/xenolith-cli",
+  "crates/xenolith-exslt",
+  "crates/xenolith-fuzz",
+  "crates/xenolith-xdm",
+  "crates/xenolith-xinclude",
+  "crates/xenolith-xpath",
+  "crates/xenolith-xslt",
+]
 
 [workspace.package]
 version = "0.0.0"
@@ -24,11 +39,6 @@ categories = ["parser-implementations", "text-processing"]
 [workspace.dependencies]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
-xenolith-core = { version = "0.0.0", path = "crates/xenolith-core", default-features = false }
-xenolith-parser = { version = "0.0.0", path = "crates/xenolith-parser", default-features = false }
-xenolith-validate = { version = "0.0.0", path = "crates/xenolith-validate", default-features = false }
-xenolith-dom = { version = "0.0.0", path = "crates/xenolith-dom", default-features = false }
-xenolith-serialize = { version = "0.0.0", path = "crates/xenolith-serialize", default-features = false }
 xenolith-xinclude = { version = "0.0.0", path = "crates/xenolith-xinclude", default-features = false }
 xenolith-xdm = { version = "0.0.0", path = "crates/xenolith-xdm", default-features = false }
 xenolith-xpath = { version = "0.0.0", path = "crates/xenolith-xpath", default-features = false }

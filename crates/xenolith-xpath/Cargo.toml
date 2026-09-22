@@ -18,7 +18,8 @@ xenolith-core = { workspace = true }
 xenolith-xdm = { workspace = true }
 
 [dev-dependencies]
-xenolith-dom = { workspace = true, features = ["parse"] }
+xenolith-dom = { workspace = true }
+# The tests read documents into a tree through the parser.
 proptest = "1"
 
 [lints]

@@ -38,9 +38,18 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xpath::XPathExpression;
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// A document, and the expressions to ask about it.
 struct Case {
@@ -161,7 +170,7 @@ const CASES: &[Case] = &[
 
 /// This crate's answer: the value of `expression` over `xml`, as a string.
 fn ours(xml: &str, expression: &str) -> Result<String, String> {
-  let doc = build::parse(xml.as_bytes()).map_err(|e| e.to_string())?;
+  let doc = parse_document(xml.as_bytes()).map_err(|e| e.to_string())?;
   let model = DomModel::new(&doc);
   let query = XPathExpression::compile(expression).map_err(|e| e.to_string())?;
   let value = query.evaluate(&model, model.root_node()).map_err(|e| e.to_string())?;

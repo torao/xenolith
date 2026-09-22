@@ -20,12 +20,16 @@ use crate::{evaluate_with, parse};
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::DomModel;
 /// use xenolith_xpath::XPath;
 ///
 /// // The document binds `d`; the expression may call it whatever it likes.
-/// let doc = build::parse("<r xmlns:d='urn:d'><d:a/><d:a/></r>".as_bytes())?;
+/// let mut builder = DomBuilder::new();
+/// StreamSource::new("<r xmlns:d='urn:d'><d:a/><d:a/></r>".as_bytes()).with_handler(&mut builder).emit()?;
+/// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 /// let model = DomModel::new(&doc);
 ///
 /// let xpath = XPath::new().with_namespace("x", "urn:d");
@@ -78,7 +82,9 @@ impl XPath {
 /// # Examples
 ///
 /// ```
-/// use xenolith_dom::build;
+/// use xenolith_core::event::{EventCursor, EventSource};
+/// use xenolith_core::dom::build::DomBuilder;
+/// use xenolith_core::io::StreamSource;
 /// use xenolith_xdm::DomModel;
 /// use xenolith_xpath::XPathExpression;
 ///
@@ -86,7 +92,9 @@ impl XPath {
 ///
 /// // The same compiled expression, run against two documents.
 /// for (xml, expected) in [("<r><item/></r>", 1.0), ("<r><item/><item/></r>", 2.0)] {
-///   let doc = build::parse(xml.as_bytes())?;
+///   let mut builder = DomBuilder::new();
+///   StreamSource::new(xml.as_bytes()).with_handler(&mut builder).emit()?;
+///   let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
 ///   let model = DomModel::new(&doc);
 ///   let value = query.evaluate(&model, model.root_node())?;
 ///   assert_eq!(value.number(&model), expected);
@@ -144,11 +152,15 @@ impl XPathExpression {
   /// # Examples
   ///
   /// ```
-  /// use xenolith_dom::build;
+  /// use xenolith_core::event::{EventCursor, EventSource};
+  /// use xenolith_core::dom::build::DomBuilder;
+  /// use xenolith_core::io::StreamSource;
   /// use xenolith_xdm::DomModel;
   /// use xenolith_xpath::{Value, Variables, XPathExpression};
   ///
-  /// let doc = build::parse("<r><n>1</n><n>2</n></r>".as_bytes())?;
+  /// let mut builder = DomBuilder::new();
+  /// StreamSource::new("<r><n>1</n><n>2</n></r>".as_bytes()).with_handler(&mut builder).emit()?;
+  /// let doc = builder.into_document().map_err(xenolith_core::Error::internal)?;
   /// let model = DomModel::new(&doc);
   ///
   /// let query = XPathExpression::compile("//n[. = $want]")?;

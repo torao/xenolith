@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use regex::{Regex, RegexBuilder};
 use xenolith_core::error::{Error, Result};
-use xenolith_dom::Document;
+use xenolith_core::dom::Document;
 use xenolith_xdm::Model;
 use xenolith_xpath::{Context, Functions, Value};
 use xenolith_xslt::DocumentSource;

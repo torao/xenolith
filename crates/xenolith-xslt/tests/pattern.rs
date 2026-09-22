@@ -1,10 +1,19 @@
 //! Template match patterns: what matches, and what priority a pattern gets by default.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::{DomModel, Model, NodeKind};
 use xenolith_xpath::{Namespaces, Variables};
 use xenolith_xslt::Pattern;
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Every node of `xml` that matches `pattern`, named so a test can read the answer.
 fn matching(xml: &str, pattern: &str) -> String {
@@ -12,7 +21,7 @@ fn matching(xml: &str, pattern: &str) -> String {
 }
 
 fn matching_with(xml: &str, pattern: &str, namespaces: &Namespaces) -> String {
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let pattern = Pattern::compile(pattern).expect("compiles");
   let variables = Variables::new();

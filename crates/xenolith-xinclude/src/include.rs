@@ -1,8 +1,11 @@
 //! The XInclude processor.
 
+use xenolith_core::event::{EventCursor, EventSource};
 use xenolith_core::name::XML_NS_URI;
 use xenolith_core::{Error, uri};
-use xenolith_dom::{Document, NodeId, NodeType, build};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::dom::{Document, NodeId, NodeType};
+use xenolith_core::io::StreamSource;
 
 use crate::Loader;
 use crate::xpointer;
@@ -200,7 +203,7 @@ impl XInclude {
     let bytes = state.loader.load(&target).map_err(Fault::Recoverable)?;
 
     // A malformed resource is fatal, not a fallback case.
-    let mut included = build::parse_with_system_id(&bytes[..], &target).map_err(Fault::Fatal)?;
+    let mut included = parse_with_system_id(&bytes[..], &target).map_err(Fault::Fatal)?;
     let included_root = included.document_node();
     state.chain.push(target.clone());
     let result = self.process_children(&mut included, included_root, state, depth + 1);
@@ -336,7 +339,7 @@ fn fallback(doc: &Document, include: NodeId) -> Option<NodeId> {
 
 /// Decodes bytes to text for `parse="text"`.
 fn decode(bytes: &[u8], encoding: &str) -> Result<String, Error> {
-  let mut decoder = xenolith_core::encoding::decoder_for(encoding)?;
+  let mut decoder = xenolith_core::io::encoding::decoder_for(encoding)?;
   let mut text = String::new();
   decoder.decode(bytes, &mut text, true)?;
   Ok(text)
@@ -346,10 +349,17 @@ fn xinclude_error(message: &str) -> Error {
   Error::xinclude(message.to_owned())
 }
 
-fn dom_error(error: xenolith_dom::DomException) -> Error {
+fn dom_error(error: xenolith_core::dom::DomException) -> Error {
   Error::internal(format!("XInclude tree edit: {error}"))
 }
 
-fn dom_fault(error: xenolith_dom::DomException) -> Fault {
+fn dom_fault(error: xenolith_core::dom::DomException) -> Fault {
   Fault::Fatal(dom_error(error))
+}
+
+/// Reads an included resource into a tree, with `system_id` as its base URI.
+fn parse_with_system_id(bytes: &[u8], system_id: &str) -> Result<Document, Error> {
+  let mut builder = DomBuilder::new();
+  StreamSource::with_system_id(bytes, system_id).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(|error| Error::internal(format!("building the included tree: {error}")))
 }

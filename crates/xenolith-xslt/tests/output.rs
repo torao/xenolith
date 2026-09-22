@@ -1,8 +1,17 @@
 //! `xsl:output` and how a result is written (XSLT 1.0 §16).
 
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{OutputMethod, Stylesheet, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Transforms `<a/>` with the given stylesheet body and writes the result as §16 asks.
 fn written(body: &str) -> String {
@@ -14,7 +23,7 @@ fn written_over(body: &str, xml: &str) -> String {
     "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">{body}</xsl:stylesheet>"
   );
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms").serialize()
 }
@@ -209,7 +218,7 @@ fn utf8_needs_nothing() {
                 <xsl:output omit-xml-declaration='yes'/>\
                 <xsl:template match='/'><out>\u{65e5}</out></xsl:template></xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   assert_eq!(result.to_bytes().expect("writes"), "<out>\u{65e5}</out>".as_bytes());
@@ -221,7 +230,7 @@ fn shift_jis_result() -> xenolith_xslt::ResultTree {
                 <xsl:output omit-xml-declaration='yes' encoding='Shift_JIS'/>\
                 <xsl:template match='/'><out>\u{65e5}</out></xsl:template></xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(source.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).expect("well-formed");
+  let doc = parse_document("<a/>".as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   transform(&stylesheet, &model, model.root_node()).expect("transforms")
 }

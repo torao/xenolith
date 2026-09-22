@@ -1,10 +1,19 @@
 //! Running a stylesheet: the instructions, the built-in rules, and what they build.
 
 use xenolith_core::Error;
-use xenolith_dom::build;
+use xenolith_core::event::{EventCursor, EventSource};
+use xenolith_core::dom::build::DomBuilder;
+use xenolith_core::io::StreamSource;
 use xenolith_serialize::Serializer;
 use xenolith_xdm::DomModel;
 use xenolith_xslt::{Loader, Stylesheet, transform};
+
+/// Reads `xml` into a tree through the parser and the builder.
+fn parse_document(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+  let mut builder = DomBuilder::new();
+  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  builder.into_document().map_err(xenolith_core::Error::internal)
+}
 
 /// Wraps template bodies in an `xsl:stylesheet`.
 fn sheet(body: &str) -> String {
@@ -14,7 +23,7 @@ fn sheet(body: &str) -> String {
 /// Transforms `xml` with a stylesheet and serializes what comes out.
 fn run(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   Serializer::new().to_string(result.document(), result.root())
@@ -23,7 +32,7 @@ fn run(body: &str, xml: &str) -> String {
 /// The message a transformation fails with.
 fn error(body: &str, xml: &str) -> String {
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let error = transform(&stylesheet, &model, model.root_node()).expect_err("fails");
   assert!(matches!(error, Error::Xslt { .. }), "{}", error.message());
@@ -45,7 +54,7 @@ fn run_importing(base: &str, body: &str, xml: &str) -> String {
   let importing = sheet(&format!("<xsl:import href=\"base.xsl\"/>{body}"));
   let mut loader = Imported(sheet(base));
   let stylesheet = Stylesheet::compile_with(importing.as_bytes(), "file:///s.xsl", &mut loader).expect("compiles");
-  let doc = build::parse(xml.as_bytes()).expect("well-formed");
+  let doc = parse_document(xml.as_bytes()).expect("well-formed");
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   Serializer::new().to_string(result.document(), result.root())
@@ -254,7 +263,7 @@ fn a_namespaced_literal_element_keeps_its_namespace() {
   let text = "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\" \
               xmlns:o=\"urn:o\"><xsl:template match=\"/\"><o:out/></xsl:template></xsl:stylesheet>";
   let stylesheet = Stylesheet::compile(text.as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).unwrap();
+  let doc = parse_document("<a/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
   let result = transform(&stylesheet, &model, model.root_node()).expect("transforms");
   let out = Serializer::new().to_string(result.document(), result.root());
@@ -295,7 +304,7 @@ fn the_depth_a_transformation_may_reach_can_be_set() {
                 <xsl:if test=\"$n > 0\">.<xsl:call-template name=\"down\">\
                   <xsl:with-param name=\"n\" select=\"$n - 1\"/></xsl:call-template></xsl:if></xsl:template>";
   let stylesheet = Stylesheet::compile(sheet(body).as_bytes(), "file:///s.xsl").expect("compiles");
-  let doc = build::parse("<a/>".as_bytes()).unwrap();
+  let doc = parse_document("<a/>".as_bytes()).unwrap();
   let model = DomModel::new(&doc);
 
   let deep = Transform::new().run(&stylesheet, &model, model.root_node()).expect("transforms");
