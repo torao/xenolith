@@ -1,0 +1,38 @@
+[package]
+name = "xenolith"
+description = "A native Rust implementation of XML 1.0: a namespace-aware pull parser, a DOM tree, DTD validation and serialization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+# Character decoding — sniffing an encoding and turning bytes into characters — lives here.
+categories = ["encoding", "parser-implementations", "text-processing"]
+
+[features]
+default = ["encodings"]
+# Support for encodings beyond UTF-8/UTF-16/US-ASCII/ISO-8859-1, via `encoding_rs`.
+encodings = ["dep:encoding_rs"]
+# A runtime-agnostic asynchronous driver, `io::read::AsyncReader`, over `futures_io::AsyncRead`. An application can
+# implement its own async I/O against it without pulling in any runtime.
+async = ["dep:futures-io"]
+# tokio adapters for the async driver, chiefly `AsyncEntityReader::from_tokio`. Enables `async`.
+tokio = ["async", "dep:tokio", "dep:tokio-util"]
+
+[dependencies]
+encoding_rs = { workspace = true, optional = true }
+futures-io = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tokio-test = "0.4"
+# A minimal, runtime-agnostic block_on for testing the async driver without a full runtime.
+pollster = "0.4"
+
+[lints]
+workspace = true

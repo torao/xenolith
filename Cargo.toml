@@ -1,17 +1,31 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# The crates under review while the core event vocabulary is settled. The layers built on top of
+# it are parked in `exclude` below and come back one at a time, so a change to the vocabulary is
+# not a change to every crate at once.
+members = ["crates/xenolith", "crates/xenolith-fuzz"]
 # The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
-# rather than by every `cargo build --workspace`. The properties they check are in
-# `crates/xylogue-fuzz`, which is a member and is tested like everything else.
-exclude = ["fuzz"]
+# rather than by every `cargo build --workspace`.
+#
+# The rest are parked, not abandoned: each returns to `members` once the vocabulary it builds on
+# has settled. A parked crate is not compiled, so its manifest and its use of the workspace's
+# inherited fields are not read either.
+exclude = [
+  "fuzz",
+  "crates/xenolith-cli",
+  "crates/xenolith-exslt",
+  "crates/xenolith-xdm",
+  "crates/xenolith-xinclude",
+  "crates/xenolith-xpath",
+  "crates/xenolith-xslt",
+]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/torao/xylogue"
+repository = "https://github.com/torao/xenolith"
 authors = ["TAKAMI Torao"]
 # crates.io allows five keywords, and its search already reads the description — so these are
 # spent on the terms that earn a listing page of their own rather than on repeating the blurb.
@@ -24,28 +38,32 @@ categories = ["parser-implementations", "text-processing"]
 [workspace.dependencies]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
-xylogue-core = { version = "0.0.0", path = "crates/xylogue-core", default-features = false }
-xylogue-parser = { version = "0.0.0", path = "crates/xylogue-parser", default-features = false }
-xylogue-validate = { version = "0.0.0", path = "crates/xylogue-validate", default-features = false }
-xylogue-dom = { version = "0.0.0", path = "crates/xylogue-dom", default-features = false }
-xylogue-serialize = { version = "0.0.0", path = "crates/xylogue-serialize", default-features = false }
-xylogue-xinclude = { version = "0.0.0", path = "crates/xylogue-xinclude", default-features = false }
-xylogue-xdm = { version = "0.0.0", path = "crates/xylogue-xdm", default-features = false }
-xylogue-xpath = { version = "0.0.0", path = "crates/xylogue-xpath", default-features = false }
-xylogue-xslt = { version = "0.0.0", path = "crates/xylogue-xslt", default-features = false }
-xylogue-exslt = { version = "0.0.0", path = "crates/xylogue-exslt", default-features = false }
-xylogue = { version = "0.0.0", path = "crates/xylogue", default-features = false }
-# Argument parsing for the `xylogue` binary. No library crate depends on it.
+xenolith-xinclude = { version = "0.0.0", path = "crates/xenolith-xinclude", default-features = false }
+xenolith-xdm = { version = "0.0.0", path = "crates/xenolith-xdm", default-features = false }
+xenolith-xpath = { version = "0.0.0", path = "crates/xenolith-xpath", default-features = false }
+xenolith-xslt = { version = "0.0.0", path = "crates/xenolith-xslt", default-features = false }
+xenolith-exslt = { version = "0.0.0", path = "crates/xenolith-exslt", default-features = false }
+xenolith = { version = "0.0.0", path = "crates/xenolith", default-features = false }
+# Argument parsing for the `xenolith` binary. No library crate depends on it.
 clap = { version = "4", features = ["derive", "wrap_help"] }
 encoding_rs = "0.8"
+# Derives `Display` and `Error` for `ErrorKind`, so each variant owns its own wording and its
+# structured payload. A build-time proc-macro with no runtime footprint; MSRV 1.61.
+thiserror = "2"
 # The collation `xsl:sort` needs for a language other than code-point order (ROADMAP decision 2).
 # EXSLT's regular-expressions module. A linear-time matcher: no backreferences or lookaround,
 # and in exchange no pattern that can be made to run for ever by its input.
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 icu_collator = "2"
 icu_locale_core = "2"
+# The runtime-agnostic async-read trait for the `async` driver. Traits only, no executor, so the
+# runtime stays the caller's business.
+futures-io = { version = "0.3", default-features = false, features = ["std"] }
 # Only `AsyncRead` is needed; the runtime is the caller's business.
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+# Adapts tokio's own `AsyncRead` to `futures_io::AsyncRead` for the `tokio` convenience
+# constructors; only pulled in by the `tokio` feature.
+tokio-util = { version = "0.7", default-features = false, features = ["compat"] }
 # Benchmarking. Default features off: the plotting and the parallel sampler pull in a great deal
 # for a number this does not need prettier.
 criterion = { version = "0.5", default-features = false }

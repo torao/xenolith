@@ -10,7 +10,7 @@
 #
 # Needs a nightly toolchain and cargo-fuzz. On Windows the libFuzzer runtime does not load, so
 # run it under WSL or on Linux; the properties themselves are checked everywhere by
-# `cargo test -p xylogue-fuzz`.
+# `cargo test -p xenolith-fuzz`.
 set -euo pipefail
 
 seconds="${1:-60}"
@@ -29,11 +29,15 @@ seeds_for() {
   esac
 }
 
-targets="parse_document build_and_serialize validate_document compile_expression transform"
+# `compile_expression` and `transform` are not in the list: the properties they feed belong to
+# `xenolith-xpath` and `xenolith-xslt`, which are parked outside the workspace while the event
+# vocabulary settles, so the targets are not built. They return with the crates, and `seeds_for`
+# above already knows which corpus each one starts from.
+targets="parse_document build_and_serialize validate_document"
 
 for target in $targets; do
   mkdir -p "$root/fuzz/corpus/$target"
-  cp "$root/crates/xylogue-fuzz/corpus/$(seeds_for "$target")"/* "$root/fuzz/corpus/$target/"
+  cp "$root/crates/xenolith-fuzz/corpus/$(seeds_for "$target")"/* "$root/fuzz/corpus/$target/"
   echo "===== $target ====="
   (cd "$root" && cargo "+$toolchain" fuzz run "$target" -- -max_total_time="$seconds" -print_final_stats=1)
 done

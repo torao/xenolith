@@ -6,6 +6,6 @@ use libfuzzer_sys::fuzz_target;
 // An expression is text, so the fuzzer is asked for text rather than bytes: it then spends its
 // time on expressions rather than on rediscovering UTF-8.
 fuzz_target!(|text: &str| {
-  xylogue_fuzz::compile_expression(text);
-  xylogue_fuzz::evaluate_expression(text);
+  xenolith_fuzz::compile_expression(text);
+  xenolith_fuzz::evaluate_expression(text);
 });

@@ -4,7 +4,7 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-  xylogue_fuzz::parse_document(data);
+  xenolith_fuzz::parse_document(data);
   // The same bytes through a reader that splits every token, which the slice never does.
-  xylogue_fuzz::parse_document_in_pieces(data);
+  xenolith_fuzz::parse_document_in_pieces(data);
 });
