@@ -499,3 +499,18 @@ mod push {
     assert_eq!(second.0, expected, "both handlers saw the same stream");
   }
 }
+
+#[test]
+fn a_document_that_ends_in_the_middle_of_text_is_refused() {
+  // The last run of text is flushed as its own token when the input ends, and that token is reported like any other:
+  // a reader that could not name it panicked here instead of reporting the element left open.
+  for xml in [
+    "<a>text",
+    "<a>text
+",
+    "<!DOCTYPE a [<!ELEMENT a (#PCDATA)>]><a>text",
+  ] {
+    let error = StreamSource::new(xml.as_bytes()).emit().expect_err("the element is never closed");
+    assert!(error.message().contains("is not closed"), "{xml:?}: {error}");
+  }
+}

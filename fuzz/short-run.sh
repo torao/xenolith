@@ -29,7 +29,11 @@ seeds_for() {
   esac
 }
 
-targets="parse_document build_and_serialize validate_document compile_expression transform"
+# `compile_expression` and `transform` are not in the list: the properties they feed belong to
+# `xenolith-xpath` and `xenolith-xslt`, which are parked outside the workspace while the event
+# vocabulary settles, so the targets are not built. They return with the crates, and `seeds_for`
+# above already knows which corpus each one starts from.
+targets="parse_document build_and_serialize validate_document"
 
 for target in $targets; do
   mkdir -p "$root/fuzz/corpus/$target"

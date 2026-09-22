@@ -3,7 +3,7 @@ resolver = "3"
 # The crates under review while the core event vocabulary is settled. The layers built on top of
 # it are parked in `exclude` below and come back one at a time, so a change to the vocabulary is
 # not a change to every crate at once.
-members = ["crates/xenolith"]
+members = ["crates/xenolith", "crates/xenolith-fuzz"]
 # The libFuzzer targets need a nightly toolchain, so they are built when someone chooses to fuzz
 # rather than by every `cargo build --workspace`.
 #
@@ -14,7 +14,6 @@ exclude = [
   "fuzz",
   "crates/xenolith-cli",
   "crates/xenolith-exslt",
-  "crates/xenolith-fuzz",
   "crates/xenolith-xdm",
   "crates/xenolith-xinclude",
   "crates/xenolith-xpath",

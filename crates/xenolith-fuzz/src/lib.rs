@@ -9,17 +9,16 @@
 //! # What is being checked
 //!
 //! Every function here takes arbitrary bytes and must **return**. Panicking is the finding; so is
-//! looping for ever, which the fuzzer reports as a timeout. Beyond that, several carry a property
+//! looping for ever, which the fuzzer reports as a timeout. Beyond that, one carries a property
 //! stronger than "did not crash":
 //!
-//! - [`build_and_serialize`] — what the serializer writes parses back, and writing it again gives
-//!   the same text. A serializer that emitted something unreadable would be a bug no test of
+//! - [`build_and_serialize`] — what the writer puts out parses back, and writing it again gives
+//!   the same text. A writer that emitted something unreadable would be a bug no test of
 //!   hand-written documents is likely to reach.
-//! - [`compile_expression`] — printing a parsed expression yields text that parses to the same
-//!   tree. This is the property the proptest suite checks over generated expressions; the fuzzer
-//!   reaches shapes a generator will not.
-//! - [`transform`] — a stylesheet that compiles either runs or fails, and what it produces can be
-//!   written out.
+//!
+//! The properties over XPath expressions and XSLT stylesheets went with the crates they exercised
+//! (`xenolith-xpath`, `xenolith-xslt`), which are parked outside the workspace while the event
+//! vocabulary settles. Their corpora are still here, and the properties return with the crates.
 //!
 //! # What is deliberately not checked
 //!
@@ -28,61 +27,64 @@
 
 use std::io::Read;
 
-use xenolith_core::event::{EventCursor, EventSource};
-use xenolith_core::dom::build::DomBuilder;
-use xenolith_core::io::{EventRef, StreamSource};
-use xenolith_validate::Validatable;
-use xenolith_xdm::DomModel;
-use xenolith_xpath::XPath;
-use xenolith_xslt::{Stylesheet, Transform};
+use xenolith::dom::build::DomBuilder;
+use xenolith::dom::{Document, DomSource};
+use xenolith::event::validate::ValidatorSet;
+use xenolith::event::{EventCursor, EventRef, EventSource};
+use xenolith::io::StreamSource;
+use xenolith::io::write::XmlWriter;
 
 /// Reads `xml` into a tree through the parser and the builder.
-fn build_tree(xml: &[u8]) -> xenolith_core::Result<xenolith_core::dom::Document> {
+fn build_tree(xml: &[u8]) -> xenolith::Result<Document> {
   let mut builder = DomBuilder::new();
   StreamSource::new(xml).with_handler(&mut builder).emit()?;
-  builder.into_document().map_err(xenolith_core::Error::internal)
+  Ok(builder.into_document())
 }
 
-/// How deep a fuzzed transformation may recurse before it is stopped.
-///
-/// Far below the default: a fuzzer that has found unbounded recursion should be told quickly,
-/// and a stylesheet that legitimately needs more depth is not what this is looking for.
-const FUZZ_MAX_DEPTH: usize = 20;
-
-/// The document a fuzzed stylesheet or expression is run against.
-///
-/// Small, and with something of everything a pattern might match: elements at two depths, an
-/// attribute, text, a comment, a processing instruction, and a namespace.
-const SUBJECT: &[u8] = br#"<?xml version="1.0"?>
-<r xmlns:p="urn:p" k="v"><a id="1">one</a><p:b>two</p:b><!--c--><?pi d?>tail</r>"#;
+/// Writes `document` out as XML text.
+fn write_tree(document: &Document) -> xenolith::Result<String> {
+  let mut writer = XmlWriter::new(Vec::new());
+  DomSource::new(document).with_handler(&mut writer).emit()?;
+  Ok(String::from_utf8(writer.into_inner()).expect("the writer writes UTF-8 unless told otherwise"))
+}
 
 /// Reads a document with the pull parser, touching every event.
 ///
-/// The accessors are called rather than only the events counted: an event that cannot be read is
-/// as much a bug as one that cannot be reached, and reading is where the borrowed buffers are.
+/// The fields are read rather than the events only counted: an event that cannot be read is as
+/// much a bug as one that cannot be reached, and reading is where the borrowed buffers are.
 pub fn parse_document(data: &[u8]) {
-  let mut reader = StreamSource::with_system_id(data, "urn:fuzz");
+  let mut source = StreamSource::with_system_id(data, "urn:fuzz");
   loop {
-    match reader.advance() {
-      Ok(Some(_)) => {
-        let parser = reader.parser();
-        match parser.event_ref() {
-          Some(EventRef::StartElement { attributes, .. }) => {
-            let _ = parser.local_name();
-            for attribute in attributes.iter() {
-              let _ = attribute.value;
-              let _ = attribute.declares_namespace;
-            }
+    match source.next() {
+      Ok(Some(event)) => match event {
+        EventRef::StartElement(event) => {
+          let _ = event.lexical();
+          let _ = event.base_uri;
+          for attribute in event.attributes.iter() {
+            let _ = attribute.value;
+            let _ = attribute.declares_namespace();
           }
-          Some(EventRef::EndElement { .. }) => {
-            let _ = parser.local_name();
-          }
-          Some(EventRef::Text(text) | EventRef::CData(text) | EventRef::Comment(text)) => {
-            let _ = text;
-          }
-          _ => {}
         }
-      }
+        EventRef::EndElement(event) => {
+          let _ = event.lexical();
+        }
+        EventRef::Characters(event) => {
+          let _ = event.text;
+        }
+        EventRef::Cdata(event) => {
+          let _ = event.text;
+        }
+        EventRef::Comment(event) => {
+          let _ = event.text;
+        }
+        EventRef::ProcessingInstruction(event) => {
+          let _ = (event.target, event.data);
+        }
+        EventRef::Doctype(event) => {
+          let _ = (event.name, event.public_id, event.system_id);
+        }
+        EventRef::StartDocument | EventRef::EndDocument => {}
+      },
       // The end of the document, or a refusal. Both are orderly.
       Ok(None) | Err(_) => return,
     }
@@ -94,8 +96,8 @@ pub fn parse_document(data: &[u8]) {
 /// The same parser, driven a byte at a time, so a token split across two reads is exercised —
 /// which the slice above never does.
 pub fn parse_document_in_pieces(data: &[u8]) {
-  let mut reader = StreamSource::new(OneByteAtATime(data, 0));
-  while let Ok(Some(_)) = reader.advance() {}
+  let mut source = StreamSource::new(OneByteAtATime(data, 0));
+  while let Ok(Some(_)) = source.next() {}
 }
 
 /// A reader that hands over one byte per call, to split tokens across reads.
@@ -118,78 +120,34 @@ impl Read for OneByteAtATime<'_> {
 /// against — `xml:id` is checked whether or not a DTD declares anything — so "errors imply a
 /// DTD" would be a property that is not true, and a fuzzer would rightly find it.
 pub fn validate_document(data: &[u8]) {
-  if let Ok(report) = StreamSource::new(data).with_validation().validating_dtd().run() {
-    let _ = report.is_valid();
-    for error in report.errors() {
-      let _ = error.message();
-      let _ = error.location();
-    }
+  let mut validation = ValidatorSet::new().validating_dtd(true).checking_xml_id(true);
+  {
+    let mut source = StreamSource::new(data).with_handler(&mut validation);
+    let _ = source.emit();
+  }
+  let report = validation.report();
+  let _ = report.is_valid();
+  for error in report.errors() {
+    let _ = error.message();
+    let _ = error.location();
   }
 }
 
 /// Builds a DOM, writes it out, and reads it back.
 ///
-/// The property: **what this serializer writes, this parser reads** — and writing the tree that
+/// The property: **what this writer puts out, this parser reads** — and writing the tree that
 /// comes back gives the same text. A document that survives parsing but cannot be written down
 /// again is a bug that no test of documents a person wrote is likely to reach.
 pub fn build_and_serialize(data: &[u8]) {
   let Ok(document) = build_tree(data) else { return };
-  let Some(root) = document.document_element() else { return };
-  let written = xenolith_serialize::Serializer::new().to_string(&document, root);
+  if document.document_element().is_none() {
+    return;
+  }
+  let Ok(written) = write_tree(&document) else { return };
 
   let reread = build_tree(written.as_bytes())
-    .unwrap_or_else(|error| panic!("what the serializer wrote will not parse: {}\n{written}", error.message()));
-  let Some(reread_root) = reread.document_element() else {
-    panic!("what the serializer wrote has no document element: {written}");
-  };
-  let again = xenolith_serialize::Serializer::new().to_string(&reread, reread_root);
+    .unwrap_or_else(|error| panic!("what the writer put out will not parse: {}\n{written}", error.message()));
+  assert!(reread.document_element().is_some(), "what the writer put out has no document element: {written}");
+  let again = write_tree(&reread).unwrap_or_else(|error| panic!("the tree read back will not write: {error}"));
   assert_eq!(written, again, "writing the same tree twice gave two different texts");
-}
-
-/// Parses an XPath expression, prints it, and parses it again.
-///
-/// The property: printing a tree gives text that parses back to **the same tree**. The printed
-/// form is the unabbreviated one, so this also says that expanding `//`, `@` and the rest is
-/// faithful.
-///
-/// It compares the trees rather than the printed text. Comparing the text asks only that the
-/// printer be self-consistent, which it can be while printing something that means a different
-/// thing — `(//a)[1]` printed as `//a[1]` is stable and selects a different node-set. Two
-/// findings hid behind the weaker form before it was corrected to the one this documentation had
-/// been claiming all along.
-pub fn compile_expression(text: &str) {
-  let Ok(expression) = xenolith_xpath::parse(text) else { return };
-  let printed = expression.to_string();
-  let reparsed = xenolith_xpath::parse(&printed)
-    .unwrap_or_else(|error| panic!("printing {text:?} gave {printed:?}, which will not parse: {}", error.message()));
-  assert_eq!(reparsed, expression, "printing {text:?} gave {printed:?}, which parses to a different tree");
-}
-
-/// Evaluates an expression over a fixed document.
-///
-/// Parsing an expression and running one are different machinery, and only the second reaches the
-/// axes, the conversions and the function library.
-pub fn evaluate_expression(text: &str) {
-  let Ok(document) = build_tree(SUBJECT) else { return };
-  let model = DomModel::new(&document);
-  let Ok(expression) = XPath::new().with_namespace("p", "urn:p").compile(text) else { return };
-  if let Ok(value) = expression.evaluate(&model, model.root_node()) {
-    // Every value converts to every other type; §4 leaves none of them undefined.
-    let _ = value.string(&model);
-    let _ = value.number(&model);
-    let _ = value.boolean();
-  }
-}
-
-/// Compiles a stylesheet and runs it over a fixed document.
-pub fn transform(data: &[u8]) {
-  let Ok(stylesheet) = Stylesheet::compile(data, "urn:fuzz") else { return };
-  let Ok(document) = build_tree(SUBJECT) else { return };
-  let model = DomModel::new(&document);
-  let Ok(result) = Transform::new().with_max_depth(FUZZ_MAX_DEPTH).run(&stylesheet, &model, model.root_node()) else {
-    return;
-  };
-  // A result that was built must be writable: §16 has an answer for every tree.
-  let _ = result.serialize();
-  let _ = result.to_bytes();
 }

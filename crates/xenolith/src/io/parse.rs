@@ -756,6 +756,7 @@ impl Parser {
           continue;
         }
         if let Some(kind) = self.flush_text()? {
+          self.kind = Some(kind);
           return Ok(Progress::Token(kind));
         }
         return self.finish();

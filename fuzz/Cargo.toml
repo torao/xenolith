@@ -34,16 +34,7 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "compile_expression"
-path = "fuzz_targets/compile_expression.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "transform"
-path = "fuzz_targets/transform.rs"
-test = false
-doc = false
-bench = false
+# The targets over XPath expressions (`compile_expression`) and XSLT stylesheets (`transform`)
+# are not built: the properties they call belong to `xenolith-xpath` and `xenolith-xslt`, which
+# are parked outside the workspace while the event vocabulary settles. The target files and their
+# corpora stay where they are, and the entries return with the crates.

@@ -189,3 +189,10 @@ dependencies = [
  "tokio-test",
  "tokio-util",
 ]
+
+[[package]]
+name = "xenolith-fuzz"
+version = "0.0.0"
+dependencies = [
+ "xenolith",
+]

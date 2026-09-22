@@ -8,6 +8,10 @@
 //!
 //! A crash the fuzzer finds is copied into `corpus/` beside the seeds, and from then on this test
 //! is what keeps it fixed.
+//!
+//! The `expressions` and `stylesheets` corpora are not replayed here: the properties over them
+//! belong to `xenolith-xpath` and `xenolith-xslt`, which are parked outside the workspace. The
+//! files stay, and the tests return with the crates.
 
 use std::path::{Path, PathBuf};
 
@@ -49,21 +53,6 @@ fn every_document_that_builds_a_tree_can_be_written_and_read_back() {
 }
 
 #[test]
-fn every_expression_prints_to_something_that_parses_to_the_same_tree() {
-  replay("expressions", |data| {
-    if let Ok(text) = std::str::from_utf8(data) {
-      xenolith_fuzz::compile_expression(text);
-      xenolith_fuzz::evaluate_expression(text);
-    }
-  });
-}
-
-#[test]
-fn every_stylesheet_compiles_or_is_refused() {
-  replay("stylesheets", xenolith_fuzz::transform);
-}
-
-#[test]
 fn the_properties_survive_what_is_not_xml_at_all() {
   // The corpus is XML-shaped by design, and the fuzzer spends most of its time nowhere near
   // that. These are the shapes it reaches first.
@@ -83,10 +72,5 @@ fn the_properties_survive_what_is_not_xml_at_all() {
     xenolith_fuzz::parse_document_in_pieces(input);
     xenolith_fuzz::validate_document(input);
     xenolith_fuzz::build_and_serialize(input);
-    xenolith_fuzz::transform(input);
-    if let Ok(text) = std::str::from_utf8(input) {
-      xenolith_fuzz::compile_expression(text);
-      xenolith_fuzz::evaluate_expression(text);
-    }
   }
 }

@@ -14,15 +14,9 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-# The features the properties need named outright, as the CLI does — see the note in ci.yml about
+# The features the properties need named outright, as the CLI does - see the note in ci.yml about
 # why this crate is left out of the workspace-wide no-default-features runs.
-xenolith-core = { workspace = true }
-xenolith-validate = { workspace = true, features = ["encodings"] }
-xenolith-dom = { workspace = true }
-xenolith-serialize = { workspace = true }
-xenolith-xdm = { workspace = true }
-xenolith-xpath = { workspace = true }
-xenolith-xslt = { workspace = true, features = ["encodings"] }
+xenolith = { workspace = true, features = ["encodings"] }
 
 [lints]
 workspace = true
