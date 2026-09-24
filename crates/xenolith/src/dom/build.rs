@@ -3,6 +3,7 @@
 //! [`DomBuilder`] is a type of [`EventHandler`] that builds a DOM tree based on events generated from an arbitrary
 //! event source.
 
+use crate::chars::is_whitespace;
 use crate::dtd::model::{AttType, Dtd};
 use crate::error::Error;
 use crate::event::{
@@ -24,6 +25,10 @@ use crate::dom::{Document, DomException, NodeId};
 /// [`get_element_by_id`](Document::get_element_by_id) to be used for these attributes. The builder also records the
 /// base URI for each element. This is resolved using `xml:base` and the document's system identifier, and can be
 /// retrieved via [`base_uri`](Document::base_uri).
+///
+/// Leading and trailing whitespaces around the root element are omitted. Although the XML specification permits
+/// whitespace in those locations, the DOM specification does not allow character data to be placed directly under the
+/// `document` node.
 ///
 /// Since [`DomBuilder`] is an [`EventHandler`], it can operate in a single parsing pass alongside other handlers. In
 /// many cases, a [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator) should be placed upstream to ensure
@@ -250,6 +255,11 @@ impl DomBuilder {
     // Coalesce here: a run of text may arrive as several events, and the data model wants adjacent character data as a
     // single text node. `append_text` extends the open node's last child when it is already text.
     let parent = *self.open.last().expect("the document is always open");
+    // There is no whitespace before or after root elements within the tree. Like the infoset, the DOM does not assign
+    // character data to document nodes. Any other text present there is still rejected by the document itself.
+    if self.open.len() == 1 && event.text.chars().all(is_whitespace) {
+      return Ok(());
+    }
     self.doc.append_text(parent, event.text)?;
     Ok(())
   }

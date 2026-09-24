@@ -64,7 +64,7 @@ struct FileResolver {
 }
 
 impl UriResolver for FileResolver {
-  fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
+  fn resolve(&self, request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
     let Some(uri) = request.resolved_uri() else { return Ok(None) };
     let path = uri.strip_prefix("file:///").map(PathBuf::from).unwrap_or_else(|| self.root.join(request.system_id()));
     Ok(std::fs::File::open(&path).ok().map(|f| Box::new(f) as Box<dyn std::io::Read>))
@@ -118,8 +118,8 @@ fn invalid_documents_are_reported_as_invalid() {
     };
     let case_root = path.ancestors().nth(4).unwrap_or(&path).to_path_buf();
     let system_id = format!("file:///{}", path.display().to_string().replace('\\', "/"));
-    let reader = StreamSource::with_system_id(std::io::BufReader::new(file), &system_id)
-      .with_resolver(FileResolver { root: case_root });
+    let resolver = FileResolver { root: case_root };
+    let reader = StreamSource::with_system_id(std::io::BufReader::new(file), &system_id).with_resolver(&resolver);
 
     match validate_reader(reader) {
       Ok(report) if report.is_valid() => {

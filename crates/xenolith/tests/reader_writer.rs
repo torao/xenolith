@@ -1,6 +1,7 @@
 //! The application layer: XML read into events or a tree, and a tree written out.
 
 use xenolith::event::{EventHandler, EventRef};
+use xenolith::io::write::LineBreak;
 use xenolith::{Reader, Result, Writer};
 
 /// Records the lexical name of every start element.
@@ -117,6 +118,16 @@ fn the_writer_passes_its_options_to_the_parts_underneath() {
     Writer::new().with_xml_declaration(true).with_declared_encoding("latin1").write(&doc, Vec::new()).expect("written");
   assert!(out.starts_with(b"<?xml version=\"1.0\" encoding=\"latin1\"?>"), "{out:?}");
 
+  // Nothing follows the declaration unless a line break is asked for, and then the one asked for does.
+  let out = Writer::new().with_xml_declaration(true).write(&doc, Vec::new()).expect("written");
+  assert!(out.starts_with(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>"), "{out:?}");
+  let out = Writer::new()
+    .with_xml_declaration(true)
+    .with_declaration_line_break(Some(LineBreak::CrLf))
+    .write(&doc, Vec::new())
+    .expect("written");
+  assert!(out.starts_with(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<a>"), "{out:?}");
+
   // A label the writer does not have is refused by the write, not by the setting.
   let writer = Writer::new().with_encoding("no-such-encoding");
   assert!(writer.write(&doc, Vec::new()).is_err());
@@ -124,4 +135,53 @@ fn the_writer_passes_its_options_to_the_parts_underneath() {
   // The document type declaration is written only when it is asked for.
   let out = Writer::new().with_doctype(true).write(&doc, Vec::new()).expect("written");
   assert!(String::from_utf8(out).unwrap().starts_with("<!DOCTYPE a>"));
+}
+
+#[test]
+fn a_read_can_assemble_a_document_from_its_parts() {
+  use std::io::Read;
+  use xenolith::io::resolve::{EntityRequest, UriResolver};
+
+  /// A resolver over a map, standing in for a filesystem or a catalogue.
+  struct Map(Vec<(&'static str, &'static str)>);
+  impl UriResolver for Map {
+    fn resolve(&self, request: &EntityRequest) -> Result<Option<Box<dyn Read>>> {
+      let uri = request.resolved_uri().unwrap_or_default();
+      let found = self.0.iter().find(|(name, _)| *name == uri).map(|(_, body)| body.as_bytes());
+      Ok(found.map(|body| Box::new(body) as Box<dyn Read>))
+    }
+  }
+
+  let xml = "<doc xmlns:xi='http://www.w3.org/2001/XInclude'><xi:include href='part.xml'/></doc>";
+  let map = Map(vec![("file:///doc/part.xml", "<p>from the part</p>")]);
+
+  // Off by default: the element is what the tree holds, and nothing was fetched.
+  let doc = Reader::new().with_system_id("file:///doc/main.xml").document(xml.as_bytes()).expect("read");
+  let root = doc.document_element().unwrap();
+  assert_eq!(doc.node_name(doc.first_child(root).unwrap()), "xi:include");
+
+  // On, with a resolver to fetch through: the tree holds the assembled document.
+  let doc = Reader::new()
+    .with_system_id("file:///doc/main.xml")
+    .with_xinclude(true)
+    .with_resolver(&map)
+    .document(xml.as_bytes())
+    .expect("read and assembled");
+  let root = doc.document_element().unwrap();
+  let included = doc.first_child(root).expect("the included element");
+  assert_eq!(doc.node_name(included), "p");
+  assert_eq!(doc.text_content(included), "from the part");
+  // The base URI fixup says where it came from, so a reference inside it still resolves.
+  assert_eq!(doc.attribute(included, "xml:base"), Some("file:///doc/part.xml"));
+}
+
+#[test]
+fn an_inclusion_with_nothing_to_fetch_through_is_refused() {
+  let xml = "<doc xmlns:xi='http://www.w3.org/2001/XInclude'><xi:include href='part.xml'/></doc>";
+  let error = Reader::new()
+    .with_system_id("file:///doc/main.xml")
+    .with_xinclude(true)
+    .document(xml.as_bytes())
+    .expect_err("nothing may be fetched without a resolver");
+  assert!(error.message().contains("with_resolver"), "{error}");
 }

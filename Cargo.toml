@@ -15,7 +15,6 @@ exclude = [
   "crates/xenolith-cli",
   "crates/xenolith-exslt",
   "crates/xenolith-xdm",
-  "crates/xenolith-xinclude",
   "crates/xenolith-xpath",
   "crates/xenolith-xslt",
 ]
@@ -32,13 +31,12 @@ authors = ["TAKAMI Torao"]
 # `dom` is deliberately absent: that page is front-end crates, and "xml dom" finds us anyway.
 keywords = ["xml", "xslt", "xpath", "dtd", "sax"]
 # The default for every crate here. A category is a claim about what a crate *is*, so the two
-# narrower ones are set by the crates they are true of rather than inherited by all thirteen.
+# narrower ones are set by the crates they are true of rather than inherited by all of them.
 categories = ["parser-implementations", "text-processing"]
 
 [workspace.dependencies]
 # Inter-crate dependencies default their features off so each crate re-exports only what it
 # means to; see the feature policy in ROADMAP.md.
-xenolith-xinclude = { version = "0.0.0", path = "crates/xenolith-xinclude", default-features = false }
 xenolith-xdm = { version = "0.0.0", path = "crates/xenolith-xdm", default-features = false }
 xenolith-xpath = { version = "0.0.0", path = "crates/xenolith-xpath", default-features = false }
 xenolith-xslt = { version = "0.0.0", path = "crates/xenolith-xslt", default-features = false }

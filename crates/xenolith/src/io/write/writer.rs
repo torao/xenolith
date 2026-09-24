@@ -13,6 +13,7 @@ use crate::event::{
 use crate::io::encoding::{Encoder, Utf8Encoder, encoder_for};
 use crate::name::lexical;
 
+use crate::io::write::LineBreak;
 use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 
 /// Writes received events as XML text to an [`io::Write`] destination.
@@ -103,7 +104,7 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
 /// let mut w = XmlWriter::new(Vec::new()).with_encoding("windows-31j")?;
-/// let mut w = w.with_declared_encoding("Shift_JIS").with_declaration(None);
+/// let mut w = w.with_declared_encoding("Shift_JIS").with_declaration(true);
 /// {
 ///   let mut doc = WriterSource::new().with_handler(&mut w);
 ///   doc.write_start_element("a")?;
@@ -122,7 +123,7 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 /// use xenolith::event::EventSource;
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
-/// let mut w = XmlWriter::new(Vec::new()).with_declared_encoding("UTF-16").with_declaration(None);
+/// let mut w = XmlWriter::new(Vec::new()).with_declared_encoding("UTF-16").with_declaration(true);
 /// {
 ///   let mut doc = WriterSource::new().with_handler(&mut w);
 ///   doc.write_start_element("greeting")?;
@@ -150,8 +151,12 @@ pub struct XmlWriter<W> {
   encoder: Box<dyn Encoder>,
   /// The name the XML declaration gives, when it differs from the encoder's own.
   declared: Option<String>,
-  /// The `standalone` value of the XML declaration to write when the document starts, or `None` to write none.
-  declaration: Option<Option<bool>>,
+  /// Whether to write an XML declaration at the beginning of the document.
+  declaration: bool,
+  /// The value of the `standalone` attribute in the XML declaration; `None` if the attribute is omitted.
+  standalone: Option<bool>,
+  /// A line break that follows immediately after the XML declaration; `None` if nothing follows it.
+  declaration_line_break: Option<LineBreak>,
 
   /// The names of the elements currently open, outermost first.
   open: Vec<String>,
@@ -173,7 +178,9 @@ impl<W: io::Write> XmlWriter<W> {
       out,
       encoder: Box::new(Utf8Encoder::new()),
       declared: None,
-      declaration: None,
+      declaration: false,
+      standalone: None,
+      declaration_line_break: None,
       open: Vec::new(),
       pending: false,
       scratch: String::new(),
@@ -220,13 +227,30 @@ impl<W: io::Write> XmlWriter<W> {
     self
   }
 
-  /// Configure the output to include an XML declaration at the beginning of the document. If a value is specified for
-  /// the `standalone` attribute, that value is also included in the output. Since the XML declaration is not part of
-  /// the document content, it is not reported from the source. If this method is not called, the output begins with
-  /// the first markup.
+  /// Sets whether to include an XML declaration at the beginning of the output. Since the XML declaration is not part
+  /// of the document content, it is not reported from the source. The default is `false`, in which case the output
+  /// begins with the first markup element.
   #[must_use]
-  pub fn with_declaration(mut self, standalone: Option<bool>) -> Self {
-    self.declaration = Some(standalone);
+  pub fn with_declaration(mut self, declaration: bool) -> Self {
+    self.declaration = declaration;
+    self
+  }
+
+  /// Sets the `standalone` attribute for the XML declaration. `Some(true)` writes `standalone="yes"`, `Some(false)`
+  /// writes `standalone="no"`, and `None` omits the attribute. The default is `None`. This setting is effective only
+  /// if the XML declaration is written (see [`with_declaration`](Self::with_declaration)).
+  #[must_use]
+  pub fn with_standalone(mut self, standalone: Option<bool>) -> Self {
+    self.standalone = standalone;
+    self
+  }
+
+  /// Sets the content to be written immediately after the XML declaration. The default is `None`, meaning nothing is
+  /// written. This setting is effective only when the XML declaration is written (see
+  /// [`with_declaration`](Self::with_declaration)).
+  #[must_use]
+  pub fn with_declaration_line_break(mut self, line_break: Option<LineBreak>) -> Self {
+    self.declaration_line_break = line_break;
     self
   }
 
@@ -266,22 +290,24 @@ impl<W: io::Write> XmlWriter<W> {
     self.open.clear();
     self.pending = false;
 
-    match self.declaration {
-      Some(standalone) => self.xml_declaration(standalone),
-      None => Ok(()),
-    }
+    if self.declaration { self.xml_declaration() } else { Ok(()) }
   }
 
-  /// Writes `<?xml version="1.0" encoding="..."?>`. Optionally includes the `standalone` attribute.
-  fn xml_declaration(&mut self, standalone: Option<bool>) -> Result<()> {
+  /// Writes `<?xml version="1.0" encoding="..."?>` (including the `standalone` attribute if it is set), followed by
+  /// the configured line break.
+  fn xml_declaration(&mut self) -> Result<()> {
     let declared = self.declared.clone().unwrap_or_else(|| self.encoder.encoding().to_owned());
     self.put_markup("<?xml version=\"1.0\" encoding=\"")?;
     self.put(&declared)?;
     self.put_markup("\"")?;
-    if let Some(standalone) = standalone {
+    if let Some(standalone) = self.standalone {
       self.put_markup(if standalone { " standalone=\"yes\"" } else { " standalone=\"no\"" })?;
     }
-    self.put_markup("?>")
+    self.put_markup("?>")?;
+    match self.declaration_line_break {
+      Some(line_break) => self.put_markup(line_break.as_str()),
+      None => Ok(()),
+    }
   }
 
   /// Writes a document type declaration, which a source reports once, before the root element.

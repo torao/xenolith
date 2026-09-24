@@ -317,6 +317,10 @@ pub enum Error {
 impl Error {
   /// An I/O failure that occurred while reading or writing an entity, carrying neither location information nor
   /// underlying I/O error details.
+  ///
+  /// Where the failure came from an [`std::io::Error`], [`caused_by`](Self::caused_by) keeps it, so that a caller can
+  /// read its [`ErrorKind`](std::io::ErrorKind) rather than only the description this one holds. Where that error is
+  /// the whole story, `Error::from` builds the same error with its description as the message.
   #[must_use]
   pub fn io(message: impl Into<String>) -> Self {
     Self::Io { location: Location::unknown(), message: message.into(), source: None }
@@ -492,6 +496,15 @@ impl Error {
   #[must_use]
   pub fn misuse(what: impl std::fmt::Display) -> Self {
     Self::Internal { message: what.to_string() }
+  }
+
+  /// Generates a misuse error for a reader that reports reading more bytes than the buffer's `capacity` allows. Since
+  /// both `Read::read` and `AsyncRead::poll_read` prohibit this, the error stems from an incorrect implementation of
+  /// the reader.
+  pub(crate) fn overlong_read(read: usize, capacity: usize) -> Self {
+    Self::misuse(format!(
+      "a reader returned {read} bytes for a buffer of {capacity}; a reader may not return more than the buffer holds"
+    ))
   }
 
   /// Generates an error that is returned when a build is compiled with specific features disabled.

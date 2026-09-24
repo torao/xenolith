@@ -124,7 +124,7 @@ fn escapes_text_and_attributes() {
 
 #[test]
 fn writes_the_prolog_and_leaves() {
-  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(Some(true)), |w| {
+  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_standalone(Some(true)), |w| {
     w.handle(&EventRef::StartDocument)?;
     comment(w, "hi")?;
     start(w, "a", &[])?;
@@ -161,13 +161,69 @@ fn a_doctype_takes_the_shape_its_identifiers_allow() {
 
 #[test]
 fn a_doctype_sits_between_the_declaration_and_the_root() {
-  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(None), |w| {
+  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
     w.handle(&EventRef::StartDocument)?;
     doctype(w, Some("note"), None, Some("note.dtd"))?;
     start(w, "note", &[])?;
     end(w, "note")
   });
   assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE note SYSTEM \"note.dtd\"><note/>");
+}
+
+#[test]
+fn whitespace_outside_the_root_is_written_as_given() {
+  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
+    w.handle(&EventRef::StartDocument)?;
+    text(w, "\n")?;
+    doctype(w, Some("a"), None, None)?;
+    text(w, "\n")?;
+    start(w, "a", &[])?;
+    end(w, "a")?;
+    text(w, "\n")
+  });
+  assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE a>\n<a/>\n");
+}
+
+#[test]
+fn anything_but_whitespace_outside_the_root_is_refused_by_the_strict_validator_ahead() {
+  use crate::event::Dispatch;
+  use crate::event::strict::StrictXmlValidator;
+
+  // The writer writes what it is given. That XML allows only whitespace, comments and processing instructions outside
+  // the root element (`Misc`) is the strict validator's rule, applied when it stands ahead of the writer.
+  let loose = written(|w| {
+    text(w, " x ")?;
+    cdata(w, "y")?;
+    start(w, "a", &[])?;
+    end(w, "a")
+  });
+  assert_eq!(loose, " x <![CDATA[y]]><a/>");
+
+  let text = EventRef::Characters(CharactersEventRef::new(" x ", Location::unknown()));
+  let cdata = EventRef::Cdata(CdataEventRef::new("y", Location::unknown()));
+  for event in [text, cdata] {
+    let mut strict = StrictXmlValidator::new();
+    let mut w = XmlWriter::new(Vec::new());
+    {
+      let mut lane = Dispatch::new().with_handler(&mut strict).with_handler(&mut w);
+      lane.handle(&EventRef::StartDocument).unwrap();
+      let error = lane.handle(&event).expect_err("not allowed outside the root element");
+      assert!(matches!(error, Error::WellFormedness { .. }), "{error}");
+    }
+    assert!(w.into_inner().is_empty(), "the validator stopped it before it was written");
+  }
+}
+
+#[test]
+fn a_document_read_and_written_keeps_its_layout_outside_the_root() {
+  use crate::event::{EventCursor, EventSource};
+  use crate::io::StreamSource;
+
+  let xml = "<?xml version='1.0'?>\n<!DOCTYPE a>\n<!-- note -->\n<a>x</a>\n";
+  let mut w = XmlWriter::new(Vec::new()).with_declaration(true);
+  StreamSource::new(xml.as_bytes()).with_handler(&mut w).emit().unwrap();
+  let out = String::from_utf8(w.into_inner()).unwrap();
+  assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE a>\n<!-- note -->\n<a>x</a>\n");
 }
 
 #[test]
@@ -235,10 +291,45 @@ fn a_document_that_begins_drops_what_an_earlier_one_left_open() {
 
 #[test]
 fn the_declaration_is_written_when_the_document_starts() {
-  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(Some(false)), |w| {
+  let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_standalone(Some(false)), |w| {
     w.handle(&EventRef::StartDocument)?;
     start(w, "a", &[])?;
     end(w, "a")
   });
   assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><a/>");
+}
+
+#[test]
+fn what_follows_the_declaration_is_the_line_break_set_for_it() {
+  let write = |line_break: Option<LineBreak>| {
+    written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_declaration_line_break(line_break), |w| {
+      w.handle(&EventRef::StartDocument)?;
+      start(w, "a", &[])?;
+      end(w, "a")
+    })
+  };
+  let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+  for (line_break, between) in
+    [(LineBreak::Cr, "\r"), (LineBreak::CrLf, "\r\n"), (LineBreak::Lf, "\n"), (LineBreak::Space, " ")]
+  {
+    assert_eq!(line_break.as_str(), between);
+    assert_eq!(write(Some(line_break)), format!("{declaration}{between}<a/>"), "{line_break:?}");
+  }
+  // `None` writes nothing, and it is also what the writer does unless asked, whatever the enum's own default is.
+  assert_eq!(write(None), format!("{declaration}<a/>"));
+  assert_eq!(LineBreak::default(), LineBreak::Lf);
+  let unset = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
+    w.handle(&EventRef::StartDocument)?;
+    start(w, "a", &[])?;
+    end(w, "a")
+  });
+  assert_eq!(unset, format!("{declaration}<a/>"));
+
+  // Without a declaration there is nothing for it to follow, so nothing is written.
+  let out = written_by(XmlWriter::new(Vec::new()).with_declaration_line_break(Some(LineBreak::CrLf)), |w| {
+    w.handle(&EventRef::StartDocument)?;
+    start(w, "a", &[])?;
+    end(w, "a")
+  });
+  assert_eq!(out, "<a/>");
 }

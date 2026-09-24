@@ -157,8 +157,8 @@ fn errors_are_ordered_by_location_whenever_each_validator_found_them() {
 }
 
 #[test]
-fn the_run_stops_at_the_error_limit_with_the_error_that_reached_it() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_error_limit(2);
+fn the_run_stops_with_the_error_that_exceeded_the_maximum() {
+  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(1));
   let mut names = Names::default();
   let result = {
     let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut names);
@@ -167,7 +167,7 @@ fn the_run_stops_at_the_error_limit_with_the_error_that_reached_it() {
 
   let error = result.expect_err("the second error stops the run");
   assert!(error.message().contains("\"y\""), "{error}");
-  assert_eq!(names.0, ["a", "x"], "the handler behind the validation never saw the element that reached the limit");
+  assert_eq!(names.0, ["a", "x"], "the handler behind the validation never saw the element that exceeded the maximum");
   let report = validation.report();
   assert_eq!(report.errors().len(), 2);
   assert_eq!(report.ended(), Some(Ended::Failed));
@@ -175,8 +175,8 @@ fn the_run_stops_at_the_error_limit_with_the_error_that_reached_it() {
 }
 
 #[test]
-fn a_limit_of_one_stops_at_the_first_error() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_error_limit(1);
+fn a_maximum_of_zero_stops_at_the_first_error() {
+  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(0));
   let error = StreamSource::new("<a><x/><y/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap_err();
   assert!(error.message().contains("\"x\""), "{error}");
   assert_eq!(validation.report().errors().len(), 1);
@@ -223,8 +223,16 @@ fn errors_recorded_by_a_validator_that_then_refuses_the_event_are_kept() {
 }
 
 #[test]
-fn a_limit_of_zero_is_no_limit() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_error_limit(0);
+fn there_is_no_maximum_by_default() {
+  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"]));
+  StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+  assert_eq!(validation.report().errors().len(), 3);
+}
+
+#[test]
+fn a_maximum_of_none_lifts_one_set_before() {
+  let mut validation =
+    ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(0)).with_max_errors(None);
   StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
   assert_eq!(validation.report().errors().len(), 3);
 }

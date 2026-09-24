@@ -136,7 +136,7 @@ fn a_document_larger_than_the_buffer_is_read_in_full() {
 struct AsyncFixture(&'static [u8]);
 
 impl AsyncUriResolver for AsyncFixture {
-  async fn resolve(&mut self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+  async fn resolve(&self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
     // A real resolver would await a socket or a file here.
     Ok(Some(AsyncEntityReader::from_async_read(self.0)))
   }
@@ -178,7 +178,7 @@ fn without_a_resolver_an_external_entity_is_refused() {
 struct OwnedAsyncEntity(&'static str, Vec<u8>);
 
 impl AsyncUriResolver for OwnedAsyncEntity {
-  async fn resolve(&mut self, request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+  async fn resolve(&self, request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
     if request.name() == Some(self.0) {
       Ok(Some(AsyncEntityReader::from_async_read(Bytes { data: self.1.clone(), at: 0 })))
     } else {
@@ -213,7 +213,7 @@ fn from_tokio_adapts_a_tokio_reader() {
   struct TokioFixture(&'static [u8]);
 
   impl AsyncUriResolver for TokioFixture {
-    async fn resolve(&mut self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+    async fn resolve(&self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
       Ok(Some(AsyncEntityReader::from_tokio(std::io::Cursor::new(self.0.to_vec()))))
     }
   }

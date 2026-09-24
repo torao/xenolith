@@ -24,8 +24,10 @@
 //! an [`XmlWriter`]-equivalent process.
 
 mod escape;
+mod line_break;
 mod source;
 mod writer;
 
+pub use line_break::LineBreak;
 pub use source::WriterSource;
 pub use writer::XmlWriter;

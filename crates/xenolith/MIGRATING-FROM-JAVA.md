@@ -16,11 +16,13 @@ is what the code does.
 | `org.w3c.dom.DOMException` | [`dom::DomException`](xenolith_core::dom::DomException) |
 | `javax.xml.stream.XMLStreamReader` (StAX) | [`parser::StreamSource`](xenolith_core::io::StreamSource) |
 | `org.xml.sax.ContentHandler` + `SAXParser` | [`event::EventHandler`](xenolith_core::event::EventHandler) + [`EventCursor::emit`](xenolith_core::event::EventCursor::emit) |
+| `org.xml.sax.XMLFilter` | a transform: an `EventHandler` that is also an `EventSource`, sitting in the middle of a pipeline. [`xinclude::XIncludeTransform`](crate::xinclude::XIncludeTransform) is the first one |
 | `org.xml.sax.EntityResolver` | [`parser::resolve::UriResolver`](xenolith_core::io::resolve::UriResolver) |
 | `org.xml.sax.ErrorHandler` | the `Result` of [`EventCursor::emit`](xenolith_core::event::EventCursor::emit); a validity violation is a [`ValidityError`](xenolith_core::event::validate::ValidityError) in a report |
 | `org.xml.sax.ext.LexicalHandler` | the `Comment`, `Cdata` and `Doctype` events |
 | `org.xml.sax.DTDHandler`, `ext.DeclHandler` | the parsed [`Dtd`](xenolith_core::dtd::Dtd) the `Doctype` event carries |
 | `setValidating(true)`, `javax.xml.validation` | [`ValidatorSet`](xenolith_core::event::validate::ValidatorSet), [`Validator`](xenolith_core::event::validate::Validator) |
+| `setXIncludeAware(true)` | [`Reader::with_xinclude`](crate::Reader::with_xinclude), with a resolver lent through [`Reader::with_resolver`](crate::Reader::with_resolver); off by default, as in JAXP |
 | `javax.xml.stream.XMLStreamWriter` | [`io::write::WriterSource`](xenolith_core::io::write::WriterSource) + [`io::write::XmlWriter`](xenolith_core::io::write::XmlWriter) |
 | `LSSerializer` / `Transformer` used to print a tree | [`Writer`](xenolith_core::Writer), or [`DomSource`](xenolith_core::dom::DomSource) + [`io::write::XmlWriter`](xenolith_core::io::write::XmlWriter) |
 | `XPathFactory.newInstance().newXPath()` | [`xpath::XPath::new`](xenolith_xpath::XPath::new) |

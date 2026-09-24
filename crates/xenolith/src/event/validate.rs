@@ -142,7 +142,7 @@ pub enum Ended {
   Stopped,
 
   /// The execution terminated due to an error (e.g., the input was not well-formed, a handler rejected an event, or
-  /// the [`ValidatorSet`] error limit was reached). The error itself originated from the event source.
+  /// the [`ValidatorSet`] maximum number of errors was exceeded). The error itself originated from the event source.
   Failed,
 
   /// The execution was abandoned before the source could report completion.
@@ -201,7 +201,7 @@ impl Report {
 /// used. Events are passed sequentially to these validators, and [`errors`](Validator::errors) gathers what they
 /// found. The same validator may be added multiple times. After processing concludes, calling
 /// [`report`](Self::report) allows you to retrieve error information and the final processing status. You can also use
-/// [`with_error_limit`](Self::with_error_limit) to halt processing once a specified number of errors has occurred.
+/// [`with_max_errors`](Self::with_max_errors) to halt processing once more than a specified number of errors occur.
 ///
 /// Since this validator does not generate or drive events itself, it functions consistently regardless of the event
 /// source (e.g., a source pushing events via [`emit`](crate::event::EventCursor::emit), a caller pulling events one by
@@ -241,8 +241,8 @@ pub struct ValidatorSet {
   use_dtd: bool,
   /// Whether the `xml:id` attributes are checked.
   xml_id: bool,
-  /// The error count threshold at which validation stops (if configured).
-  error_limit: Option<usize>,
+  /// The maximum number of errors tolerated, beyond which validation stops (if configured).
+  max_errors: Option<usize>,
   /// Whether validators have been created for the current document.
   prepared: bool,
   /// The validator for the document's own DTD, created for each document when `use_dtd` is set.
@@ -261,7 +261,7 @@ impl std::fmt::Debug for ValidatorSet {
     f.debug_struct("ValidatorSet")
       .field("use_dtd", &self.use_dtd)
       .field("xml_id", &self.xml_id)
-      .field("error_limit", &self.error_limit)
+      .field("max_errors", &self.max_errors)
       .field("validators", &self.validators.len())
       .field("ended", &self.ended)
       .finish_non_exhaustive()
@@ -275,13 +275,13 @@ impl Default for ValidatorSet {
 }
 
 impl ValidatorSet {
-  /// Creates a set with no validators and no error limit.
+  /// Creates a set with no validators and no maximum number of errors.
   #[must_use]
   pub fn new() -> Self {
     Self {
       use_dtd: false,
       xml_id: false,
-      error_limit: None,
+      max_errors: None,
       prepared: false,
       document_dtd: None,
       standalone_ids: None,
@@ -333,18 +333,24 @@ impl ValidatorSet {
     self.with_validator(schema.validator())
   }
 
-  /// Sets an upper limit for halting processing due to validity errors.
+  /// Sets the maximum number of validity errors tolerated before processing is halted.
   ///
-  /// When the number of validity errors reaches this `limit` while processing an event, the `limit`-th error (in the
+  /// When the number of validity errors exceeds this `max` while processing an event, the `max + 1`-th error (in the
   /// order found within [`Report::errors`]) is returned as an [`Err`] (specifically, [`Error::Validity`]). Processing
   /// stops at that point, and no subsequent events are sent to downstream handlers. Since multiple errors can occur
-  /// within a single event, [`report`](Self::report) retains all errors detected up to that moment (at least `limit`
-  /// of them). The default value of 0 signifies *no limit*, meaning processing continues to the end of the document
-  /// regardless of how many validity errors are found.
+  /// within a single event, [`report`](Self::report) retains all errors detected up to that moment (at least `max + 1`
+  /// of them). A `max` of `Some(0)` halts at the first error. `None` (the default) signifies *no limit*, meaning
+  /// processing continues to the end of the document regardless of how many validity errors are found.
   #[must_use]
-  pub fn with_error_limit(mut self, limit: usize) -> Self {
-    self.error_limit = (limit > 0).then_some(limit);
+  pub fn with_max_errors(mut self, max: Option<usize>) -> Self {
+    self.max_errors = max;
     self
+  }
+
+  /// True if no validators are configured.
+  #[must_use]
+  pub fn is_empty(&self) -> bool {
+    self.validators.is_empty()
   }
 
   /// The results indicating what was found in the current document and how the scan concluded.
@@ -408,11 +414,11 @@ impl EventHandler for ValidatorSet {
     for validator in self.members() {
       validator.handle(event)?;
     }
-    if let Some(limit) = self.error_limit {
+    if let Some(max) = self.max_errors {
       // Counted without gathering, since a validator that holds its errors lends them at no cost.
       let count: usize = self.members().map(|validator| validator.errors().len()).sum();
-      if count >= limit {
-        return Err(self.sorted_errors()[limit - 1].to_error());
+      if count > max {
+        return Err(self.sorted_errors()[max].to_error());
       }
     }
     Ok(())

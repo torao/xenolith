@@ -42,8 +42,8 @@ pub use parse::{
 };
 pub use read::StreamSource;
 #[cfg(feature = "async")]
-pub use read::{AsyncEntityReader, AsyncReader, AsyncUriResolver, NoResolver};
-pub use resolve::{EntityRequest, RequestKind, UriResolver};
+pub use read::{AsyncEntityReader, AsyncReader, AsyncUriResolver};
+pub use resolve::{EntityRequest, NoResolver, RequestKind, UriResolver};
 pub use stream::CharStream;
 pub use write::{WriterSource, XmlWriter};
 

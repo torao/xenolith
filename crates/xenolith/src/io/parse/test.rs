@@ -179,7 +179,7 @@ fn a_malformed_text_declaration_names_what_is_wrong() {
 fn reports_the_events_of_a_small_document() {
   assert_eq!(
     trace("<?xml version='1.0' encoding='UTF-8'?>\n<!--hi--><a x='1'>text<b/></a>\n").unwrap(),
-    ["?xml 1.0 UTF-8", "!:hi", "<a x=1>", "t:text", "<b>", "</b>", "</a>"]
+    ["?xml 1.0 UTF-8", "t:\n", "!:hi", "<a x=1>", "t:text", "<b>", "</b>", "</a>", "t:\n"]
   );
 }
 
@@ -191,8 +191,13 @@ fn an_empty_element_reports_a_start_and_an_end() {
 }
 
 #[test]
-fn whitespace_outside_the_root_is_dropped_but_markup_is_not() {
-  assert_eq!(trace("  <a/>\n\n<!--after-->\n<?pi data?>  ").unwrap(), ["<a>", "</a>", "!:after", "?pi data"]);
+fn whitespace_outside_the_root_is_reported_as_text() {
+  // The prolog and epilog allow whitespace between their markup, and the parser reports it as it stands, so a writer
+  // downstream can keep the document's own layout.
+  assert_eq!(
+    trace("  <a/>\n\n<!--after-->\n<?pi data?>  ").unwrap(),
+    ["t:  ", "<a>", "</a>", "t:\n\n", "!:after", "t:\n", "?pi data", "t:  "]
+  );
 }
 
 #[test]
@@ -687,5 +692,19 @@ fn a_position_inside_an_external_entity_carries_both_of_its_identifiers() {
   ] {
     assert_eq!(at.public_id.as_deref(), Some("-//x//y"));
     assert_eq!(at.system_id.as_deref(), Some("file:///d/part.ent"));
+  }
+}
+
+#[test]
+fn answering_an_entity_that_was_never_requested_is_a_misuse() {
+  // The caller broke the protocol, so the error says so rather than asking for a bug report.
+  let answers: [fn(&mut Parser) -> Result<()>; 3] =
+    [Parser::begin_entity, |parser| parser.provide_entity(b"hi"), Parser::decline_entity];
+  for answer in answers {
+    let mut parser = Parser::new();
+    let error = answer(&mut parser).expect_err("nothing was requested");
+    assert!(matches!(error, Error::Internal { .. }), "{error}");
+    assert!(error.message().contains("not waiting for an entity"), "{error}");
+    assert!(!error.message().contains("bug in xenolith"), "{error}");
   }
 }

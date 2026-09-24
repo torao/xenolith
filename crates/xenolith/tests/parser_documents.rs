@@ -190,7 +190,9 @@ fn a_doctype_is_reported_before_the_root_element_whatever_precedes_it() {
 
   for before in ["", "\n", "   ", "\n\n\n", "\t", "<?xml version=\"1.0\"?>\n", "<!--c-->\n", "\n<!--c-->\n"] {
     let xml = format!("{before}{doctype}<r><a/></r>");
-    let found: Vec<&str> = kinds(&xml).into_iter().filter(|kind| !matches!(*kind, "xmldecl" | "comment")).collect();
+    // The whitespace before the DOCTYPE is reported as text of its own, which says nothing about the order checked here.
+    let found: Vec<&str> =
+      kinds(&xml).into_iter().filter(|kind| !matches!(*kind, "xmldecl" | "comment" | "text")).collect();
     assert_eq!(found, expected, "for {before:?} before the DOCTYPE");
   }
 }
@@ -302,7 +304,7 @@ struct MapResolver(std::collections::HashMap<&'static str, &'static [u8]>);
 
 impl xenolith::io::resolve::UriResolver for MapResolver {
   fn resolve(
-    &mut self,
+    &self,
     request: &xenolith::io::resolve::EntityRequest,
   ) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
     let entry = self.0.get(request.system_id()).map(|b| b.to_vec());
@@ -312,7 +314,7 @@ impl xenolith::io::resolve::UriResolver for MapResolver {
 
 fn parse_with(xml: &str, files: &[(&'static str, &'static [u8])]) -> Result<Vec<String>, String> {
   let resolver = MapResolver(files.iter().copied().collect());
-  by_source(StreamSource::new(xml.as_bytes()).with_resolver(resolver))
+  by_source(StreamSource::new(xml.as_bytes()).with_resolver(&resolver))
 }
 
 #[test]
@@ -372,7 +374,7 @@ struct ResolvedMapResolver(std::collections::HashMap<&'static str, &'static [u8]
 
 impl xenolith::io::resolve::UriResolver for ResolvedMapResolver {
   fn resolve(
-    &mut self,
+    &self,
     request: &xenolith::io::resolve::EntityRequest,
   ) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
     let entry = request.resolved_uri().and_then(|uri| self.0.get(uri.as_str()).map(|b| b.to_vec()));
@@ -388,8 +390,8 @@ fn an_external_entity_is_resolved_against_the_dtd_that_declared_it() {
     ("file:///doc/dtd/chap.xml", b"from the DTD's directory"),
   ];
   let xml = "<!DOCTYPE doc SYSTEM 'dtd/doc.dtd'><doc>&chap;</doc>";
-  let source = StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-    .with_resolver(ResolvedMapResolver(files.into_iter().collect()));
+  let resolver = ResolvedMapResolver(files.into_iter().collect());
+  let source = StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_resolver(&resolver);
   let lines = by_source(source).expect("should parse");
   assert_eq!(text_of(&lines[2]), Some("from the DTD's directory"));
 }

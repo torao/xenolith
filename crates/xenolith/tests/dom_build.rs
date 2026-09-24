@@ -146,13 +146,14 @@ fn captures_the_doctype_public_and_system_ids() {
   // A resolver that serves the external subset as empty — enough for the DOCTYPE to be read.
   struct Empty;
   impl UriResolver for Empty {
-    fn resolve(&mut self, _request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
+    fn resolve(&self, _request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
       Ok(Some(Box::new(std::io::empty())))
     }
   }
 
   let xml = "<!DOCTYPE a PUBLIC \"pub-id\" \"a.dtd\"><a/>";
-  let doc = parse_reader(StreamSource::new(xml.as_bytes()).with_resolver(Empty));
+  let empty = Empty;
+  let doc = parse_reader(StreamSource::new(xml.as_bytes()).with_resolver(&empty));
   let doctype = doc.doctype().unwrap();
   assert_eq!(doc.node_name(doctype), "a");
   assert_eq!(doc.public_id(doctype), Some("pub-id"));

@@ -196,6 +196,67 @@ impl UriReference {
     Self { fragment: None, ..self.clone() }
   }
 
+  /// The normal form of this URI, so that two URIs that differ only in how they are written compare equal.
+  ///
+  /// This is the syntax-based normalization of RFC 3986 §6.2.2 — the scheme and the host are lower-cased, the hex
+  /// digits of a percent-encoded octet are upper-cased, an octet that stands for an unreserved character is written as
+  /// that character, and `.` and `..` are removed from a hierarchical path — together with what §6.2.3 allows a
+  /// processor to do for the schemes it knows: a port that is the scheme's default is dropped, and an empty path
+  /// becomes `/`. [`SCHEMES`] holds that knowledge, and a scheme is added to it by writing one more row.
+  ///
+  /// What is left alone: `.` and `..` in a relative reference, which say where the reference points and are removed
+  /// only by [`resolve`](Self::resolve); a percent sequence that is not `%` followed by two hex digits, since nothing
+  /// here can say what it was meant to be; and everything a scheme knows that is not in [`SCHEMES`], `file://localhost`
+  /// standing for `file://` (RFC 8089) among it.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use xenolith::UriReference;
+  ///
+  /// let normalized = |s: &str| -> Result<String, xenolith::Error> {
+  ///   Ok(UriReference::parse(s)?.normalize().to_string())
+  /// };
+  ///
+  /// // The scheme and the host are case-insensitive, the default port is implied, and an empty path is the root.
+  /// assert_eq!(normalized("HTTP://Example.ORG:80")?, "http://example.org/");
+  /// assert_eq!(normalized("https://EXAMPLE.org:443/a")?, "https://example.org/a");
+  /// // `%7E` is `~`, and the hex digits of an octet that has to stay encoded are upper case.
+  /// assert_eq!(normalized("http://example.org/%7Euser/a%2fb")?, "http://example.org/~user/a%2Fb");
+  /// // A hierarchical path loses its dot segments; a relative reference keeps them.
+  /// assert_eq!(normalized("http://example.org/a/./b/../c")?, "http://example.org/a/c");
+  /// assert_eq!(normalized("../a/./b")?, "../a/./b");
+  /// # Ok::<(), xenolith::Error>(())
+  /// ```
+  #[must_use]
+  pub fn normalize(&self) -> Self {
+    // §6.2.2.1: the scheme is case-insensitive. `parse` lower-cases it already; one built by hand may not have.
+    let scheme = self.scheme.as_ref().map(|scheme| scheme.to_ascii_lowercase());
+    let rules = scheme.as_deref().and_then(SchemeRules::of);
+    let authority = self.authority.as_ref().map(|authority| normalize_authority(authority, rules));
+
+    // §6.2.2.2 before §6.2.2.3, which is the order the RFC lists them in and the order that matters: `%2E` is `.`,
+    // so an encoded dot segment becomes a dot segment first and is then removed.
+    let mut path = normalize_percent(&self.path);
+    // §6.2.2.3 removes the dot segments of a hierarchical path. In a relative reference they say where the reference
+    // points, and `resolve` is what removes them.
+    if scheme.is_some() && (authority.is_some() || path.starts_with('/')) {
+      path = remove_dot_segments(&path);
+    }
+    // §6.2.3: for a scheme whose authority names a hierarchy, an empty path is the same as `/`.
+    if path.is_empty() && authority.is_some() && rules.is_some_and(|rules| rules.empty_path_is_root) {
+      path = "/".to_owned();
+    }
+
+    Self {
+      scheme,
+      authority,
+      path,
+      query: self.query.as_deref().map(normalize_percent),
+      fragment: self.fragment.as_deref().map(normalize_percent),
+    }
+  }
+
   /// Resolves `reference` using this URI as the base (RFC 3986 §5.3).
   ///
   /// The base should be abosolute. Otherwise, the result may retain relative.
@@ -392,6 +453,117 @@ fn merge(base: &UriReference, path: &str) -> String {
     let keep = base.path.rfind('/').map_or(0, |i| i + 1);
     format!("{}{path}", &base.path[..keep])
   }
+}
+
+/// What [`UriReference::normalize`] knows about one scheme, which RFC 3986 §6.2.3 leaves to the processor.
+///
+/// Knowing a scheme is worth a row here where its URIs are written in more than one way for the same resource. A
+/// scheme that is not listed is normalized by §6.2.2 alone, which is correct for every scheme but says less.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchemeRules {
+  /// The scheme, lower-cased.
+  pub scheme: &'static str,
+  /// The port implied when the authority carries none, which the normal form therefore drops. `None` where the
+  /// scheme has no port at all.
+  pub default_port: Option<&'static str>,
+  /// Whether an empty path is the same as `/`, which holds where the authority names a hierarchy.
+  pub empty_path_is_root: bool,
+}
+
+/// The schemes [`UriReference::normalize`] knows, in no particular order.
+///
+/// Adding one is a row: the scheme in lower case, the port it implies, and whether an empty path is its root.
+pub const SCHEMES: &[SchemeRules] = &[
+  SchemeRules { scheme: "http", default_port: Some("80"), empty_path_is_root: true },
+  SchemeRules { scheme: "https", default_port: Some("443"), empty_path_is_root: true },
+  // A `file` URI carries no port, and its path is a hierarchy from the root (RFC 8089).
+  SchemeRules { scheme: "file", default_port: None, empty_path_is_root: true },
+];
+
+impl SchemeRules {
+  /// What is known about `scheme`, which is expected in lower case, or `None` for a scheme that is not listed.
+  #[must_use]
+  pub fn of(scheme: &str) -> Option<&'static Self> {
+    SCHEMES.iter().find(|rules| rules.scheme == scheme)
+  }
+}
+
+/// Normalizes one authority: `[userinfo@]host[:port]`.
+///
+/// §6.2.2.1 makes the host case-insensitive, while the userinfo is left as it is: it is not defined to be. §6.2.3
+/// drops a port that the scheme implies, and an empty port, which stands for the same thing.
+fn normalize_authority(authority: &str, rules: Option<&SchemeRules>) -> String {
+  let (userinfo, host_port) = match authority.rsplit_once('@') {
+    Some((userinfo, host_port)) => (Some(userinfo), host_port),
+    None => (None, authority),
+  };
+  // The port follows the last `:`, except within an IPv6 literal, where the address itself holds them.
+  let split = match host_port.rfind(']') {
+    Some(end) => host_port[end..].find(':').map(|at| end + at),
+    None => host_port.rfind(':'),
+  };
+  let (host, port) = match split {
+    Some(at) => (&host_port[..at], Some(&host_port[at + 1..])),
+    None => (host_port, None),
+  };
+
+  let mut out = String::with_capacity(authority.len());
+  if let Some(userinfo) = userinfo {
+    out.push_str(&normalize_percent(userinfo));
+    out.push('@');
+  }
+  out.push_str(&normalize_percent(&host.to_ascii_lowercase()));
+  if let Some(port) = port.filter(|port| !port.is_empty() && Some(*port) != rules.and_then(|r| r.default_port)) {
+    out.push(':');
+    out.push_str(port);
+  }
+  out
+}
+
+/// RFC 3986 §6.2.2.2: the hex digits of a percent-encoded octet are upper case, and an octet that stands for an
+/// unreserved character is written as that character.
+///
+/// A sequence that is not `%` followed by two hex digits is left exactly as it stands, since nothing here can say what
+/// it was meant to be; [`UriReference::parse`] does not refuse one either.
+fn normalize_percent(s: &str) -> String {
+  let bytes = s.as_bytes();
+  let mut out = Vec::with_capacity(bytes.len());
+  let mut at = 0;
+  while at < bytes.len() {
+    match (bytes[at], bytes.get(at + 1).copied().and_then(hex_digit), bytes.get(at + 2).copied().and_then(hex_digit)) {
+      (b'%', Some(high), Some(low)) => {
+        let octet = high << 4 | low;
+        if is_unreserved(octet) {
+          out.push(octet);
+        } else {
+          out.extend_from_slice(&[b'%', HEX[usize::from(high)], HEX[usize::from(low)]]);
+        }
+        at += 3;
+      }
+      // Any other byte stands for itself, including the bytes of a character written literally.
+      _ => {
+        out.push(bytes[at]);
+        at += 1;
+      }
+    }
+  }
+  // Only ASCII is ever replaced, so what comes out is the text it went in as, and the fallback never runs.
+  String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
+}
+
+/// The value of one hexadecimal digit, or `None` for a byte that is not one.
+fn hex_digit(byte: u8) -> Option<u8> {
+  match byte {
+    b'0'..=b'9' => Some(byte - b'0'),
+    b'a'..=b'f' => Some(byte - b'a' + 10),
+    b'A'..=b'F' => Some(byte - b'A' + 10),
+    _ => None,
+  }
+}
+
+/// Whether `octet` stands for an `unreserved` character, which never needs to be encoded (RFC 3986 §2.3).
+fn is_unreserved(octet: u8) -> bool {
+  octet.is_ascii_alphanumeric() || matches!(octet, b'-' | b'.' | b'_' | b'~')
 }
 
 /// RFC 3986 §5.2.4, remove_dot_segments.

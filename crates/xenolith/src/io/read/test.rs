@@ -41,6 +41,15 @@ impl Read for Failing {
   }
 }
 
+/// A source that breaks the `Read` contract by claiming more bytes than the buffer holds.
+struct Overclaiming;
+
+impl Read for Overclaiming {
+  fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    Ok(buf.len() + 1)
+  }
+}
+
 /// The character data of the reader's current event, for the tests that collect a run by hand.
 fn text_of<'a, R: Read>(reader: &'a StreamSource<'_, R>) -> &'a str {
   reader.parser().token_ref().and_then(|e| e.text()).expect("the current event is character data")
@@ -92,6 +101,15 @@ fn io_errors_are_reported_with_their_cause() {
   assert!(matches!(error, Error::Io { .. }));
   assert!(error.message().contains("cannot read"));
   assert!(std::error::Error::source(&error).is_some(), "the io::Error is kept as the cause");
+}
+
+#[test]
+fn a_reader_that_claims_more_than_the_buffer_is_an_error_rather_than_a_panic() {
+  // The mistake is the reader's, so it is reported as a misuse and not as a bug in xenolith.
+  let error = kinds(StreamSource::new(Overclaiming)).unwrap_err();
+  assert!(matches!(error, Error::Internal { .. }), "{error}");
+  assert!(error.message().contains("more than the buffer holds"), "{error}");
+  assert!(!error.message().contains("bug in xenolith"), "{error}");
 }
 
 #[test]
@@ -149,7 +167,7 @@ fn the_source_can_be_taken_back() {
 struct Fixtures(std::collections::HashMap<&'static str, &'static [u8]>);
 
 impl UriResolver for Fixtures {
-  fn resolve(&mut self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+  fn resolve(&self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
     let entry = request.name().and_then(|name| self.0.get(name)).map(|bytes| bytes.to_vec());
     Ok(entry.map(|bytes| Box::new(std::io::Cursor::new(bytes)) as Box<dyn Read>))
   }
@@ -159,7 +177,7 @@ impl UriResolver for Fixtures {
 fn an_external_entity_is_resolved_through_the_resolver() {
   let fixtures = Fixtures([("chap", &b"<title>Ch. 1</title>"[..])].into_iter().collect());
   let xml = "<!DOCTYPE doc [<!ENTITY chap SYSTEM 'chap1.xml'>]><doc>&chap;</doc>";
-  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(fixtures);
+  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(&fixtures);
 
   let mut names = Vec::new();
   while let Some(kind) = reader.advance().unwrap() {
@@ -175,7 +193,7 @@ fn an_external_entity_is_resolved_through_the_resolver() {
 fn a_text_declaration_on_an_external_entity_is_stripped() {
   let fixtures = Fixtures([("e", &b"<?xml version='1.0' encoding='UTF-8'?>text"[..])].into_iter().collect());
   let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
-  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(fixtures);
+  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(&fixtures);
   let mut text = String::new();
   while let Some(kind) = reader.advance().unwrap() {
     if kind == TokenKind::Text {
@@ -196,7 +214,7 @@ fn without_a_resolver_an_external_entity_is_refused() {
 fn a_declined_entity_is_a_fatal_error() {
   let fixtures = Fixtures(std::collections::HashMap::new()); // resolves nothing
   let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]><doc>&e;</doc>";
-  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(fixtures);
+  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(&fixtures);
   let error = loop {
     match reader.advance() {
       Ok(Some(_)) => {}
@@ -211,7 +229,7 @@ fn a_declined_entity_is_a_fatal_error() {
 struct Broken;
 
 impl UriResolver for Broken {
-  fn resolve(&mut self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+  fn resolve(&self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
     let cause = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the catalog is locked");
     Err(Error::resolver(cause))
   }
@@ -222,7 +240,8 @@ fn a_failure_in_the_resolver_is_reported_where_the_reference_stood() {
   // The resolver is handed a request and no position, so its own error carries none. The reader knows where the
   // reference was, and a caller needs that to point at the document rather than at the catalog.
   let xml = "<!DOCTYPE doc [<!ENTITY e SYSTEM 'e.ent'>]>\n<doc>&e;</doc>";
-  let mut reader = StreamSource::with_system_id(xml.as_bytes(), "file:///doc.xml").with_resolver(Broken);
+  let broken = Broken;
+  let mut reader = StreamSource::with_system_id(xml.as_bytes(), "file:///doc.xml").with_resolver(&broken);
   let error = loop {
     match reader.advance() {
       Ok(Some(_)) => {}
@@ -242,7 +261,7 @@ fn a_failure_in_the_resolver_is_reported_where_the_reference_stood() {
 struct OwnedEntity(&'static str, Vec<u8>);
 
 impl UriResolver for OwnedEntity {
-  fn resolve(&mut self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+  fn resolve(&self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
     if request.name() == Some(self.0) { Ok(Some(Box::new(std::io::Cursor::new(self.1.clone())))) } else { Ok(None) }
   }
 }
@@ -254,7 +273,8 @@ fn a_large_external_general_entity_streams_across_chunks() {
   let body = "y".repeat(READ_BUFFER_SIZE * 2 + 100);
   let entity = format!("<b>{body}</b>");
   let xml = "<!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]><a>&e;</a>";
-  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(OwnedEntity("e", entity.into_bytes()));
+  let owned = OwnedEntity("e", entity.into_bytes());
+  let mut reader = StreamSource::new(xml.as_bytes()).with_resolver(&owned);
   let mut text = String::new();
   while let Some(kind) = reader.advance().unwrap() {
     if kind == TokenKind::Text {
@@ -280,14 +300,15 @@ impl Read for Endless {
 fn a_streamed_entity_is_stopped_mid_stream_by_the_expansion_limit() {
   struct EndlessResolver;
   impl UriResolver for EndlessResolver {
-    fn resolve(&mut self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
+    fn resolve(&self, _request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn Read>>> {
       Ok(Some(Box::new(Endless)))
     }
   }
   let xml = "<!DOCTYPE a [<!ENTITY e SYSTEM 'e.ent'>]><a>&e;</a>";
   let mut config = ParserConfig::default();
   config.limits.entities.max_expansion_chars = Some(1024);
-  let mut reader = StreamSource::new(xml.as_bytes()).with_config(config).with_resolver(EndlessResolver);
+  let endless = EndlessResolver;
+  let mut reader = StreamSource::new(xml.as_bytes()).with_config(config).with_resolver(&endless);
   let error = loop {
     match reader.advance() {
       Ok(Some(_)) => {}
