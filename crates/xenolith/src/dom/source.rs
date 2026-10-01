@@ -8,8 +8,8 @@ use crate::attr::{AttributeList, AttributeRef, Attributes};
 use crate::dtd::model::Dtd;
 use crate::error::{Location, Result};
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventCursor,
-  EventHandler, EventRef, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
+  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatcher, DoctypeEventRef, EndElementEventRef, EventConsumer,
+  EventCursor, EventProducer, EventRef, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
 };
 use crate::name::NamePool;
 
@@ -20,14 +20,14 @@ use crate::dom::{Document, NodeId};
 /// An [`EventCursor`] that traverses a built [`Document`], or a subtree thereof, and emits events. It corresponds to
 /// Java's `DOMSource`.
 ///
-/// It drives an [`EventHandler`] by walking the tree, so a document already in memory becomes an event source. A
+/// It drives an [`EventConsumer`] by walking the tree, so a document already in memory becomes an event producer. A
 /// consumer of parser events, for example, a writer or a validator, then works on the document without knowing the
 /// events came from a tree rather than from a parser. Use it anywhere that takes a source of parser events.
 ///
 /// [`emit`](EventCursor::emit) reports [`StartDocument`](EventRef::StartDocument) first, one event for each node in
 /// document order, and [`EndDocument`](EventRef::EndDocument) at the end; [`next`](EventCursor::next) hands them back
-/// one at a time instead, notifying the installed handlers as it goes. When the source covers the whole document or a
-/// fragment, it emits the children without an enclosing element of their own. A handler that ends the run by returning
+/// one at a time instead, notifying the installed consumers as it goes. When the source covers the whole document or a
+/// fragment, it emits the children without an enclosing element of their own. A consumer that ends the run by returning
 /// [`Flow::Break`] stops the walk, so `EndDocument` does not follow.
 ///
 /// A tree has no source position, so every [`Location`] is [`unknown`](Location::unknown). It also keeps no parsed DTD,
@@ -40,15 +40,15 @@ use crate::dom::{Document, NodeId};
 ///
 /// ```
 /// use xenolith::error::Result;
-/// use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
+/// use xenolith::event::{EventCursor, EventConsumer, EventRef, EventProducer, Flow};
 /// use xenolith::dom::DomSource;
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::io::StreamSource;
 ///
 /// #[derive(Default)]
 /// struct Names(Vec<String>);
-/// impl EventHandler for Names {
-///   fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+/// impl EventConsumer for Names {
+///   fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
 ///     if let EventRef::StartElement(event) = event {
 ///       self.0.push(event.local.to_owned());
 ///     }
@@ -58,10 +58,10 @@ use crate::dom::{Document, NodeId};
 ///
 /// // Read a document into a tree through the builder, then walk the tree back out as events.
 /// let mut builder = DomBuilder::new();
-/// StreamSource::new("<a><b/><c/></a>".as_bytes()).with_handler(&mut builder).emit()?;
+/// StreamSource::new("<a><b/><c/></a>".as_bytes()).add_consumer(&mut builder).emit()?;
 /// let doc = builder.into_document();
 /// let mut names = Names::default();
-/// DomSource::new(&doc).with_handler(&mut names).emit()?;
+/// DomSource::new(&doc).add_consumer(&mut names).emit()?;
 /// assert_eq!(names.0, ["a", "b", "c"]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -70,8 +70,8 @@ pub struct DomSource<'a, 'h> {
   node: NodeId,
   /// The walk in progress, made on the first event so that a source can be built and handed on before it runs.
   walk: Option<Walk<'a>>,
-  /// The handlers this source was built with, which every event reaches.
-  dispatch: Dispatch<'h>,
+  /// The consumers this source was built with, which every event reaches.
+  dispatch: Dispatcher<'h>,
   /// Where the walk has reached, so `next` knows whether the document has begun or ended.
   step: Step,
   /// The attributes of the element just reported, held here rather than in a local so the event handed out can borrow
@@ -93,11 +93,11 @@ enum Step {
   /// The tree is being walked.
   Walking,
   /// The walk reached its end and [`EndDocument`](EventRef::EndDocument) was reported; the next call tells the
-  /// handlers the run completed.
+  /// consumers the run completed.
   Ended,
-  /// Every handler has finished early; the next call tells the handlers the run stopped.
+  /// Every consumer has finished early; the next call tells the consumers the run stopped.
   Stopped,
-  /// The run is over, and the handlers have been told how it ended.
+  /// The run is over, and the consumers have been told how it ended.
   Done,
 }
 
@@ -127,7 +127,7 @@ impl<'a> DomSource<'a, '_> {
       doc,
       node,
       walk: None,
-      dispatch: Dispatch::new(),
+      dispatch: Dispatcher::new(),
       step: Step::Before,
       attributes: None,
       base: None,
@@ -154,9 +154,9 @@ impl<'a> DomSource<'a, '_> {
   }
 }
 
-impl<'a, 'h> EventSource<'h> for DomSource<'a, 'h> {
-  fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-    self.dispatch = self.dispatch.with_handler(handler);
+impl<'a, 'h> EventProducer<'h> for DomSource<'a, 'h> {
+  fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+    self.dispatch = self.dispatch.add_consumer(handler);
     self
   }
 }
@@ -175,7 +175,7 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
         self.step = Step::Walking;
         self.walk = Some(self.doc.walk(self.node));
         let event = EventRef::StartDocument;
-        match self.dispatch.handle(&event) {
+        match self.dispatch.consume(&event) {
           Ok(Flow::Continue(_)) => {}
           Ok(Flow::Break(_)) => self.step = Step::Stopped,
           Err(error) => {
@@ -213,7 +213,7 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
       // The walk covered the whole subtree, so the document was read in full.
       self.step = Step::Ended;
       let event = EventRef::EndDocument;
-      if let Err(error) = self.dispatch.handle(&event) {
+      if let Err(error) = self.dispatch.consume(&event) {
         self.step = Step::Done;
         return Err(self.dispatch.fail(error));
       }
@@ -261,7 +261,7 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
       }
       _ => unreachable!("a node with no event of its own was skipped above"),
     };
-    match self.dispatch.handle(&event) {
+    match self.dispatch.consume(&event) {
       Ok(Flow::Continue(_)) => {}
       Ok(Flow::Break(_)) => self.step = Step::Stopped,
       Err(error) => {
@@ -273,7 +273,7 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
   }
 }
 
-/// The attributes of a DOM element, presented as an [`AttributeList`] so a handler receives them the way the parser
+/// The attributes of a DOM element, presented as an [`AttributeList`] so a consumer receives them the way the parser
 /// delivers them.
 ///
 struct DomAttributes<'a> {

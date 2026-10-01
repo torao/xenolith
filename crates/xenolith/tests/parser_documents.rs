@@ -11,8 +11,8 @@
 
 use std::io::Read;
 
-use xenolith::event::strict::StrictXmlValidator;
-use xenolith::event::{EventCursor, EventSource};
+use xenolith::event::strict::StrictXmlConstraints;
+use xenolith::event::{EventCursor, EventProducer};
 use xenolith::io::{Parser, ParserConfig, Progress, StreamSource, TokenRef};
 
 /// Renders an error the way a diagnostic would: its location, if known, then the message. The
@@ -162,8 +162,8 @@ fn parse(xml: &str) -> Result<Vec<String>, String> {
   #[cfg(feature = "tokio")]
   assert_eq!(by_async_reader(xml), expected, "the asynchronous reader disagreed");
   let lines = expected?;
-  let mut strict = StrictXmlValidator::new();
-  StreamSource::new(xml.as_bytes()).with_handler(&mut strict).emit().map_err(|e| describe(&e))?;
+  let mut strict = StrictXmlConstraints::new();
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut strict).emit().map_err(|e| describe(&e))?;
   Ok(lines)
 }
 

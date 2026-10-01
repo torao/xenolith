@@ -1,5 +1,5 @@
 //! Reads and writes XML using common configuration patterns. While Xenolith allows for the construction of processing
-//! logic via an event model and pipeline-capable handlers, many applications simply require standard XML reading and
+//! logic via an event model and pipeline-capable consumers, many applications simply require standard XML reading and
 //! writing capabilities. This module acts as a facade, offering a simple, unified interface for such applications.
 
 use std::io;
@@ -8,15 +8,15 @@ use crate::dom::build::DomBuilder;
 use crate::dom::{Document, DomSource};
 use crate::dtd::model::Dtd;
 use crate::error::Result;
-use crate::event::strict::StrictXmlValidator;
-use crate::event::{Dispatch, EventCursor, EventHandler, EventSource};
+use crate::event::strict::StrictXmlConstraints;
+use crate::event::{Dispatcher, EventConsumer, EventCursor, EventProducer};
 use crate::io::resolve::{NoResolver, UriResolver};
 use crate::io::write::{LineBreak, XmlWriter};
 use crate::io::{ParserConfig, StreamSource};
 use crate::name::NamePool;
-use crate::xinclude::XIncludeTransform;
+use crate::xinclude::XIncludeTransformer;
 
-/// Reads XML from a file or a byte sequence in memory and either passes it to a handler as events or constructs a DOM
+/// Reads XML from a file or a byte sequence in memory and either passes it to a consumer as events or constructs a DOM
 /// to return to the application.
 ///
 /// The reading process operates in strict by default; therefore, in accordance with XML specifications, XML documents
@@ -97,7 +97,7 @@ impl<'r> Reader<'r> {
 
   /// Sets whether reading is performed in *strict* (strict reading is the default).
   ///
-  /// In strict reading, events pass through the [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator),
+  /// In strict reading, events pass through the [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints),
   /// and XML documents that are not well-formed are rejected. In non-strict reading, only structures that the parser
   /// itself cannot read (such as unclosed elements) are rejected, though the specific cases that trigger rejection are
   /// undefined. Enabling strict reading triggers checks for issues such as names that are not valid `QName`s,
@@ -147,10 +147,10 @@ impl<'r> Reader<'r> {
 
   /// Whether `xi:include` elements are replaced with what they name, which they are not by default.
   ///
-  /// Inclusion happens between the parser and the handler, so what the handler is given is the assembled document. It
+  /// Inclusion happens between the parser and the consumer, so what the consumer is given is the assembled document. It
   /// needs a resolver: an `xi:include` in a read with none is refused, unless the element says what to do instead with
   /// an `xi:fallback`. See [`xinclude`](crate::xinclude) for what is included and what is not, and wire an
-  /// [`XIncludeTransform`] by hand for the settings this flag does not reach.
+  /// [`XIncludeTransformer`] by hand for the settings this flag does not reach.
   #[must_use]
   pub fn with_xinclude(mut self, on: bool) -> Self {
     self.xinclude = on;
@@ -170,7 +170,7 @@ impl<'r> Reader<'r> {
   ///
   /// ```
   /// use xenolith::Reader;
-  /// use xenolith::event::{EventHandler, EventRef, Flow};
+  /// use xenolith::event::{EventConsumer, EventRef, Flow};
   ///
   /// #[derive(Default)]
   /// struct Titles {
@@ -178,8 +178,8 @@ impl<'r> Reader<'r> {
   ///   found: Vec<String>,
   /// }
   ///
-  /// impl EventHandler for Titles {
-  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
+  /// impl EventConsumer for Titles {
+  ///   fn consume(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
   ///     match event {
   ///       EventRef::StartElement(start) if start.local == "title" => {
   ///         self.inside = true;
@@ -205,40 +205,40 @@ impl<'r> Reader<'r> {
   /// # Ok::<(), xenolith::Error>(())
   /// ```
   ///
-  /// A transformation process can be interposed, defined by the application (one that acts as both an [`EventHandler`]
-  /// and an [`EventSource`]), between the reading process and the handler. In this example, the
+  /// A transformation process can be interposed, defined by the application (one that acts as both an [`EventConsumer`]
+  /// and an [`EventProducer`]), between the reading process and the consumer. In this example, the
   /// application-implemented transformation process filters out all comments, while the underlying [`DomBuilder`]
   /// constructs the tree:
   ///
   /// ```
   /// use xenolith::Reader;
   /// use xenolith::dom::build::DomBuilder;
-  /// use xenolith::event::{Dispatch, EventHandler, EventRef, EventSource, Flow, Outcome};
+  /// use xenolith::event::{Dispatcher, EventConsumer, EventRef, EventProducer, Flow, Outcome};
   ///
   /// /// Passes every event on except a comment.
   /// #[derive(Default)]
-  /// struct DropComments<'h>(Dispatch<'h>);
+  /// struct DropComments<'h>(Dispatcher<'h>);
   ///
-  /// impl EventHandler for DropComments<'_> {
-  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
-  ///     if matches!(event, EventRef::Comment(_)) { Ok(Flow::Continue(0)) } else { self.0.handle(event) }
+  /// impl EventConsumer for DropComments<'_> {
+  ///   fn consume(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
+  ///     if matches!(event, EventRef::Comment(_)) { Ok(Flow::Continue(0)) } else { self.0.consume(event) }
   ///   }
   ///   fn finish(&mut self, outcome: Outcome<'_>) {
   ///     self.0.finish(outcome);
   ///   }
   /// }
   ///
-  /// impl<'h> EventSource<'h> for DropComments<'h> {
-  ///   fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-  ///     self.0.add(handler);
+  /// impl<'h> EventProducer<'h> for DropComments<'h> {
+  ///   fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+  ///     self.0 = self.0.add_consumer(handler);
   ///     self
   ///   }
   /// }
   ///
   /// let mut builder = DomBuilder::new();
   /// {
-  ///   let mut transform = DropComments::default().with_handler(&mut builder);
-  ///   Reader::new().events("<a>one<!-- note -->two</a>".as_bytes(), &mut transform)?;
+  ///   let mut transformer = DropComments::default().add_consumer(&mut builder);
+  ///   Reader::new().events("<a>one<!-- note -->two</a>".as_bytes(), &mut transformer)?;
   /// }
   /// let doc = builder.into_document();
   /// let root = doc.document_element().unwrap();
@@ -246,40 +246,40 @@ impl<'r> Reader<'r> {
   /// assert_eq!(doc.children(root).count(), 1, "the comment is gone, and the text around it is one node");
   /// # Ok::<(), xenolith::Error>(())
   /// ```
-  pub fn events<R: io::Read>(&self, input: R, handler: &mut dyn EventHandler) -> Result<()> {
-    // Everything here is built before the source, which is given the handlers and the resolver and therefore has to be
+  pub fn events<R: io::Read>(&self, input: R, handler: &mut dyn EventConsumer) -> Result<()> {
+    // Everything here is built before the source, which is given the consumers and the resolver and therefore has to be
     // dropped before them.
     //
     // Events are emitted by the parser; however, since the parser rejects invalid structures, namespaces, and
     // characters themselves, the validator is responsible only for verifying lexical rules. As the validator is
     // positioned upstream in the processing flow, any violation causes processing to halt before the events reach the
-    // handler — and before the XInclude stage fetches anything for it.
-    let mut strict = StrictXmlValidator::lexical_only();
+    // consumer — and before the XInclude stage fetches anything for it.
+    let mut strict = StrictXmlConstraints::lexical_only();
     let mut xinclude = self.xinclude.then(|| {
-      let mut xinclude = XIncludeTransform::new().with_config(self.config).with_strict(self.strict);
+      let mut xinclude = XIncludeTransformer::new().with_config(self.config).with_strict(self.strict);
       // A handle of the one resolver, which the parser below is given as well.
       xinclude = xinclude.with_resolver(self.resolver);
       xinclude
     });
 
-    let mut lane = Dispatch::new();
+    let mut lane = Dispatcher::new();
 
     // Strictness is evaluated before filters or transformers are invoked, and execution halts at the first sign of a
-    // problem. The XInclude vocabulary is judged by the transform itself.
+    // problem. The XInclude vocabulary is judged by the transformer itself.
     if self.strict {
-      lane = lane.with_validator(&mut strict);
+      lane = lane.add_validator(&mut strict);
     }
 
     match xinclude.as_mut() {
       Some(include) => {
-        // The inclusion reports what it read to the handler, so the handler is behind it rather than beside it.
-        *include = std::mem::take(include).with_handler(handler);
-        lane = lane.with_handler(include);
+        // The inclusion reports what it read to the consumer, so the consumer is behind it rather than beside it.
+        *include = std::mem::take(include).add_consumer(handler);
+        lane = lane.add_consumer(include);
       }
-      None => lane = lane.with_handler(handler),
+      None => lane = lane.add_consumer(handler),
     }
 
-    self.source(input, self.resolver)?.with_handler(&mut lane).emit()
+    self.source(input, self.resolver)?.add_consumer(&mut lane).emit()
   }
 
   /// Reads `input` into a tree.
@@ -436,7 +436,7 @@ impl Writer {
       // enough to carry it.
       source = source.with_doctype(Dtd::default(), NamePool::new());
     }
-    source.with_handler(&mut writer).emit()?;
+    source.add_consumer(&mut writer).emit()?;
     Ok(writer.into_inner())
   }
 }

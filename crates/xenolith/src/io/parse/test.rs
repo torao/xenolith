@@ -445,7 +445,7 @@ fn rejects_documents_without_exactly_one_root() {
 
 #[test]
 fn leaves_duplicate_attributes_to_the_strict_validator() {
-  // WFC: Unique Att Spec is lexical: the parser delivers both attributes, and `StrictXmlValidator` refuses the tag.
+  // WFC: Unique Att Spec is lexical: the parser delivers both attributes, and `StrictXmlConstraints` refuses the tag.
   assert_eq!(trace("<a x='1' x='2'/>").unwrap().len(), 2);
   assert_eq!(trace("<a xmlns:p='u' xmlns:q='u' p:x='1' q:x='2'/>").unwrap().len(), 2);
   assert_eq!(trace("<a xmlns:p='u' xmlns:q='v' p:x='1' q:x='2'/>").unwrap().len(), 2);
@@ -454,7 +454,7 @@ fn leaves_duplicate_attributes_to_the_strict_validator() {
 #[test]
 fn leaves_the_shape_of_a_name_to_the_strict_validator() {
   // A name that is not a `QName` still becomes an event. The split at the first colon is lenient, so `a:b:c` is prefix
-  // `a` with local part `b:c`, and `1a` has no prefix; `StrictXmlValidator` is what refuses them.
+  // `a` with local part `b:c`, and `1a` has no prefix; `StrictXmlConstraints` is what refuses them.
   assert_eq!(trace("<a:b:c xmlns:a='u'/>").unwrap().len(), 2);
   assert_eq!(trace("<1a/>").unwrap().len(), 2);
   assert_eq!(trace("<a b^c='1'/>").unwrap().len(), 2);

@@ -32,22 +32,22 @@ enum Step {
 struct TinySource<'h> {
   empty: NoAttributes,
   step: Step,
-  dispatch: Dispatch<'h>,
-  /// Whether the run ended because every handler finished early.
+  dispatch: Dispatcher<'h>,
+  /// Whether the run ended because every consumer finished early.
   stopped: bool,
-  /// Whether the handlers have been told how the run ended.
+  /// Whether the consumers have been told how the run ended.
   told: bool,
 }
 
 impl<'h> TinySource<'h> {
   fn new() -> Self {
-    Self { empty: NoAttributes, step: Step::Start, dispatch: Dispatch::new(), stopped: false, told: false }
+    Self { empty: NoAttributes, step: Step::Start, dispatch: Dispatcher::new(), stopped: false, told: false }
   }
 }
 
-impl<'h> EventSource<'h> for TinySource<'h> {
-  fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-    self.dispatch = self.dispatch.with_handler(handler);
+impl<'h> EventProducer<'h> for TinySource<'h> {
+  fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+    self.dispatch = self.dispatch.add_consumer(handler);
     self
   }
 }
@@ -93,8 +93,8 @@ impl<'h> EventCursor<'h> for TinySource<'h> {
       Step::End => EventRef::EndDocument,
       Step::Done => return Ok(None),
     };
-    match self.dispatch.handle(&event) {
-      // A handler that finishes at `EndDocument` has not cut the run short.
+    match self.dispatch.consume(&event) {
+      // A consumer that finishes at `EndDocument` has not cut the run short.
       Ok(Flow::Break(_)) if step != Step::End => {
         self.step = Step::Done;
         self.stopped = true;
@@ -116,8 +116,8 @@ struct Counts {
   text: usize,
 }
 
-impl EventHandler for Counts {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Counts {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => self.elements += 1,
       EventRef::Characters(event) => self.text += event.text.len(),
@@ -130,8 +130,8 @@ impl EventHandler for Counts {
 /// Refuses the first start element it is given.
 struct Refuse;
 
-impl EventHandler for Refuse {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Refuse {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => Err(Error::internal("refused")),
       _ => Ok(Flow::Continue(0)),
@@ -140,40 +140,40 @@ impl EventHandler for Refuse {
 }
 
 #[test]
-fn emit_drives_a_handler() {
+fn emit_drives_a_consumer() {
   let mut counts = Counts::default();
-  TinySource::new().with_handler(&mut counts).emit().unwrap();
+  TinySource::new().add_consumer(&mut counts).emit().unwrap();
   assert_eq!((counts.elements, counts.text), (2, 2));
 }
 
 #[test]
-fn a_source_feeds_every_handler_installed_on_it() {
+fn a_source_feeds_every_consumer_installed_on_it() {
   let mut first = Counts::default();
   let mut second = Counts::default();
-  TinySource::new().with_handler(&mut first).with_handler(&mut second).emit().unwrap();
+  TinySource::new().add_consumer(&mut first).add_consumer(&mut second).emit().unwrap();
   assert_eq!(first.elements, 2);
   assert_eq!(second.elements, 2);
 }
 
 #[test]
-fn a_refusal_stops_the_dispatch_where_it_happened() {
-  // Fail-fast: the handler after the one that refused never sees the event it rejected.
+fn a_refusal_stops_the_dispatcher_where_it_happened() {
+  // Fail-fast: the consumer after the one that refused never sees the event it rejected.
   let mut refuse = Refuse;
   let mut after = Counts::default();
-  let error = TinySource::new().with_handler(&mut refuse).with_handler(&mut after).emit().unwrap_err();
+  let error = TinySource::new().add_consumer(&mut refuse).add_consumer(&mut after).emit().unwrap_err();
   assert!(error.to_string().contains("refused"), "{error}");
   assert_eq!(after.elements, 0, "the handler behind the refusal saw no start element");
 }
 
 #[test]
-fn a_handler_that_has_read_enough_ends_the_run_without_an_error() {
+fn a_consumer_that_has_read_enough_ends_the_run_without_an_error() {
   /// Stops as soon as it has seen one element.
   #[derive(Default)]
   struct First {
     names: Vec<String>,
   }
-  impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for First {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
       }
@@ -182,17 +182,17 @@ fn a_handler_that_has_read_enough_ends_the_run_without_an_error() {
   }
 
   let mut first = First::default();
-  TinySource::new().with_handler(&mut first).emit().expect("stopping early is not an error");
+  TinySource::new().add_consumer(&mut first).emit().expect("stopping early is not an error");
   assert_eq!(first.names.len(), 1, "only the first start element is seen");
 }
 
 #[test]
-fn pulling_gives_the_same_events_the_handlers_were_given() {
-  // The two shapes are one run: `next` notifies the installed handlers before it returns the event.
+fn pulling_gives_the_same_events_the_consumers_were_given() {
+  // The two shapes are one run: `next` notifies the installed consumers before it returns the event.
   let mut counts = Counts::default();
   let mut pulled = 0;
   {
-    let mut source = TinySource::new().with_handler(&mut counts);
+    let mut source = TinySource::new().add_consumer(&mut counts);
     while source.next().unwrap().is_some() {
       pulled += 1;
     }
@@ -204,7 +204,7 @@ fn pulling_gives_the_same_events_the_handlers_were_given() {
 #[test]
 fn iterating_gives_the_pulled_events_as_owned_values() {
   let mut counts = Counts::default();
-  let mut source = TinySource::new().with_handler(&mut counts);
+  let mut source = TinySource::new().add_consumer(&mut counts);
   let events: Vec<Event> = source.events().collect::<Result<_>>().unwrap();
   let events: Vec<String> = events.iter().map(|event| render(&event.as_event_ref())).collect();
 
@@ -221,7 +221,7 @@ fn iterating_gives_the_pulled_events_as_owned_values() {
 #[test]
 fn iteration_ends_after_the_first_error() {
   let mut refuse = Refuse;
-  let mut source = TinySource::new().with_handler(&mut refuse);
+  let mut source = TinySource::new().add_consumer(&mut refuse);
   let mut events = source.events();
   assert!(matches!(events.next(), Some(Ok(Event::StartDocument))));
   assert!(matches!(events.next(), Some(Err(_))), "the refused start element is reported as the error");
@@ -230,13 +230,13 @@ fn iteration_ends_after_the_first_error() {
 }
 
 #[test]
-fn a_caller_that_did_not_build_the_source_drives_it_with_a_handler_of_its_own() {
-  /// Stands for a wrapper that is handed a source and assembles its own handler out of locals. It cannot install
-  /// that handler, since the source's `'h` was fixed by whoever built it, so it drives the cursor itself.
+fn a_caller_that_did_not_build_the_source_drives_it_with_a_consumer_of_its_own() {
+  /// Stands for a wrapper that is handed a producer and assembles its own consumer out of locals. It cannot install
+  /// that consumer, since the producer's `'h` was fixed by whoever built it, so it drives the cursor itself.
   fn run<'h>(source: &mut impl EventCursor<'h>) -> Result<usize> {
     let mut mine = Counts::default();
     while let Some(event) = source.next()? {
-      if mine.handle(&event)?.is_break() {
+      if mine.consume(&event)?.is_break() {
         break;
       }
     }
@@ -244,7 +244,7 @@ fn a_caller_that_did_not_build_the_source_drives_it_with_a_handler_of_its_own() 
   }
 
   let mut installed = Counts::default();
-  let mut source = TinySource::new().with_handler(&mut installed);
+  let mut source = TinySource::new().add_consumer(&mut installed);
   assert_eq!(run(&mut source).unwrap(), 2);
   drop(source);
   assert_eq!(installed.elements, 2, "the installed handler saw the same run");
@@ -264,15 +264,15 @@ impl Recorder {
     Self { limit: Some(limit), ..Self::default() }
   }
 
-  /// Makes this recorder count afresh at each `StartDocument`, as a handler meant to be used again does.
+  /// Makes this recorder count afresh at each `StartDocument`, as a consumer meant to be used again does.
   fn resetting(mut self) -> Self {
     self.resets = true;
     self
   }
 }
 
-impl EventHandler for Recorder {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Recorder {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if self.resets && matches!(event, EventRef::StartDocument) {
       self.starts = 0;
     }
@@ -295,35 +295,35 @@ impl EventHandler for Recorder {
 const WHOLE_RUN: [&str; 7] = ["start-document", "start", "text", "start", "end", "end", "end-document"];
 
 #[test]
-fn a_handler_that_finishes_leaves_the_others_running_to_the_end() {
+fn a_consumer_that_finishes_leaves_the_others_running_to_the_end() {
   let mut early = Recorder::stopping_after(1);
   let mut full = Recorder::default();
-  TinySource::new().with_handler(&mut early).with_handler(&mut full).emit().unwrap();
+  TinySource::new().add_consumer(&mut early).add_consumer(&mut full).emit().unwrap();
 
   assert_eq!(early.seen, ["start-document", "start"], "nothing after the element it finished at");
   assert_eq!(full.seen, WHOLE_RUN, "the handler beside it read to the end, its end included");
 }
 
 #[test]
-fn the_run_ends_early_once_every_handler_has_finished() {
+fn the_run_ends_early_once_every_consumer_has_finished() {
   let mut one = Recorder::stopping_after(1);
   let mut two = Recorder::stopping_after(2);
-  TinySource::new().with_handler(&mut one).with_handler(&mut two).emit().expect("finishing early is not an error");
+  TinySource::new().add_consumer(&mut one).add_consumer(&mut two).emit().expect("finishing early is not an error");
 
   assert_eq!(one.seen, ["start-document", "start"]);
   assert_eq!(two.seen, ["start-document", "start", "text", "start"], "the source stopped at the last one to finish");
 }
 
 #[test]
-fn a_handler_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
-  /// Answers `Break` at its second event and `Continue` at any other, so a dispatch that handed it another event would
-  /// take it back.
+fn a_consumer_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
+  /// Answers `Break` at its second event and `Continue` at any other, so a dispatcher that handed it another event
+  /// would take it back.
   #[derive(Default)]
   struct Flicker {
     events: usize,
   }
-  impl EventHandler for Flicker {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Flicker {
+    fn consume(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
       self.events += 1;
       Ok(if self.events == 2 { Flow::Break(0) } else { Flow::Continue(0) })
     }
@@ -331,7 +331,7 @@ fn a_handler_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
 
   let mut flicker = Flicker::default();
   let mut full = Recorder::default();
-  TinySource::new().with_handler(&mut flicker).with_handler(&mut full).emit().unwrap();
+  TinySource::new().add_consumer(&mut flicker).add_consumer(&mut full).emit().unwrap();
 
   // Coming back mid-document would hand it an end element whose start it never saw.
   assert_eq!(flicker.events, 2, "it said no once and was given nothing more");
@@ -339,8 +339,8 @@ fn a_handler_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
 }
 
 #[test]
-fn a_dispatch_with_no_handlers_never_ends_the_run() {
-  assert!(!Dispatch::new().is_stopped());
+fn a_dispatcher_with_no_consumers_never_ends_the_run() {
+  assert!(!Dispatcher::new().is_stopped());
 
   // So a source with nothing installed still reads to the end, and finds what is wrong with the document.
   let error = crate::io::StreamSource::new("<a><b></a>".as_bytes()).emit().unwrap_err();
@@ -348,13 +348,13 @@ fn a_dispatch_with_no_handlers_never_ends_the_run() {
 }
 
 #[test]
-fn a_nested_dispatch_finishes_once_all_of_its_own_handlers_have() {
+fn a_nested_dispatcher_finishes_once_all_of_its_own_consumers_have() {
   let mut early = Recorder::stopping_after(1);
   let mut late = Recorder::stopping_after(2);
   let mut beside = Recorder::default();
   {
-    let mut inner = Dispatch::new().with_handler(&mut early).with_handler(&mut late);
-    TinySource::new().with_handler(&mut inner).with_handler(&mut beside).emit().unwrap();
+    let mut inner = Dispatcher::new().add_consumer(&mut early).add_consumer(&mut late);
+    TinySource::new().add_consumer(&mut inner).add_consumer(&mut beside).emit().unwrap();
   }
 
   assert_eq!(early.seen, ["start-document", "start"]);
@@ -369,8 +369,8 @@ fn a_validator_does_not_keep_the_run_going_once_every_consumer_has_finished() {
   let mut validation = ValidatorSet::new();
   let mut early = Recorder::stopping_after(1);
   {
-    let mut lane = Dispatch::new().with_validator(&mut validation).with_handler(&mut early);
-    TinySource::new().with_handler(&mut lane).emit().expect("finishing early is not an error");
+    let mut lane = Dispatcher::new().add_validator(&mut validation).add_consumer(&mut early);
+    TinySource::new().add_consumer(&mut lane).emit().expect("finishing early is not an error");
   }
 
   assert_eq!(early.seen, ["start-document", "start"]);
@@ -383,8 +383,8 @@ struct FaultsB {
   errors: Vec<validate::ValidityError>,
 }
 
-impl EventHandler for FaultsB {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for FaultsB {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartDocument => self.errors.clear(),
       EventRef::StartElement(start) if start.local == "b" => {
@@ -402,19 +402,19 @@ impl Validator for FaultsB {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
 
 #[test]
-fn the_maximum_of_a_dispatch_counts_the_errors_found_in_a_dispatch_nested_in_it() {
+fn the_maximum_of_a_dispatcher_counts_the_errors_found_in_a_dispatcher_nested_in_it() {
   let mut faults = FaultsB::default();
   let mut behind = Recorder::default();
   let error = {
-    let mut inner = Dispatch::new().with_validator(&mut faults);
-    let mut outer = Dispatch::new().with_max_errors(Some(0)).with_handler(&mut inner).with_handler(&mut behind);
-    TinySource::new().with_handler(&mut outer).emit().expect_err("the first error exceeds the maximum")
+    let mut inner = Dispatcher::new().add_validator(&mut faults);
+    let mut outer = Dispatcher::new().with_max_errors(Some(0)).add_consumer(&mut inner).add_consumer(&mut behind);
+    TinySource::new().add_consumer(&mut outer).emit().expect_err("the first error exceeds the maximum")
   };
 
   assert!(matches!(error, Error::Validity { .. }), "{error:?}");
@@ -423,11 +423,11 @@ fn the_maximum_of_a_dispatch_counts_the_errors_found_in_a_dispatch_nested_in_it(
 }
 
 #[test]
-fn a_dispatch_with_no_maximum_reads_through_the_errors() {
+fn a_dispatcher_with_no_maximum_reads_through_the_errors() {
   let mut faults = FaultsB::default();
   {
-    let mut lane = Dispatch::new().with_max_errors(None).with_validator(&mut faults);
-    TinySource::new().with_handler(&mut lane).emit().expect("validity errors do not end the run");
+    let mut lane = Dispatcher::new().with_max_errors(None).add_validator(&mut faults);
+    TinySource::new().add_consumer(&mut lane).emit().expect("validity errors do not end the run");
   }
   assert_eq!(faults.errors.len(), 1);
 }
@@ -435,8 +435,8 @@ fn a_dispatch_with_no_maximum_reads_through_the_errors() {
 /// A validator that reports the largest count there is at every start element, and keeps no error.
 struct Overstates;
 
-impl EventHandler for Overstates {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Overstates {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     Ok(Flow::Continue(if matches!(event, EventRef::StartElement(_)) { usize::MAX } else { 0 }))
   }
 }
@@ -446,7 +446,7 @@ impl Validator for Overstates {
     std::borrow::Cow::Borrowed(&[])
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
@@ -456,36 +456,36 @@ fn a_count_too_large_to_add_up_neither_panics_nor_slips_past_the_maximum() {
   // With no maximum, the counts of two elements and two validators are added up without overflowing.
   let (mut one, mut two) = (Overstates, Overstates);
   {
-    let mut lane = Dispatch::new().with_validator(&mut one).with_validator(&mut two);
-    TinySource::new().with_handler(&mut lane).emit().expect("validity errors do not end the run");
+    let mut lane = Dispatcher::new().add_validator(&mut one).add_validator(&mut two);
+    TinySource::new().add_consumer(&mut lane).emit().expect("validity errors do not end the run");
   }
 
-  // Summed in a nested dispatch and passed up, the count still exceeds the maximum of the dispatch above it.
+  // Summed in a nested dispatcher and passed up, the count still exceeds the maximum of the dispatcher above it.
   let (mut one, mut two) = (Overstates, Overstates);
   let error = {
-    let mut inner = Dispatch::new().with_validator(&mut one).with_validator(&mut two);
-    let mut outer = Dispatch::new().with_max_errors(Some(usize::MAX - 1)).with_handler(&mut inner);
-    TinySource::new().with_handler(&mut outer).emit().expect_err("more errors than the maximum")
+    let mut inner = Dispatcher::new().add_validator(&mut one).add_validator(&mut two);
+    let mut outer = Dispatcher::new().with_max_errors(Some(usize::MAX - 1)).add_consumer(&mut inner);
+    TinySource::new().add_consumer(&mut outer).emit().expect_err("more errors than the maximum")
   };
   assert!(matches!(error, Error::Validity { .. }), "{error:?}");
 
   // A validator set given the same counts, with no errors to show for them, still stops with an error.
   let mut validation = validate::ValidatorSet::new()
-    .with_validator(Box::new(Overstates))
-    .with_validator(Box::new(Overstates))
+    .add_validator(Box::new(Overstates))
+    .add_validator(Box::new(Overstates))
     .with_max_errors(Some(usize::MAX - 1));
-  let error = TinySource::new().with_handler(&mut validation).emit().expect_err("more errors than the maximum");
+  let error = TinySource::new().add_consumer(&mut validation).emit().expect_err("more errors than the maximum");
   assert!(matches!(error, Error::Validity { .. }), "{error:?}");
 }
 
 #[test]
-fn a_dispatch_handed_the_next_document_starts_it_with_every_handler() {
+fn a_dispatcher_handed_the_next_document_starts_it_with_every_consumer() {
   let mut resetting = Recorder::stopping_after(1).resetting();
   let mut full = Recorder::default();
   {
-    let mut dispatch = Dispatch::new().with_handler(&mut resetting).with_handler(&mut full);
-    TinySource::new().with_handler(&mut dispatch).emit().unwrap();
-    TinySource::new().with_handler(&mut dispatch).emit().unwrap();
+    let mut dispatch = Dispatcher::new().add_consumer(&mut resetting).add_consumer(&mut full);
+    TinySource::new().add_consumer(&mut dispatch).emit().unwrap();
+    TinySource::new().add_consumer(&mut dispatch).emit().unwrap();
   }
 
   assert_eq!(resetting.seen, ["start-document", "start", "start-document", "start"], "each document from its start");
@@ -493,13 +493,13 @@ fn a_dispatch_handed_the_next_document_starts_it_with_every_handler() {
 }
 
 #[test]
-fn a_handler_that_does_not_reset_is_given_only_the_next_start_document() {
+fn a_consumer_that_does_not_reset_is_given_only_the_next_start_document() {
   let mut stale = Recorder::stopping_after(1);
   let mut full = Recorder::default();
   {
-    let mut dispatch = Dispatch::new().with_handler(&mut stale).with_handler(&mut full);
-    TinySource::new().with_handler(&mut dispatch).emit().unwrap();
-    TinySource::new().with_handler(&mut dispatch).emit().unwrap();
+    let mut dispatch = Dispatcher::new().add_consumer(&mut stale).add_consumer(&mut full);
+    TinySource::new().add_consumer(&mut dispatch).emit().unwrap();
+    TinySource::new().add_consumer(&mut dispatch).emit().unwrap();
   }
 
   // Still finished from the first document, it answers `false` again once it has been handed the second's start.
@@ -517,8 +517,8 @@ struct Ends {
   outcomes: Vec<String>,
 }
 
-impl EventHandler for Ends {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Ends {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => self.started = true,
       EventRef::EndDocument => {
@@ -546,7 +546,7 @@ impl EventHandler for Ends {
 fn a_run_dropped_part_way_is_abandoned() {
   let mut ends = Ends::default();
   {
-    let mut source = crate::io::StreamSource::new("<a><b/></a>".as_bytes()).with_handler(&mut ends);
+    let mut source = crate::io::StreamSource::new("<a><b/></a>".as_bytes()).add_consumer(&mut ends);
     source.next().unwrap(); // StartDocument
     source.next().unwrap(); // <a>
   }
@@ -554,16 +554,16 @@ fn a_run_dropped_part_way_is_abandoned() {
 
   // A source never pulled has started no run, so there is nothing to tell.
   let mut untouched = Ends::default();
-  drop(crate::io::StreamSource::new("<a/>".as_bytes()).with_handler(&mut untouched));
+  drop(crate::io::StreamSource::new("<a/>".as_bytes()).add_consumer(&mut untouched));
   assert!(untouched.outcomes.is_empty());
 }
 
 #[test]
-fn every_handler_is_told_the_same_outcome_whichever_one_ended_the_run() {
+fn every_consumer_is_told_the_same_outcome_whichever_one_ended_the_run() {
   let mut a = Ends { stop_at_start: true, ..Ends::default() };
   let mut b = Ends { refuse_end: true, ..Ends::default() };
   let mut c = Ends::default();
-  let error = TinySource::new().with_handler(&mut a).with_handler(&mut b).with_handler(&mut c).emit().unwrap_err();
+  let error = TinySource::new().add_consumer(&mut a).add_consumer(&mut b).add_consumer(&mut c).emit().unwrap_err();
 
   // `b` refused `EndDocument`: `a` had finished before it and `c` never saw it, and neither has to guess from that.
   assert!(b.seen_end && !c.seen_end);
@@ -577,7 +577,7 @@ fn every_handler_is_told_the_same_outcome_whichever_one_ended_the_run() {
 fn a_run_that_reaches_its_end_is_completed_and_told_once() {
   let mut ends = Ends::default();
   {
-    let mut source = TinySource::new().with_handler(&mut ends);
+    let mut source = TinySource::new().add_consumer(&mut ends);
     source.emit().unwrap();
     assert!(source.next().unwrap().is_none());
   }
@@ -585,21 +585,21 @@ fn a_run_that_reaches_its_end_is_completed_and_told_once() {
 }
 
 #[test]
-fn a_run_every_handler_finished_early_is_stopped() {
+fn a_run_every_consumer_finished_early_is_stopped() {
   let mut one = Ends { stop_at_start: true, ..Ends::default() };
   let mut two = Ends { stop_at_start: true, ..Ends::default() };
-  TinySource::new().with_handler(&mut one).with_handler(&mut two).emit().unwrap();
+  TinySource::new().add_consumer(&mut one).add_consumer(&mut two).emit().unwrap();
   assert_eq!(one.outcomes, ["stopped"]);
   assert_eq!(two.outcomes, ["stopped"]);
 }
 
 #[test]
-fn an_error_in_the_input_is_told_to_the_handlers_as_well() {
+fn an_error_in_the_input_is_told_to_the_consumers_as_well() {
   let mut early = Ends { stop_at_start: true, ..Ends::default() };
   let mut full = Ends::default();
   let error = crate::io::StreamSource::new("<a><b></a>".as_bytes())
-    .with_handler(&mut early)
-    .with_handler(&mut full)
+    .add_consumer(&mut early)
+    .add_consumer(&mut full)
     .emit()
     .unwrap_err();
   let told = format!("failed: {}", error.message());
@@ -608,7 +608,7 @@ fn an_error_in_the_input_is_told_to_the_handlers_as_well() {
 }
 
 #[test]
-fn the_other_sources_and_the_handlers_that_wrap_others_pass_the_outcome_on() {
+fn the_other_sources_and_the_consumers_that_wrap_others_pass_the_outcome_on() {
   use crate::dom::DomSource;
   use crate::event::validate::{Ended, ValidatorSet};
   use crate::io::write::XmlWriter;
@@ -616,11 +616,11 @@ fn the_other_sources_and_the_handlers_that_wrap_others_pass_the_outcome_on() {
   let doc = crate::Reader::new().document("<a><b/></a>".as_bytes()).unwrap();
   let mut beside_writer = Ends::default();
   let mut writer = XmlWriter::new(Vec::new());
-  DomSource::new(&doc).with_handler(&mut writer).with_handler(&mut beside_writer).emit().unwrap();
+  DomSource::new(&doc).add_consumer(&mut writer).add_consumer(&mut beside_writer).emit().unwrap();
   assert_eq!(beside_writer.outcomes, ["completed"]);
 
   let mut validation = ValidatorSet::new();
-  TinySource::new().with_handler(&mut validation).emit().unwrap();
+  TinySource::new().add_consumer(&mut validation).emit().unwrap();
   assert_eq!(validation.report().ended(), Some(Ended::Completed));
 }
 
@@ -729,7 +729,7 @@ fn a_document_kept_as_owned_events_builds_the_same_tree_when_replayed() {
              <r id='x' xmlns:p='urn:p'><p:a>t<![CDATA[c]]></p:a><!--n--><?pi d?></r>";
 
   let mut direct = DomBuilder::new();
-  StreamSource::new(xml.as_bytes()).with_handler(&mut direct).emit().unwrap();
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut direct).emit().unwrap();
   let direct = direct.into_document();
 
   let mut kept = Vec::new();
@@ -739,14 +739,14 @@ fn a_document_kept_as_owned_events_builds_the_same_tree_when_replayed() {
   }
   let mut replayed = DomBuilder::new();
   for event in &kept {
-    let _ = replayed.handle(&event.as_event_ref()).unwrap();
+    let _ = replayed.consume(&event.as_event_ref()).unwrap();
   }
   let replayed = replayed.into_document();
 
   // Written back out through the writer, so the two trees are compared as the XML they produce.
   let text = |doc: &Document| {
     let mut writer = XmlWriter::new(Vec::new());
-    DomSource::new(doc).with_handler(&mut writer).emit().unwrap();
+    DomSource::new(doc).add_consumer(&mut writer).emit().unwrap();
     String::from_utf8(writer.into_inner()).unwrap()
   };
   assert_eq!(text(&replayed), text(&direct));

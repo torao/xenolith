@@ -38,7 +38,7 @@ fn whitespace_around_an_xml_id_is_normalized_before_checking() {
 fn an_xml_id_from_a_source_that_did_not_normalize_it_is_normalized_before_checking() {
   use xenolith::attr::{Attribute, Attributes};
   use xenolith::event::validate::{Validator, XmlIdValidator};
-  use xenolith::event::{EventHandler, EventRef, StartElementEventRef, XmlSpace};
+  use xenolith::event::{EventConsumer, EventRef, StartElementEventRef, XmlSpace};
   use xenolith::{Location, XML_NS_URI};
 
   let mut ids = XmlIdValidator::new();
@@ -62,7 +62,7 @@ fn an_xml_id_from_a_source_that_did_not_normalize_it_is_normalized_before_checki
       None,
       Location::unknown(),
     ));
-    let _ = ids.handle(&event).unwrap();
+    let _ = ids.consume(&event).unwrap();
   }
 
   let reported: Vec<String> = ids.errors().iter().map(|e| e.message().to_owned()).collect();

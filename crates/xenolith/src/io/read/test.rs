@@ -319,21 +319,21 @@ fn a_streamed_entity_is_stopped_mid_stream_by_the_expansion_limit() {
   assert!(error.message().contains("limits.entities.max_expansion_chars"), "{}", error.message());
 }
 
-/// Driving handlers with the parser: the events it reports, their order and locations, and how a handler ends a run.
+/// Driving consumers with the parser: the events it reports, their order and locations, and how a consumer ends a run.
 ///
 /// These were the tests of the `io::sax` module, which was a guide and a second set of names for
-/// [`crate::event`](crate::event) and held no code of its own. What they exercise is this reader driving handlers.
+/// [`crate::event`](crate::event) and held no code of its own. What they exercise is this reader driving consumers.
 mod push {
 
   use crate::error::{Error, Result};
-  use crate::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
+  use crate::event::{Dispatcher, EventConsumer, EventCursor, EventProducer, EventRef, Flow};
   use crate::io::StreamSource;
 
   #[derive(Default)]
   struct Trace(Vec<String>);
 
-  impl EventHandler for Trace {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Trace {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.0.push(match event {
         EventRef::StartDocument => "start".to_owned(),
         EventRef::EndDocument => "end".to_owned(),
@@ -351,14 +351,14 @@ mod push {
   #[test]
   fn parses_events_in_order() {
     let mut trace = Trace::default();
-    StreamSource::new("<a>hi<b/><!--c--><?p d?></a>".as_bytes()).with_handler(&mut trace).emit().unwrap();
+    StreamSource::new("<a>hi<b/><!--c--><?p d?></a>".as_bytes()).add_consumer(&mut trace).emit().unwrap();
     assert_eq!(trace.0, ["start", "<a>", "t:hi", "<b>", "</b>", "!:c", "?:p d", "</a>", "end"]);
   }
 
   #[test]
   fn a_not_well_formed_document_is_a_parse_error() {
     let mut trace = Trace::default();
-    let error = StreamSource::new("<a></b>".as_bytes()).with_handler(&mut trace).emit().unwrap_err();
+    let error = StreamSource::new("<a></b>".as_bytes()).add_consumer(&mut trace).emit().unwrap_err();
     assert!(matches!(error, Error::WellFormedness { .. }), "{error}");
   }
 
@@ -367,8 +367,8 @@ mod push {
     // Every event's `location` is where its markup begins, not where reading has since reached.
     #[derive(Default)]
     struct At(Vec<(String, u32, u32)>);
-    impl EventHandler for At {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    impl EventConsumer for At {
+      fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         let what = match event {
           EventRef::StartElement(e) => format!("<{}>", e.local),
           EventRef::EndElement(e) => format!("</{}>", e.local),
@@ -382,7 +382,7 @@ mod push {
       }
     }
     let mut at = At::default();
-    StreamSource::new("<r>\n  <c/>hi<!--x--></r>".as_bytes()).with_handler(&mut at).emit().unwrap();
+    StreamSource::new("<r>\n  <c/>hi<!--x--></r>".as_bytes()).add_consumer(&mut at).emit().unwrap();
     assert_eq!(
       at.0,
       [
@@ -398,15 +398,15 @@ mod push {
   }
 
   #[test]
-  fn a_handler_stops_the_run_early() {
+  fn a_consumer_stops_the_run_early() {
     // Collect the first element name, then request a stop; the rest of the document is not visited.
     #[derive(Default)]
     struct First {
       names: Vec<String>,
       done: bool,
     }
-    impl EventHandler for First {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    impl EventConsumer for First {
+      fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::StartElement(event) = event {
           self.names.push(event.local.to_owned());
           self.done = true;
@@ -415,20 +415,20 @@ mod push {
       }
     }
     let mut first = First::default();
-    StreamSource::new("<a><b/><c/></a>".as_bytes()).with_handler(&mut first).emit().unwrap();
+    StreamSource::new("<a><b/><c/></a>".as_bytes()).add_consumer(&mut first).emit().unwrap();
     assert_eq!(first.names, ["a"], "only the first start element is seen");
   }
 
   #[test]
-  fn a_handler_refuses_the_document_and_the_error_comes_back_out() {
-    // A handler's own objection travels the same path as the parser's: `handle` returns `Err`, and `emit` hands it to
-    // the caller. What the handler collected up to that point is still on the handler the caller owns.
+  fn a_consumer_refuses_the_document_and_the_error_comes_back_out() {
+    // A consumer's own objection travels the same path as the parser's: `consume` returns `Err`, and `emit` hands it to
+    // the caller. What the consumer collected up to that point is still on the consumer the caller owns.
     #[derive(Default)]
     struct Reject {
       seen: Vec<String>,
     }
-    impl EventHandler for Reject {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    impl EventConsumer for Reject {
+      fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::StartElement(event) = event {
           let name = event.local.to_owned();
           if name == "b" {
@@ -440,7 +440,7 @@ mod push {
       }
     }
     let mut reject = Reject::default();
-    let error = StreamSource::new("<a><b/></a>".as_bytes()).with_handler(&mut reject).emit().unwrap_err();
+    let error = StreamSource::new("<a><b/></a>".as_bytes()).add_consumer(&mut reject).emit().unwrap_err();
     assert!(error.message().contains("not allowed"), "{error}");
     assert_eq!(reject.seen, ["a"], "what it saw before refusing is still there");
   }
@@ -454,8 +454,8 @@ mod push {
       unparsed: bool,
       at: Option<(u32, u32)>,
     }
-    impl EventHandler for Seen {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    impl EventConsumer for Seen {
+      fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::Doctype(event) = event {
           self.notation = event.pool.get("gif").is_some_and(|id| event.dtd.has_notation(id));
           self.unparsed = event.pool.get("logo").is_some_and(|id| {
@@ -471,7 +471,7 @@ mod push {
       <!ENTITY logo SYSTEM 'urn:logo' NDATA gif>\
     ]><doc/>";
     let mut seen = Seen::default();
-    StreamSource::new(doc.as_bytes()).with_handler(&mut seen).emit().unwrap();
+    StreamSource::new(doc.as_bytes()).add_consumer(&mut seen).emit().unwrap();
     assert!(seen.notation, "the NOTATION declaration is reachable");
     assert!(seen.unparsed, "the NDATA entity is reachable");
     // The location is the start of `<!DOCTYPE`, kept across the whole DTD parse, not the `]>` at its end.
@@ -480,7 +480,7 @@ mod push {
 
   #[test]
   fn a_processing_instruction_locates_its_data() {
-    // The separator between target and data is dropped, so `data_location` is how a handler finds where `data`
+    // The separator between target and data is dropped, so `data_location` is how a consumer finds where `data`
     // begins, even when that separator spans a newline.
     #[derive(Default)]
     struct Pi {
@@ -488,8 +488,8 @@ mod push {
       data: String,
       data_at: Option<(u32, u32, u64)>,
     }
-    impl EventHandler for Pi {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    impl EventConsumer for Pi {
+      fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::ProcessingInstruction(e) = event {
           self.target = e.target.to_owned();
           self.data = e.data.to_owned();
@@ -499,7 +499,7 @@ mod push {
       }
     }
     let mut pi = Pi::default();
-    StreamSource::new("<r><?php\n  echo 1; ?></r>".as_bytes()).with_handler(&mut pi).emit().unwrap();
+    StreamSource::new("<r><?php\n  echo 1; ?></r>".as_bytes()).add_consumer(&mut pi).emit().unwrap();
     assert_eq!(pi.target, "php");
     assert_eq!(pi.data, "echo 1; ");
     // `<?php` is on line 1; the separator's newline puts `data` on line 2, column 3, character offset 11.
@@ -507,11 +507,11 @@ mod push {
   }
 
   #[test]
-  fn a_dispatch_runs_several_handlers_in_one_pass() {
+  fn a_dispatcher_runs_several_consumers_in_one_pass() {
     let mut first = Trace::default();
     let mut second = Trace::default();
-    let mut both = Dispatch::new().with_handler(&mut first).with_handler(&mut second);
-    StreamSource::new("<a>hi</a>".as_bytes()).with_handler(&mut both).emit().unwrap();
+    let mut both = Dispatcher::new().add_consumer(&mut first).add_consumer(&mut second);
+    StreamSource::new("<a>hi</a>".as_bytes()).add_consumer(&mut both).emit().unwrap();
     drop(both);
     let expected = ["start", "<a>", "t:hi", "</a>", "end"];
     assert_eq!(first.0, expected);

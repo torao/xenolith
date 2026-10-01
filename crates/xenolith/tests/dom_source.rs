@@ -7,21 +7,21 @@
 use xenolith::dom::build::DomBuilder;
 use xenolith::dom::{Document, DomSource};
 use xenolith::error::Result;
-use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
+use xenolith::event::{EventConsumer, EventCursor, EventProducer, EventRef, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the builder.
 fn parse(xml: &str) -> Document {
   let mut builder = DomBuilder::new();
-  StreamSource::new(xml.as_bytes()).with_handler(&mut builder).emit().unwrap();
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut builder).emit().unwrap();
   builder.into_document()
 }
 
 #[derive(Default)]
 struct Trace(Vec<String>);
 
-impl EventHandler for Trace {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Trace {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     self.0.push(match event {
       EventRef::StartDocument => "start".to_owned(),
       EventRef::EndDocument => "end".to_owned(),
@@ -47,7 +47,7 @@ impl EventHandler for Trace {
 fn trace(xml: &str) -> Vec<String> {
   let doc = parse(xml);
   let mut trace = Trace::default();
-  DomSource::new(&doc).with_handler(&mut trace).emit().unwrap();
+  DomSource::new(&doc).add_consumer(&mut trace).emit().unwrap();
   trace.0
 }
 
@@ -76,15 +76,15 @@ fn emits_nested_elements_with_matching_ends() {
 }
 
 #[test]
-fn a_handler_stops_the_emission_early() {
+fn a_consumer_stops_the_emission_early() {
   // Record the first element name, then request a stop. The rest of the tree is not visited.
   #[derive(Default)]
   struct First {
     names: Vec<String>,
     done: bool,
   }
-  impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for First {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
         self.done = true;
@@ -94,7 +94,7 @@ fn a_handler_stops_the_emission_early() {
   }
   let doc = parse("<a><b/><c/></a>");
   let mut first = First::default();
-  DomSource::new(&doc).with_handler(&mut first).emit().unwrap();
+  DomSource::new(&doc).add_consumer(&mut first).emit().unwrap();
   assert_eq!(first.names, ["a"], "only the first start element is seen");
 }
 
@@ -105,17 +105,17 @@ fn the_document_type_node_is_reported_only_when_a_dtd_is_given() {
 
   // No external subset: reading one would need a resolver, and what the tree holds of the declaration is the same.
   let mut builder = DomBuilder::new();
-  StreamSource::new("<!DOCTYPE note><note>hi</note>".as_bytes()).with_handler(&mut builder).emit().expect("read");
+  StreamSource::new("<!DOCTYPE note><note>hi</note>".as_bytes()).add_consumer(&mut builder).emit().expect("read");
   let doc = builder.into_document();
 
   // Without a DTD the node is passed over, as it always was.
   let mut kinds = Kinds::default();
-  DomSource::new(&doc).with_handler(&mut kinds).emit().expect("walked");
+  DomSource::new(&doc).add_consumer(&mut kinds).emit().expect("walked");
   assert!(!kinds.0.iter().any(|kind| kind == "doctype"), "{:?}", kinds.0);
 
   // With one, the walk reports it between the document's start and the root element.
   let mut kinds = Kinds::default();
-  DomSource::new(&doc).with_doctype(Dtd::default(), NamePool::new()).with_handler(&mut kinds).emit().expect("walked");
+  DomSource::new(&doc).with_doctype(Dtd::default(), NamePool::new()).add_consumer(&mut kinds).emit().expect("walked");
   assert_eq!(kinds.0.first().map(String::as_str), Some("start-document"));
   assert_eq!(kinds.0.get(1).map(String::as_str), Some("doctype"), "{:?}", kinds.0);
 }
@@ -124,8 +124,8 @@ fn the_document_type_node_is_reported_only_when_a_dtd_is_given() {
 #[derive(Default)]
 struct Kinds(Vec<String>);
 
-impl EventHandler for Kinds {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Kinds {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     self.0.push(
       match event {
         EventRef::StartDocument => "start-document",

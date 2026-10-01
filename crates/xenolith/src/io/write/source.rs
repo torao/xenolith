@@ -1,7 +1,7 @@
-//! An application-driven [`EventSource`].
+//! An application-driven [`EventProducer`].
 //!
 //! [`WriterSource`] converts StAX-style write API calls into events. How these events are processed depends on the
-//! composed handlers; for example, [`XmlWriter`](crate::io::write::XmlWriter) writes them out as XML text, while
+//! composed consumers; for example, [`XmlWriter`](crate::io::write::XmlWriter) writes them out as XML text, while
 //! [`DomBuilder`](crate::dom::build::DomBuilder) constructs a tree from them.
 
 #[cfg(test)]
@@ -12,8 +12,8 @@ use crate::chars;
 use crate::dtd::model::Dtd;
 use crate::error::{Error, Location, Result};
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventHandler,
-  EventRef, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
+  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatcher, DoctypeEventRef, EndElementEventRef, EventConsumer,
+  EventProducer, EventRef, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
 };
 use crate::name::NamePool;
 
@@ -63,36 +63,36 @@ enum Step {
   Before,
   /// The document is being written.
   Writing,
-  /// Every handler finished early. Nothing is listening, which is not the caller's mistake, so a later write is
+  /// Every consumer finished early. Nothing is listening, which is not the caller's mistake, so a later write is
   /// ignored and returns `Ok`.
   Stopped,
   /// [`end_document`](WriterSource::end_document) closed the document, so a later write is the caller's mistake.
   Ended,
-  /// A handler refused an event, and that call has already returned the error. A later write is refused too, rather
+  /// A consumer refused an event, and that call has already returned the error. A later write is refused too, rather
   /// than silently accepted.
   Failed,
 }
 
-/// A component that allows an application to perform write operations as an [`EventSource`]. It corresponds to the
+/// A component that allows an application to perform write operations as an [`EventProducer`]. It corresponds to the
 /// `XMLStreamWriter` API in StAX.
 ///
-/// Each method call triggers a notification of the corresponding event to the registered handler. The data written by
-/// the application is passed to the handler for processing, such as outputting XML text, building a tree, performing
-/// schema validation, or executing multiple such operations concurrently via [`Dispatch`]. This source merely
+/// Each method call triggers a notification of the corresponding event to the registered consumer. The data written by
+/// the application is passed to the consumer for processing, such as outputting XML text, building a tree, performing
+/// schema validation, or executing multiple such operations concurrently via [`Dispatcher`]. This source merely
 /// generates application-driven events; it does not perform output operations itself.
 ///
 /// This is a push-based mechanism. Processing begins with the initial write or a call to
 /// [`start_document`](Self::start_document) and concludes with [`end_document`](Self::end_document). When
 /// [`end_document`](Self::end_document) is called, the [`EndDocument`](EventRef::EndDocument) event is signaled, and
-/// the handler is notified that processing has [`Completed`](crate::event::Outcome::Completed). Conversely, if the
-/// source is dropped without this call being made, the handler is notified that processing has been
+/// the consumer is notified that processing has [`Completed`](crate::event::Outcome::Completed). Conversely, if the
+/// source is dropped without this call being made, the consumer is notified that processing has been
 /// [`Abandoned`](crate::event::Outcome::Abandoned).
 ///
 /// # Caller's responsibility
 ///
 /// The start tag is buffered until all attributes are collected, and all attributes are conveyed in a single
 /// [`StartElement`](EventRef::StartElement) event. A side effect of this is that the timing of write rejections is
-/// affected; specifically, attributes that a handler cannot accept are reported not at the call that wrote the
+/// affected; specifically, attributes that a consumer cannot accept are reported not at the call that wrote the
 /// attribute itself, but at the call that finalizes the start tag.
 ///
 /// Namespace management is the caller's responsibility. When specifying a namespace via
@@ -100,13 +100,13 @@ enum Step {
 /// standard attributes. This event source does not perform checks such as whether names are valid `Name`s, whether
 /// tags are properly balanced, whether prefixes are declared, or whether there is a single root element. Xenolith
 /// adheres to a principle of separation of concerns where validation is performed by a validator, and the event source
-/// performs only the minimum validation necessary for its operation. Handlers requiring such checks must place a
-/// validator, such as [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator), upstream in the processing
+/// performs only the minimum validation necessary for its operation. Consumers requiring such checks must place a
+/// validator, such as [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints), upstream in the processing
 /// pipeline.
 ///
 /// You cannot perform write operations after the run has finished. Attempting to write to the source after calling
 /// [`end_document`](Self::end_document) or when an error has already occurred will result in an error. Conversely, if
-/// all handlers have terminated early, it will continue to return `Ok` without reporting anything.
+/// all consumers have terminated early, it will continue to return `Ok` without reporting anything.
 ///
 /// Calls not permitted by the API, such as specifying attributes when no start tag is open, or using an end element
 /// when no element is currently open, will also result in an error.
@@ -119,12 +119,12 @@ enum Step {
 /// Writing a document straight out as XML text:
 ///
 /// ```
-/// use xenolith::event::EventSource;
+/// use xenolith::event::EventProducer;
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
 /// let mut writer = XmlWriter::new(Vec::new());
 /// {
-///   let mut doc = WriterSource::new().with_handler(&mut writer);
+///   let mut doc = WriterSource::new().add_consumer(&mut writer);
 ///   doc.write_start_element("greeting")?;
 ///   doc.write_attribute("xml:lang", "en")?;
 ///   doc.write_characters("Hello & welcome")?;
@@ -136,16 +136,16 @@ enum Step {
 /// # Ok::<(), xenolith::Error>(())
 /// ```
 ///
-/// The same calls building a tree instead, because the handler is what decides where the events go:
+/// The same calls building a tree instead, because the consumer is what decides where the events go:
 ///
 /// ```
 /// use xenolith::dom::build::DomBuilder;
-/// use xenolith::event::EventSource;
+/// use xenolith::event::EventProducer;
 /// use xenolith::io::write::WriterSource;
 ///
 /// let mut builder = DomBuilder::new();
 /// {
-///   let mut doc = WriterSource::new().with_handler(&mut builder);
+///   let mut doc = WriterSource::new().add_consumer(&mut builder);
 ///   doc.write_start_element_ns(Some("urn:example"), "e:note")?;
 ///   doc.write_attribute("xmlns:e", "urn:example")?;
 ///   doc.write_characters("hi")?;
@@ -161,9 +161,9 @@ enum Step {
 /// ```
 #[derive(Debug)]
 pub struct WriterSource<'h> {
-  /// The handlers this source was built with, which every event reaches. Its own [`Drop`] is what tells them the run
+  /// The consumers this source was built with, which every event reaches. Its own [`Drop`] is what tells them the run
   /// was [`Abandoned`](Outcome::Abandoned) when this source is dropped part way, so there is no `Drop` here.
-  dispatch: Dispatch<'h>,
+  dispatch: Dispatcher<'h>,
   /// The elements currently open, outermost first, so an end element reports the name its start element did.
   open: Vec<WrittenName>,
   /// The start tag whose attributes are still being collected, held until the first content or the end.
@@ -181,11 +181,11 @@ impl Default for WriterSource<'_> {
 }
 
 impl<'h> WriterSource<'h> {
-  /// Creates a source with no handlers.
+  /// Creates a source with no consumers.
   #[must_use]
   pub fn new() -> Self {
     Self {
-      dispatch: Dispatch::new(),
+      dispatch: Dispatcher::new(),
       open: Vec::new(),
       pending: None,
       attributes: WrittenAttributes::default(),
@@ -207,7 +207,7 @@ impl<'h> WriterSource<'h> {
   ///
   /// # Errors
   ///
-  /// Returns the value returned by the event handlers (such as when execution terminates with a "reject" status), or
+  /// Returns the value returned by the event consumers (such as when execution terminates with a "reject" status), or
   /// an error if execution has already concluded.
   pub fn start_document(&mut self) -> Result<()> {
     if !self.taking_writes()? || self.step != Step::Before {
@@ -221,12 +221,12 @@ impl<'h> WriterSource<'h> {
   /// `dtd` object and a [`NamePool`] in which each name within that DTD is interned.
   ///
   /// Even when [`Dtd::default`](crate::dtd::model::Dtd::default) is used, the declaration itself is still emitted;
-  /// however, the object passed to handlers that consume the declaration, such as DTD validators or tree builders that
+  /// however, the object passed to consumers that consume the declaration, such as DTD validators or tree builders that
   /// mark `ID` attributes, is an empty DTD.
   ///
   /// # Errors
   ///
-  /// Returns the value returned by the event handlers (such as when execution terminates with a "reject" status), or
+  /// Returns the value returned by the event consumers (such as when execution terminates with a "reject" status), or
   /// an error if execution has already concluded.
   pub fn write_doctype(
     &mut self,
@@ -250,14 +250,14 @@ impl<'h> WriterSource<'h> {
   ///
   /// # Errors
   ///
-  /// A handler for the element start event returned an error, or execution has already finished.
+  /// A consumer for the element start event returned an error, or execution has already finished.
   pub fn write_start_element(&mut self, qualified_name: &str) -> Result<()> {
     self.write_start_element_ns(None, qualified_name)
   }
 
   /// Opens an element within the `namespace`; the caller declares the prefix for the qualified name.
   ///
-  /// The namespace is passed to the handler as part of the event, the corresponding `xmlns` declaration must be
+  /// The namespace is passed to the consumer as part of the event, the corresponding `xmlns` declaration must be
   /// specified as an attribute for it to be reflected in the output.
   ///
   /// # Errors
@@ -278,7 +278,7 @@ impl<'h> WriterSource<'h> {
   /// # Errors
   ///
   /// When the element to which the attribute belongs has not started, or when its scope has already ended. Note that
-  /// no notification is sent to the handler in this case; consequently, any rejection by the handler would occur at
+  /// no notification is sent to the consumer in this case; consequently, any rejection by the consumer would occur at
   /// the stage of the call that terminates the start tag.
   pub fn write_attribute(&mut self, qualified_name: &str, value: &str) -> Result<()> {
     self.write_attribute_ns(None, qualified_name, value)
@@ -304,7 +304,7 @@ impl<'h> WriterSource<'h> {
   ///
   /// # Errors
   ///
-  /// If the event handler returns an error, that value is returned, such as when execution completes in a rejected
+  /// If the event consumer returns an error, that value is returned, such as when execution completes in a rejected
   /// state. Additionally, an error is returned if execution has already finished.
   pub fn write_characters(&mut self, text: &str) -> Result<()> {
     self.content(&EventRef::Characters(CharactersEventRef::new(text, Location::unknown())))
@@ -343,7 +343,7 @@ impl<'h> WriterSource<'h> {
   ///
   /// # Errors
   ///
-  /// When an error is returned by a handler for this event, or for the start element that this event terminates, when
+  /// When an error is returned by a consumer for this event, or for the start element that this event terminates, when
   /// the element is not in an open state, or when processing has already concluded.
   pub fn write_end_element(&mut self) -> Result<()> {
     self.flush_start()?;
@@ -362,14 +362,14 @@ impl<'h> WriterSource<'h> {
     self.report(&event)
   }
 
-  /// Emits the [`EndDocument`](EventRef::EndDocument) event to notify the handler that execution has
+  /// Emits the [`EndDocument`](EventRef::EndDocument) event to notify the consumer that execution has
   /// [`Completed`](crate::event::Outcome::Completed).
   ///
   /// Writing to the document is complete, so any subsequent write operations will result in an error.
   ///
   /// # Errors
   ///
-  /// An error returned by the handler for this event, or an indication of whether the start element remains open, or
+  /// An error returned by the consumer for this event, or an indication of whether the start element remains open, or
   /// writing has already finished.
   pub fn end_document(&mut self) -> Result<()> {
     self.start_document()?;
@@ -377,9 +377,9 @@ impl<'h> WriterSource<'h> {
     if !self.taking_writes()? {
       return Ok(());
     }
-    // Not `report`: that would end the run as stopped when a handler finishes at this event, and a handler that
+    // Not `report`: that would end the run as stopped when a consumer finishes at this event, and a consumer that
     // finished here has accepted `EndDocument`, which is what completes a run. The document was written in full.
-    if let Err(error) = self.dispatch.handle(&EventRef::EndDocument) {
+    if let Err(error) = self.dispatch.consume(&EventRef::EndDocument) {
       self.step = Step::Failed;
       return Err(self.dispatch.fail(error));
     }
@@ -415,22 +415,22 @@ impl<'h> WriterSource<'h> {
         None,
         Location::unknown(),
       ));
-      self.dispatch.handle(&event)
+      self.dispatch.consume(&event)
     };
     self.attributes.0.clear();
     self.open.push(name);
     self.settle(outcome)
   }
 
-  /// Dispatches the `event` to the handlers. Execution terminates if any handler rejects it or if all handlers have
+  /// Dispatches the `event` to the consumers. Execution terminates if any consumer rejects it or if all consumers have
   /// finished processing.
   fn report(&mut self, event: &EventRef<'_>) -> Result<()> {
-    let outcome = self.dispatch.handle(event);
+    let outcome = self.dispatch.consume(event);
     self.settle(outcome)
   }
 
-  /// Finalizes the handler's decision regarding the event. A refusal results in the run ending as a failure, while the
-  /// run ends as a stoppage if all handlers have finished. No further reports are issued for a run that has concluded.
+  /// Finalizes the consumer's decision regarding the event. A refusal results in the run ending as a failure, while the
+  /// run ends as a stoppage if all consumers have finished. No further reports are issued for a run that has concluded.
   fn settle(&mut self, outcome: Result<Flow>) -> Result<()> {
     match outcome {
       Ok(Flow::Continue(_)) => {}
@@ -447,7 +447,7 @@ impl<'h> WriterSource<'h> {
   }
 
   /// Indicates whether the current execution still accepts writes. Specifically, it rejects writes that arrive after
-  /// the document has terminated or after a handler has rejected the event. If all handlers terminate early,
+  /// the document has terminated or after a consumer has rejected the event. If all consumers terminate early,
   /// `Ok(false)` is returned; in this case, writes are ignored because there is no recipient to accept them.
   fn taking_writes(&self) -> Result<bool> {
     match self.step {
@@ -459,9 +459,9 @@ impl<'h> WriterSource<'h> {
   }
 }
 
-impl<'h> EventSource<'h> for WriterSource<'h> {
-  fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-    self.dispatch = self.dispatch.with_handler(handler);
+impl<'h> EventProducer<'h> for WriterSource<'h> {
+  fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+    self.dispatch = self.dispatch.add_consumer(handler);
     self
   }
 }

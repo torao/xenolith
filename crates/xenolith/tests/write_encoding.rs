@@ -1,7 +1,7 @@
 //! Writing in an encoding other than UTF-8, and declaring it under whatever name the reader knows.
 
 use xenolith::Error;
-use xenolith::event::EventSource;
+use xenolith::event::EventProducer;
 use xenolith::io::write::{WriterSource, XmlWriter};
 
 /// Writes `build` through a writer configured by `setup`, returning the raw bytes.
@@ -11,7 +11,7 @@ fn bytes(
 ) -> Vec<u8> {
   let mut w = setup(XmlWriter::new(Vec::new()));
   {
-    let mut doc = WriterSource::new().with_handler(&mut w);
+    let mut doc = WriterSource::new().add_consumer(&mut w);
     build(&mut doc).expect("written");
     doc.end_document().expect("written");
   }
@@ -21,7 +21,7 @@ fn bytes(
 /// The error of writing `build` through a writer that encodes as US-ASCII.
 fn ascii_error(build: impl FnOnce(&mut WriterSource<'_>) -> Result<(), Error>) -> Error {
   let mut w = XmlWriter::new(Vec::new()).with_encoding("US-ASCII").expect("a built-in encoding");
-  let mut doc = WriterSource::new().with_handler(&mut w);
+  let mut doc = WriterSource::new().add_consumer(&mut w);
   build(&mut doc).expect_err("the encoding cannot hold it")
 }
 

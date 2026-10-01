@@ -30,12 +30,12 @@ impl UriResolver for Map {
   }
 }
 
-/// Reads `xml` through the transform and writes what comes out the other side.
+/// Reads `xml` through the transformer and writes what comes out the other side.
 fn written(xml: &str, resolver: &Map) -> Result<String> {
   let mut writer = XmlWriter::new(Vec::new());
   {
-    let mut include = XIncludeTransform::new().with_resolver(resolver).with_handler(&mut writer);
-    StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_handler(&mut include).emit()?;
+    let mut include = XIncludeTransformer::new().with_resolver(resolver).add_consumer(&mut writer);
+    StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").add_consumer(&mut include).emit()?;
   }
   Ok(String::from_utf8(writer.into_inner()).expect("UTF-8"))
 }
@@ -45,8 +45,8 @@ fn written(xml: &str, resolver: &Map) -> Result<String> {
 fn plain(xml: &str, resolver: &Map) -> Result<String> {
   let mut writer = XmlWriter::new(Vec::new());
   {
-    let mut include = XIncludeTransform::new().with_resolver(resolver).with_xml_base(false).with_handler(&mut writer);
-    StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_handler(&mut include).emit()?;
+    let mut include = XIncludeTransformer::new().with_resolver(resolver).with_xml_base(false).add_consumer(&mut writer);
+    StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").add_consumer(&mut include).emit()?;
   }
   Ok(String::from_utf8(writer.into_inner()).expect("UTF-8"))
 }
@@ -122,9 +122,9 @@ fn inclusion_deeper_than_the_limit_is_refused() {
   let mut writer = XmlWriter::new(Vec::new());
   let error = {
     let limits = Limits { max_depth: Some(3), ..Limits::default() };
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_limits(limits).with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).with_limits(limits).add_consumer(&mut writer);
     StreamSource::with_system_id(doc("<xi:include href='0.xml'/>").as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect_err("deeper than the limit")
   };
@@ -137,10 +137,10 @@ fn more_inclusions_than_the_limit_are_refused() {
   let mut writer = XmlWriter::new(Vec::new());
   let error = {
     let limits = Limits { max_includes: Some(2), ..Limits::default() };
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_limits(limits).with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).with_limits(limits).add_consumer(&mut writer);
     let xml = doc("<xi:include href='part.xml'/><xi:include href='part.xml'/><xi:include href='part.xml'/>");
     StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect_err("more than the limit")
   };
@@ -151,9 +151,9 @@ fn more_inclusions_than_the_limit_are_refused() {
 fn an_include_without_a_resolver_is_refused_rather_than_dropped() {
   let mut writer = XmlWriter::new(Vec::new());
   let error = {
-    let mut include = XIncludeTransform::new().with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().add_consumer(&mut writer);
     StreamSource::with_system_id(doc("<xi:include href='part.xml'/>").as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect_err("nothing may be fetched without a resolver")
   };
@@ -179,8 +179,8 @@ fn text_is_included_as_character_data() {
 #[derive(Default)]
 struct Texts(Vec<String>);
 
-impl EventHandler for Texts {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Texts {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::Characters(text) = event {
       self.0.push(text.text.to_owned());
     }
@@ -194,10 +194,10 @@ fn fragments(body: &str, fragment: usize) -> Vec<String> {
   let mut texts = Texts::default();
   {
     let config = ParserConfig { text_fragment_len: fragment, ..ParserConfig::default() };
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_config(config).with_handler(&mut texts);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).with_config(config).add_consumer(&mut texts);
     let xml = doc("<xi:include href='part.txt' parse='text'/>");
     StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect("included");
   }
@@ -236,8 +236,8 @@ impl StopAt {
   }
 }
 
-impl EventHandler for StopAt {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for StopAt {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(start) => self.seen.push(start.local.to_owned()),
       EventRef::Characters(text) => self.seen.push(text.text.to_owned()),
@@ -256,15 +256,15 @@ impl EventHandler for StopAt {
   }
 }
 
-/// Reads `xml` through the transform into `handler`, without the base URI fixup.
-fn run_into(xml: &str, map: &Map, config: ParserConfig, handler: &mut dyn EventHandler) -> Result<()> {
-  let mut include = XIncludeTransform::new().with_resolver(map).with_config(config).with_xml_base(false);
-  include = include.with_handler(handler);
-  StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_handler(&mut include).emit()
+/// Reads `xml` through the transformer into `handler`, without the base URI fixup.
+fn run_into(xml: &str, map: &Map, config: ParserConfig, handler: &mut dyn EventConsumer) -> Result<()> {
+  let mut include = XIncludeTransformer::new().with_resolver(map).with_config(config).with_xml_base(false);
+  include = include.add_consumer(handler);
+  StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").add_consumer(&mut include).emit()
 }
 
 #[test]
-fn a_handler_that_stops_inside_an_inclusion_ends_the_whole_run() {
+fn a_consumer_that_stops_inside_an_inclusion_ends_the_whole_run() {
   let map = Map::with(&[("file:///doc/part.xml", "<p><q/><r/></p>")]);
   let mut stop = StopAt::new(|event| event.start_element_named(None, "q").is_some());
   let xml = doc("<xi:include href='part.xml'/><xi:include href='part.xml'/><after/>");
@@ -276,7 +276,7 @@ fn a_handler_that_stops_inside_an_inclusion_ends_the_whole_run() {
 }
 
 #[test]
-fn a_handler_that_stops_inside_a_text_inclusion_ends_the_whole_run() {
+fn a_consumer_that_stops_inside_a_text_inclusion_ends_the_whole_run() {
   let map = Map::with(&[("file:///doc/part.txt", "0123456789")]);
   let mut stop = StopAt::new(|event| matches!(event, EventRef::Characters(_)));
   let config = ParserConfig { text_fragment_len: 4, ..ParserConfig::default() };
@@ -291,11 +291,11 @@ fn the_validity_errors_found_in_an_included_document_are_counted_upstream() {
   let map = Map::with(&[("file:///doc/part.xml", "<p xml:id='x'><q xml:id='x'/></p>")]);
   let mut validation = ValidatorSet::new().checking_xml_id(true);
   let error = {
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_handler(&mut validation);
-    let mut lane = Dispatch::new().with_max_errors(Some(0)).with_handler(&mut include);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).add_consumer(&mut validation);
+    let mut lane = Dispatcher::new().with_max_errors(Some(0)).add_consumer(&mut include);
     let xml = doc("<xi:include href='part.xml'/>");
     StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut lane)
+      .add_consumer(&mut lane)
       .emit()
       .expect_err("the duplicate xml:id exceeds the maximum")
   };
@@ -306,7 +306,7 @@ fn the_validity_errors_found_in_an_included_document_are_counted_upstream() {
 
 #[test]
 fn what_the_element_says_is_checked() {
-  // The vocabulary is the schema's business, and the first fault stops the run before the transform fetches anything.
+  // The vocabulary is the schema's business, and the first fault stops the run before the transformer fetches anything.
   let map = Map::with(&[("file:///doc/part.xml", "<p/>")]);
   for (content, expected) in [
     ("<xi:include href='part.xml' parse='both'/>", "neither"),
@@ -319,7 +319,7 @@ fn what_the_element_says_is_checked() {
     assert!(matches!(error, Error::Validity { .. }), "{content}: {error}");
   }
 
-  // What the transform refuses is what it cannot carry out, which the document is within its rights to ask for.
+  // What the transformer refuses is what it cannot carry out, which the document is within its rights to ask for.
   let error = written(&doc("<xi:include xpointer='q'/>"), &map).expect_err("nothing to fetch");
   assert!(error.message().contains("href"), "{error}");
   assert!(matches!(error, Error::XInclude { .. }), "{error}");
@@ -328,7 +328,7 @@ fn what_the_element_says_is_checked() {
 #[test]
 fn what_is_wrong_but_could_still_be_carried_out_is_refused_as_well() {
   // An encoding on an XML resource says nothing the resource does not say itself, so the inclusion could go ahead;
-  // the transform judges its input with `XIncludeSchema`, which is stricter than §3.1 here as it documents.
+  // the transformer judges its input with `XIncludeSchema`, which is stricter than §3.1 here as it documents.
   let map = Map::with(&[("file:///doc/part.xml", "<p/>")]);
   let content = "<xi:include href='part.xml' encoding='UTF-8'/>";
   let error = plain(&doc(content), &map).expect_err("stricter than the specification");
@@ -346,13 +346,13 @@ fn the_content_of_an_include_element_is_passed_over() {
 
 #[test]
 fn the_tree_built_from_the_events_holds_the_inclusion() {
-  // The transform is a stage, so what is downstream decides what becomes of the events: here a tree rather than text.
+  // The transformer is a stage, so what is downstream decides what becomes of the events: here a tree rather than text.
   let map = Map::with(&[("file:///doc/part.xml", "<p>text</p>")]);
   let mut builder = DomBuilder::new();
   {
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_handler(&mut builder);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).add_consumer(&mut builder);
     StreamSource::with_system_id(doc("<xi:include href='part.xml'/>").as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect("included");
   }
@@ -469,10 +469,10 @@ fn a_fallback_is_used_when_no_resolver_can_be_asked() {
   // read without one.
   let mut writer = XmlWriter::new(Vec::new());
   {
-    let mut include = XIncludeTransform::new().with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().add_consumer(&mut writer);
     let xml = doc("<xi:include href='part.xml'><xi:fallback><p>instead</p></xi:fallback></xi:include>");
     StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect("the fallback stood in");
   }
@@ -484,7 +484,7 @@ fn a_fallback_is_used_when_no_resolver_can_be_asked() {
 fn faults(xml: &str) -> Vec<String> {
   use crate::event::validate::Schema as _;
   let mut validation = XIncludeSchema.validator();
-  StreamSource::new(xml.as_bytes()).with_handler(validation.as_event_handler()).emit().expect("well-formed");
+  StreamSource::new(xml.as_bytes()).add_consumer(validation.as_consumer()).emit().expect("well-formed");
   validation.errors().iter().map(|error| error.message().to_owned()).collect()
 }
 
@@ -528,7 +528,7 @@ fn an_xinclude_element_the_namespace_does_not_define_is_refused_inside_a_fallbac
   let error = written(&doc(content), &map).expect_err(content);
   assert!(matches!(error, Error::Validity { .. }), "{error}");
   // Outside a fallback it is an element like any other, which XInclude 1.0 does not constrain; that this build
-  // refuses it anyway is what `XIncludeSchema` documents, and the transform judges its input with that schema.
+  // refuses it anyway is what `XIncludeSchema` documents, and the transformer judges its input with that schema.
   let error = written(&doc("<xi:something/>"), &map).expect_err("stricter than the specification");
   assert!(matches!(error, Error::Validity { .. }), "{error}");
 }
@@ -598,9 +598,9 @@ fn an_inclusion_may_not_put_more_than_one_element_where_the_document_element_goe
   let map = Map::with(&[("file:///doc/part.txt", "text"), ("file:///doc/part.xml", "<p/>")]);
   let refused = |xml: &str| {
     let mut writer = XmlWriter::new(Vec::new());
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).add_consumer(&mut writer);
     StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect_err("more than the document element allows")
       .message()
@@ -691,7 +691,7 @@ fn the_validator_passes_over_an_attribute_xinclude_does_not_define() {
 #[test]
 fn the_validator_accepts_an_xpointer_without_an_href() {
   // §3.1 allows it, and the vocabulary is what is being judged here; that this build cannot follow an xpointer is the
-  // transform's business, not the document's.
+  // transformer's business, not the document's.
   assert!(faults(&doc("<xi:include xpointer='x'/>")).is_empty());
 }
 
@@ -742,7 +742,7 @@ fn the_validator_reports_an_include_inside_an_include_outside_its_fallback() {
 #[test]
 fn the_validator_leaves_alone_what_the_specification_does_not_constrain() {
   // §3.1: text, comments, processing instructions, elements outside the XInclude namespace and the descendants of any
-  // child are not constrained and are ignored. The transform passes them over; the document is not at fault for them.
+  // child are not constrained and are ignored. The transformer passes them over; the document is not at fault for them.
   assert!(faults(&doc("<xi:include href='a'><p>text</p><!--c--><?pi?>text</xi:include>")).is_empty());
   // Even an `xi:include`, so long as it is not a child: what holds it is not part of the vocabulary.
   assert!(faults(&doc("<xi:include href='a'><p><xi:include href='b'/></p></xi:include>")).is_empty());
@@ -823,9 +823,9 @@ fn the_fixups_can_be_turned_off() {
   let map = Map::with(&[("file:///doc/parts/part.xml", "<p/>")]);
   let mut writer = XmlWriter::new(Vec::new());
   {
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_xml_base(false).with_handler(&mut writer);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).with_xml_base(false).add_consumer(&mut writer);
     StreamSource::with_system_id(doc("<xi:include href='parts/part.xml'/>").as_bytes(), "file:///doc/main.xml")
-      .with_handler(&mut include)
+      .add_consumer(&mut include)
       .emit()
       .expect("included");
   }
@@ -848,13 +848,13 @@ fn a_fixup_is_written_at_each_depth_of_inclusion() {
 }
 
 #[test]
-fn the_handler_behind_is_told_that_a_run_failed_inside_an_inclusion() {
-  // Only the transform hears how the run ended, so a failure in the middle of an inclusion reaches the handler behind
-  // it as a failure rather than as a run given up.
+fn the_consumer_behind_is_told_that_a_run_failed_inside_an_inclusion() {
+  // Only the transformer hears how the run ended, so a failure in the middle of an inclusion reaches the consumer
+  // behind it as a failure rather than as a run given up.
   #[derive(Default)]
   struct Ended(Option<&'static str>);
-  impl EventHandler for Ended {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Ended {
+    fn consume(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
       Ok(Flow::Continue(0))
     }
     fn finish(&mut self, outcome: Outcome<'_>) {
@@ -870,9 +870,9 @@ fn the_handler_behind_is_told_that_a_run_failed_inside_an_inclusion() {
   let map = Map::with(&[("file:///doc/broken.xml", "<a></b>")]);
   let mut ended = Ended::default();
   {
-    let mut include = XIncludeTransform::new().with_resolver(&map).with_handler(&mut ended);
+    let mut include = XIncludeTransformer::new().with_resolver(&map).add_consumer(&mut ended);
     let xml = doc("<xi:include href='broken.xml'/>");
-    let result = StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_handler(&mut include).emit();
+    let result = StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").add_consumer(&mut include).emit();
     assert!(result.is_err(), "not well-formed");
   }
   assert_eq!(ended.0, Some("failed"));

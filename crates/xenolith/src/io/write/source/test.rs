@@ -8,7 +8,7 @@ use crate::io::write::XmlWriter;
 fn written(write: impl FnOnce(&mut WriterSource<'_>) -> Result<()>) -> String {
   let mut writer = XmlWriter::new(Vec::new());
   {
-    let mut doc = WriterSource::new().with_handler(&mut writer);
+    let mut doc = WriterSource::new().add_consumer(&mut writer);
     write(&mut doc).expect("the document is written");
   }
   String::from_utf8(writer.into_inner()).expect("UTF-8")
@@ -57,7 +57,7 @@ fn writes_the_other_kinds_of_node() {
 fn the_same_calls_build_a_tree() {
   let mut builder = DomBuilder::new();
   {
-    let mut doc = WriterSource::new().with_handler(&mut builder);
+    let mut doc = WriterSource::new().add_consumer(&mut builder);
     doc.write_start_element_ns(Some("urn:e"), "e:note").unwrap();
     doc.write_attribute("xmlns:e", "urn:e").unwrap();
     doc.write_start_element("child").unwrap();
@@ -80,11 +80,11 @@ fn a_validator_in_front_refuses_what_it_forbids() {
   let dtd = "<!ELEMENT a EMPTY>";
   let (dtd, pool) = crate::dtd::DtdReader::new(dtd.as_bytes()).read().expect("the DTD is read");
   let schema = crate::dtd::DtdSchema::new(dtd, pool);
-  let mut validation = ValidatorSet::new().with_schema(&schema).with_max_errors(Some(0));
+  let mut validation = ValidatorSet::new().add_schema(&schema).with_max_errors(Some(0));
   let mut writer = XmlWriter::new(Vec::new());
   let error = {
-    let mut lane = crate::event::Dispatch::new().with_handler(&mut validation).with_handler(&mut writer);
-    let mut doc = WriterSource::new().with_handler(&mut lane);
+    let mut lane = crate::event::Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut writer);
+    let mut doc = WriterSource::new().add_consumer(&mut lane);
     doc.write_start_element("a").expect("the root is allowed");
     doc.write_start_element("b").expect("held until its attributes are in");
     let refused = doc.write_characters("x").expect_err("the element is not declared");
@@ -100,15 +100,15 @@ fn a_validator_in_front_refuses_what_it_forbids() {
 }
 
 #[test]
-fn a_handler_that_finishes_early_ends_the_run() {
+fn a_consumer_that_finishes_early_ends_the_run() {
   /// Takes the first element and finishes.
   #[derive(Default)]
   struct First {
     names: Vec<String>,
     outcome: Option<&'static str>,
   }
-  impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for First {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
       }
@@ -127,7 +127,7 @@ fn a_handler_that_finishes_early_ends_the_run() {
 
   let mut first = First::default();
   {
-    let mut doc = WriterSource::new().with_handler(&mut first);
+    let mut doc = WriterSource::new().add_consumer(&mut first);
     doc.write_start_element("a").unwrap();
     doc.write_start_element("b").unwrap();
     doc.write_end_element().unwrap();
@@ -139,7 +139,7 @@ fn a_handler_that_finishes_early_ends_the_run() {
 }
 
 #[test]
-fn a_handler_that_finishes_at_the_end_of_the_document_completed_the_run() {
+fn a_consumer_that_finishes_at_the_end_of_the_document_completed_the_run() {
   /// Finishes once it has seen the whole document, `EndDocument` included.
   #[derive(Default)]
   struct Whole {
@@ -147,8 +147,8 @@ fn a_handler_that_finishes_at_the_end_of_the_document_completed_the_run() {
     outcome: Option<&'static str>,
   }
 
-  impl EventHandler for Whole {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Whole {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.ended |= matches!(event, EventRef::EndDocument);
       Ok(if !self.ended { Flow::Continue(0) } else { Flow::Break(0) })
     }
@@ -165,7 +165,7 @@ fn a_handler_that_finishes_at_the_end_of_the_document_completed_the_run() {
 
   let mut whole = Whole::default();
   {
-    let mut doc = WriterSource::new().with_handler(&mut whole);
+    let mut doc = WriterSource::new().add_consumer(&mut whole);
     doc.write_start_element("a").unwrap();
     doc.write_end_element().unwrap();
     doc.end_document().unwrap();
@@ -179,8 +179,8 @@ fn a_handler_that_finishes_at_the_end_of_the_document_completed_the_run() {
 fn dropping_without_ending_the_document_abandons_the_run() {
   #[derive(Default)]
   struct Outcomes(Vec<&'static str>);
-  impl EventHandler for Outcomes {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Outcomes {
+    fn consume(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
       Ok(Flow::Continue(0))
     }
 
@@ -196,7 +196,7 @@ fn dropping_without_ending_the_document_abandons_the_run() {
 
   let mut outcomes = Outcomes::default();
   {
-    let mut doc = WriterSource::new().with_handler(&mut outcomes);
+    let mut doc = WriterSource::new().add_consumer(&mut outcomes);
     doc.write_start_element("a").unwrap();
     doc.write_end_element().unwrap();
   }
@@ -207,8 +207,8 @@ fn dropping_without_ending_the_document_abandons_the_run() {
 fn the_document_is_started_and_ended_once() {
   #[derive(Default)]
   struct Kinds(Vec<&'static str>);
-  impl EventHandler for Kinds {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  impl EventConsumer for Kinds {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.0.push(match event {
         EventRef::StartDocument => "start-document",
         EventRef::EndDocument => "end-document",
@@ -222,7 +222,7 @@ fn the_document_is_started_and_ended_once() {
 
   let mut kinds = Kinds::default();
   {
-    let mut doc = WriterSource::new().with_handler(&mut kinds);
+    let mut doc = WriterSource::new().add_consumer(&mut kinds);
     doc.start_document().unwrap();
     // The document has begun, so a second call reports nothing; it is not a mistake, since the first write begins the
     // run anyway.
@@ -245,7 +245,7 @@ fn the_dtd_given_reaches_the_doctype_event() {
     crate::dtd::DtdReader::new("<!ATTLIST a k ID #IMPLIED>".as_bytes()).read().expect("the DTD is read");
   let mut builder = DomBuilder::new();
   {
-    let mut doc = WriterSource::new().with_handler(&mut builder);
+    let mut doc = WriterSource::new().add_consumer(&mut builder);
     doc.write_doctype("a", None, None, &dtd, &pool).unwrap();
     doc.write_start_element("a").unwrap();
     doc.write_attribute("k", "x").unwrap();

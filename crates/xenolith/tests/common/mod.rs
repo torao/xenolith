@@ -6,25 +6,25 @@ use std::io::Read;
 
 use xenolith::error::Result;
 use xenolith::event::validate::{Report, ValidatorSet};
-use xenolith::event::{EventCursor, EventHandler, EventSource, Outcome};
+use xenolith::event::{EventConsumer, EventCursor, EventProducer, Outcome};
 use xenolith::io::StreamSource;
 
 /// Validates a document read from `source` against its own declared DTD.
 pub(crate) fn validate<R: Read>(source: R) -> Result<Report> {
   let mut validation = ValidatorSet::new().validating_dtd(true);
-  StreamSource::new(source).with_handler(&mut validation).emit()?;
+  StreamSource::new(source).add_consumer(&mut validation).emit()?;
   Ok(validation.report())
 }
 
 /// Validates a document from a prepared [`StreamSource`], so a resolver can be attached first.
 ///
 /// The source was built by the caller, so the validation, made here, cannot be installed on it. The events are pulled
-/// and handed over instead, and the validation is told the run completed, which a source only tells its own handlers.
+/// and handed over instead, and the validation is told the run completed, which a source only tells its own consumers.
 ///
 pub(crate) fn validate_reader<R: Read>(mut reader: StreamSource<'_, R>) -> Result<Report> {
   let mut validation = ValidatorSet::new().validating_dtd(true);
   while let Some(event) = reader.next()? {
-    let _ = validation.handle(&event)?;
+    let _ = validation.consume(&event)?;
   }
   validation.finish(Outcome::Completed);
   Ok(validation.report())
@@ -37,6 +37,6 @@ pub(crate) fn validate_reader<R: Read>(mut reader: StreamSource<'_, R>) -> Resul
 ///
 pub(crate) fn validate_checking_xml_id<R: Read>(source: R) -> Result<Report> {
   let mut validation = ValidatorSet::new().validating_dtd(true).checking_xml_id(true);
-  StreamSource::new(source).with_handler(&mut validation).emit()?;
+  StreamSource::new(source).add_consumer(&mut validation).emit()?;
   Ok(validation.report())
 }

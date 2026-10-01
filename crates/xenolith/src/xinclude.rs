@@ -1,9 +1,9 @@
 //! XInclude 1.0 transformation process.
 //!
-//! [`XIncludeTransform`] is a type of [transform](crate::event#transform) that performs XInclude 1.0 processing while
-//! relaying events through a pipeline. By placing it between an event source and a consumer, it replaces `xi:include`
-//! elements found in the document with the content of the referenced resources and passes the result downstream in the
-//! pipeline.
+//! [`XIncludeTransformer`] is a type of [transformer](crate::event#transformer) that performs XInclude 1.0 processing
+//! while relaying events through a pipeline. By placing it between an event producer and a consumer, it replaces
+//! `xi:include` elements found in the document with the content of the referenced resources and passes the result
+//! downstream in the pipeline.
 //!
 //! Resource retrieval is an I/O operation performed using a [`UriResolver`]. As with external entity references,
 //! access destinations should be restricted when dealing with untrusted documents. The URI specified in the `href`
@@ -21,11 +21,11 @@
 //! If elements included as XML possess effective base URI or language values, those values remain valid after
 //! inclusion. If these values differ from the effective values at the `xi:include` location, `xml:base` or `xml:lang`
 //! attributes are explicitly added or replaced (§4.5.5, §4.5.6). This behavior can be disabled using
-//! [`with_xml_base`](XIncludeTransform::with_xml_base) and [`with_xml_lang`](XIncludeTransform::with_xml_lang).
+//! [`with_xml_base`](XIncludeTransformer::with_xml_base) and [`with_xml_lang`](XIncludeTransformer::with_xml_lang).
 //!
-//! [`XIncludeTransform`] performs its own validation against upstream events using [`XIncludeSchema`]. If the document
-//! structure does not comply with the XInclude 1.0 specification, processing halts at the first violation with an
-//! [`Error::Validity`] error.
+//! [`XIncludeTransformer`] performs its own validation against upstream events using [`XIncludeSchema`]. If the
+//! document structure does not comply with the XInclude 1.0 specification, processing halts at the first violation
+//! with an [`Error::Validity`] error.
 //!
 //! # Unimplemented Features
 //!
@@ -58,11 +58,11 @@ mod test;
 mod validate;
 
 use crate::error::{Error, Result};
-use crate::event::strict::StrictXmlValidator;
+use crate::event::strict::StrictXmlConstraints;
 use crate::event::validate::ValidatorSet;
 use crate::event::{
-  CharactersEventRef, Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow, Outcome, StartElementEvent,
-  StartElementEventRef,
+  CharactersEventRef, Dispatcher, EventConsumer, EventCursor, EventProducer, EventRef, Flow, Outcome,
+  StartElementEvent, StartElementEventRef,
 };
 use crate::io::resolve::{NoResolver, UriResolver};
 use crate::io::{CharStream, Entity, EntityRequest, ParserConfig, RequestKind, StreamSource};
@@ -146,19 +146,19 @@ struct IncludeScope {
 
 /// An XInclude 1.0 transformation that can be installed on the event pipeline.
 ///
-/// This transformer replaces the `xi:include` elements in the event sequence received by the [`EventHandler`] with the
-/// resources referenced by those elements, and sends the transformed result to the subsequent [`EventHandler`]. The
+/// This transformer replaces the `xi:include` elements in the event sequence received by the [`EventConsumer`] with the
+/// resources referenced by those elements, and sends the transformed result to the subsequent [`EventConsumer`]. The
 /// received events are validated against the [`XIncludeSchema`], and processing is terminated upon the first violation.
 ///
 /// # Example
 ///
 /// ```
 /// use std::io::Read;
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 /// use xenolith::io::resolve::{EntityRequest, UriResolver};
 /// use xenolith::io::write::XmlWriter;
-/// use xenolith::xinclude::XIncludeTransform;
+/// use xenolith::xinclude::XIncludeTransformer;
 ///
 /// // A resolver backed by a map. Used in place of a file system or catalog.
 /// struct Map;
@@ -176,8 +176,8 @@ struct IncludeScope {
 /// let mut map = Map;
 /// let mut writer = XmlWriter::new(Vec::new());
 /// {
-///   let mut include = XIncludeTransform::new().with_resolver(&mut map).with_handler(&mut writer);
-///   StreamSource::with_system_id(xml.as_bytes(), "file:///doc.xml").with_handler(&mut include).emit()?;
+///   let mut include = XIncludeTransformer::new().with_resolver(&mut map).add_consumer(&mut writer);
+///   StreamSource::with_system_id(xml.as_bytes(), "file:///doc.xml").add_consumer(&mut include).emit()?;
 /// }
 /// // Embedded elements have an `xml:base` attribute that specifies the resource (part.xml) into which they are
 /// // embedded. This can be disabled using `with_xml_base`.
@@ -185,27 +185,27 @@ struct IncludeScope {
 /// assert_eq!(out, "<doc><p xml:base=\"file:///part.xml\">included</p></doc>");
 /// # Ok::<(), xenolith::Error>(())
 /// ```
-pub struct XIncludeTransform<'h, 'r> {
+pub struct XIncludeTransformer<'h, 'r> {
   /// 1st stage. Detects XInclude violations during validation of events coming from upstream.
   constraints: ValidatorSet,
-  /// 2nd stage. The main body of the `xi:include` processing. The output is sent to the subsequent handler via the
+  /// 2nd stage. The main body of the `xi:include` processing. The output is sent to the subsequent consumer via the
   /// [`RootElementConstraints`] in 3rd stage.
   process: XIncludeProcess<'h, 'r>,
 }
 
-impl Default for XIncludeTransform<'_, '_> {
+impl Default for XIncludeTransformer<'_, '_> {
   fn default() -> Self {
     Self::new()
   }
 }
 
-impl<'h, 'r> XIncludeTransform<'h, 'r> {
+impl<'h, 'r> XIncludeTransformer<'h, 'r> {
   /// Create a transformation that does not have a resolver (therefore, if it has `xi:fallback`, it will fall back;
   /// otherwise, it will be rejected).
   #[must_use]
   pub fn new() -> Self {
     Self {
-      constraints: ValidatorSet::new().with_schema(&XIncludeSchema).with_max_errors(Some(0)),
+      constraints: ValidatorSet::new().add_schema(&XIncludeSchema).with_max_errors(Some(0)),
       process: XIncludeProcess::new(),
     }
   }
@@ -231,7 +231,7 @@ impl<'h, 'r> XIncludeTransform<'h, 'r> {
     self
   }
 
-  /// Specifies whether to validate the imported document using [`StrictXmlValidator`]. By default, validation is
+  /// Specifies whether to validate the imported document using [`StrictXmlConstraints`]. By default, validation is
   /// enabled. If you are certain that the document being read is well-formed XML, you can specify `false` to skip
   /// some validation steps.
   #[must_use]
@@ -264,13 +264,13 @@ impl<'h, 'r> XIncludeTransform<'h, 'r> {
   }
 }
 
-/// The main body of the `xi:include` processing. In the 2nd stage of [`XIncludeTransform`], it receives events that
+/// The main body of the `xi:include` processing. In the 2nd stage of [`XIncludeTransformer`], it receives events that
 /// have passed validation against the XInclude specification. Events for each document included from `xi:include`
 /// elements detected within the document are passed directly to this instance from nested lanes.
 struct XIncludeProcess<'h, 'r> {
-  /// Subsequent handlers. They receive both events originating from the document itself and events originating from
+  /// Subsequent consumers. They receive both events originating from the document itself and events originating from
   /// the document being incorporated.
-  dispatch: Dispatch<'h>,
+  dispatch: Dispatcher<'h>,
   /// Constraints that are validated before an event is sent downstream: If the root element of the top-level document
   /// is `xi:include`, the result after substitution may contain only comments, processing instructions, whitespace, or
   /// a single element (§4.5). If the included text contains anything other than whitespace, if the content of
@@ -283,7 +283,7 @@ struct XIncludeProcess<'h, 'r> {
   limits: Limits,
   /// Parser settings used when loading a document with `xi:include`.
   config: ParserConfig,
-  /// Whether to apply [`StrictXmlValidator`] to the document being included.
+  /// Whether to apply [`StrictXmlConstraints`] to the document being included.
   strict: bool,
   /// Whether to assign `xml:base` to the top-level element of the retrieved document (§4.5.5).
   xml_base: bool,
@@ -293,9 +293,9 @@ struct XIncludeProcess<'h, 'r> {
   inclusion_occurrence: usize,
   /// Open capture scopes. The last one is the innermost.
   inclusions: Vec<IncludeScope>,
-  /// The count of validation errors reported by downstream handlers that have not yet been returned upstream. Events
+  /// The count of validation errors reported by downstream consumers that have not yet been returned upstream. Events
   /// from included documents reach downstream components via nested lanes, but those lanes cannot return this count;
-  /// therefore, the count accumulates here and is returned by [`XIncludeTransform`] for the upstream event currently
+  /// therefore, the count accumulates here and is returned by [`XIncludeTransformer`] for the upstream event currently
   /// being processed.
   validity_error_count: usize,
 }
@@ -303,7 +303,7 @@ struct XIncludeProcess<'h, 'r> {
 impl<'h, 'r> XIncludeProcess<'h, 'r> {
   fn new() -> Self {
     Self {
-      dispatch: Dispatch::new(),
+      dispatch: Dispatcher::new(),
       outcome_constraints: RootElementConstraints::default(),
       resolver: NoResolver::shared(),
       limits: Limits::default(),
@@ -458,18 +458,18 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     let config = self.config;
     // *pay attention* to variable scope and evaluation order in this block
     let resolver = self.resolver;
-    let mut strict = self.strict.then_some(StrictXmlValidator::lexical_only());
-    let mut validators = ValidatorSet::default().with_schema(&XIncludeSchema).with_max_errors(Some(0));
-    let mut lane = Dispatch::new();
+    let mut strict = self.strict.then_some(StrictXmlConstraints::lexical_only());
+    let mut validators = ValidatorSet::default().add_schema(&XIncludeSchema).with_max_errors(Some(0));
+    let mut lane = Dispatcher::new();
     if let Some(strict) = strict.as_mut() {
-      lane = lane.with_validator(strict);
+      lane = lane.add_validator(strict);
     }
-    lane = lane.with_validator(&mut validators);
-    lane = lane.with_handler(self);
+    lane = lane.add_validator(&mut validators);
+    lane = lane.add_consumer(self);
 
     let mut source = StreamSource::with_document(reader, Entity::document(stream)).with_config(config);
     source = source.with_resolver(resolver);
-    source.with_handler(&mut lane).emit()
+    source.add_consumer(&mut lane).emit()
   }
 
   /// Reads the resource as text and sends it to subsequent elements as a text event at the current position.
@@ -539,13 +539,13 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     Ok(read)
   }
 
-  /// Send a single event to a downstream handler. The number of validity errors that the downstream reports is added
+  /// Send a single event to a downstream consumer. The number of validity errors that the downstream reports is added
   /// to `validity_error_count`.
   fn passthrough(&mut self, event: &EventRef<'_>) -> Result<()> {
     let (Flow::Continue(constraints_count) | Flow::Break(constraints_count)) =
-      self.outcome_constraints.handle(event)?;
-    let (Flow::Continue(downstream_count) | Flow::Break(downstream_count)) = self.dispatch.handle(event)?;
-    // the downstream count may come from an application's handler, so it saturates rather than overflows
+      self.outcome_constraints.consume(event)?;
+    let (Flow::Continue(downstream_count) | Flow::Break(downstream_count)) = self.dispatch.consume(event)?;
+    // the downstream count may come from an application's consumer, so it saturates rather than overflows
     self.validity_error_count =
       self.validity_error_count.saturating_add(constraints_count).saturating_add(downstream_count);
     Ok(())
@@ -642,9 +642,9 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
   }
 }
 
-impl std::fmt::Debug for XIncludeTransform<'_, '_> {
+impl std::fmt::Debug for XIncludeTransformer<'_, '_> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("XIncludeTransform")
+    f.debug_struct("XIncludeTransformer")
       .field("resolver", &"…")
       .field("limits", &self.process.limits)
       .field("open", &self.process.inclusions.len())
@@ -653,21 +653,21 @@ impl std::fmt::Debug for XIncludeTransform<'_, '_> {
   }
 }
 
-impl<'h> EventSource<'h> for XIncludeTransform<'h, '_> {
-  fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-    self.process.dispatch.add(handler);
+impl<'h> EventProducer<'h> for XIncludeTransformer<'h, '_> {
+  fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+    self.process.dispatch = self.process.dispatch.add_consumer(handler);
     self
   }
 }
 
-impl EventHandler for XIncludeTransform<'_, '_> {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for XIncludeTransformer<'_, '_> {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // only events from upstream are received here; therefore, StartDocument always signifies the beginning of a new
     // document
     if matches!(event, EventRef::StartDocument) {
       self.process.reset();
     }
-    let (Flow::Continue(constraints_count) | Flow::Break(constraints_count)) = self.constraints.handle(event)?;
+    let (Flow::Continue(constraints_count) | Flow::Break(constraints_count)) = self.constraints.consume(event)?;
     self.process.receive(event)?;
     // the count also covers the events of the documents included while processing this event
     let event_validity_error_count =
@@ -681,7 +681,7 @@ impl EventHandler for XIncludeTransform<'_, '_> {
 
   fn finish(&mut self, outcome: Outcome<'_>) {
     // this is the only place where the end of execution is signaled; if an error occurs during import, it is also
-    // passed on to the subsequent handler
+    // passed on to the subsequent consumer
     self.constraints.finish(outcome);
     self.process.dispatch.finish(outcome);
   }
@@ -780,17 +780,17 @@ impl XIncludeProcess<'_, '_> {
   }
 }
 
-impl EventHandler for XIncludeProcess<'_, '_> {
+impl EventConsumer for XIncludeProcess<'_, '_> {
   /// This call occurs for events of an included document through a nested lane. The validity errors reported
   /// downstream stay in `validity_error_count`, so this returns zero for them.
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     self.receive(event)?;
     Ok(if self.dispatch.is_stopped() { Flow::Break(0) } else { Flow::Continue(0) })
   }
 
   /// This call occurs when the document included via `xi:include` has finished loading; it does not mark the end of
-  /// the entire execution. The end of the entire execution is signaled by `XIncludeTransform` to the subsequent
-  /// handler.
+  /// the entire execution. The end of the entire execution is signaled by `XIncludeTransformer` to the subsequent
+  /// consumer.
   fn finish(&mut self, _outcome: Outcome<'_>) {}
 }
 

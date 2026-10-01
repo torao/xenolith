@@ -5,9 +5,9 @@
 //! requires input and fetches external entities via the [`UriResolver`] when needed, allowing the caller to focus
 //! solely on handling events.
 //!
-//! This can be viewed as an [`EventSource`] powered by the parser. After registering a handler to process the
+//! This can be viewed as an [`EventProducer`] powered by the parser. After registering a consumer to process the
 //! document's event sequence, you can either advance processing to the end using [`emit`](EventCursor::emit) or
-//! retrieve (pull) events one by one using [`next`](EventCursor::next). In either case, the registered handler
+//! retrieve (pull) events one by one using [`next`](EventCursor::next). In either case, the registered consumer
 //! receives the events. [`advance`](StreamSource::advance) is the underlying low-level method that drives the parser
 //! and makes the current event available for reading.
 
@@ -29,8 +29,8 @@ use std::io::Read;
 
 use crate::attr::Attributes;
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventCursor,
-  EventHandler, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
+  CdataEventRef, CharactersEventRef, CommentEventRef, Dispatcher, DoctypeEventRef, EndElementEventRef, EventConsumer,
+  EventCursor, EventProducer, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::io::resolve::{NoResolver, RequestKind, UriResolver};
 use crate::io::stream::CharStream;
@@ -42,7 +42,7 @@ use crate::io::parse::{Parser, Progress, TokenKind, TokenRef};
 /// The size of the read buffer — that is, the number of bytes read from the source at one time.
 const READ_BUFFER_SIZE: usize = 8 * 1024;
 
-/// Reads a document from anything that implements [`Read`], as an [`EventSource`].
+/// Reads a document from anything that implements [`Read`], as an [`EventProducer`].
 ///
 /// # Examples
 ///
@@ -70,11 +70,11 @@ pub struct StreamSource<'h, R> {
   buffer: Vec<u8>,
   /// Whether `source` has reached its end; once set, the document is fed nothing more.
   finished: bool,
-  /// The resolver used when it is necessary to fetch external resources. Like a handler, this is borrowed rather than
+  /// The resolver used when it is necessary to fetch external resources. Like a consumer, this is borrowed rather than
   /// owned. It is [`NoResolver`] until the application lends one, so there is always one to ask.
   resolver: &'h dyn UriResolver,
-  /// The handlers this source was built with, which every event reaches.
-  dispatch: Dispatch<'h>,
+  /// The consumers this source was built with, which every event reaches.
+  dispatch: Dispatcher<'h>,
   /// Where the cursor has reached, so `next` knows whether the document has begun or ended.
   step: Step,
   /// The base URI of the current event, held here rather than computed into a local so that the event handed out can
@@ -91,11 +91,11 @@ enum Step {
   /// The document is being read.
   Reading,
   /// The document was read to its end and [`EndDocument`](crate::event::EventRef::EndDocument) reported; the next
-  /// call tells the handlers the run completed.
+  /// call tells the consumers the run completed.
   Ended,
-  /// Every handler has finished early; the next call tells the handlers the run stopped.
+  /// Every consumer has finished early; the next call tells the consumers the run stopped.
   Stopped,
-  /// The run is over, and the handlers have been told how it ended.
+  /// The run is over, and the consumers have been told how it ended.
   Done,
 }
 
@@ -159,7 +159,7 @@ impl<'h, R: Read> StreamSource<'h, R> {
       buffer: vec![0; READ_BUFFER_SIZE],
       finished: false,
       resolver: NoResolver::shared(),
-      dispatch: Dispatch::new(),
+      dispatch: Dispatcher::new(),
       step: Step::Before,
       base: None,
     }
@@ -179,7 +179,7 @@ impl<'h, R: Read> StreamSource<'h, R> {
   ///
   /// ```
   /// use std::io::Read;
-  /// use xenolith::event::{EventCursor, EventSource};
+  /// use xenolith::event::{EventCursor, EventProducer};
   /// use xenolith::io::StreamSource;
   /// use xenolith::io::resolve::{EntityRequest, UriResolver};
   ///
@@ -289,7 +289,7 @@ impl<'h, R: Read> StreamSource<'h, R> {
         self.entities.push(EntitySource { reader, finished: false });
         Ok(())
       }
-      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransformer`, which fetches the
       // resource itself and never hands the request to a parser.
       RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
       // The DTD-side kinds are added to the DTD text, so they are read whole.
@@ -378,7 +378,7 @@ impl<'h, R: Read> StreamSource<'h, R> {
   /// Drives the parser until it has an event this vocabulary models, answering its requests for input and entities.
   ///
   /// Returns `false` at the end of the document. The XML declaration is stepped over: it says how the bytes were
-  /// encoded rather than what the document holds, and no handler models it.
+  /// encoded rather than what the document holds, and no consumer models it.
   fn advance_to_event(&mut self) -> Result<bool> {
     loop {
       match self.parser.advance()? {
@@ -437,9 +437,9 @@ fn current_event<'a>(parser: &'a Parser, base: Option<&'a str>) -> Option<crate:
   })
 }
 
-impl<'h, R: Read> EventSource<'h> for StreamSource<'h, R> {
-  fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
-    self.dispatch = self.dispatch.with_handler(handler);
+impl<'h, R: Read> EventProducer<'h> for StreamSource<'h, R> {
+  fn add_consumer(mut self, handler: &'h mut dyn EventConsumer) -> Self {
+    self.dispatch = self.dispatch.add_consumer(handler);
     self
   }
 }
@@ -458,7 +458,7 @@ impl<'h, R: Read> EventCursor<'h> for StreamSource<'h, R> {
       Step::Before => {
         self.step = Step::Reading;
         let event = EventRef::StartDocument;
-        match self.dispatch.handle(&event) {
+        match self.dispatch.consume(&event) {
           Ok(Flow::Continue(_)) => {}
           Ok(Flow::Break(_)) => self.step = Step::Stopped,
           Err(error) => {
@@ -481,7 +481,7 @@ impl<'h, R: Read> EventCursor<'h> for StreamSource<'h, R> {
       // The document was read in full, so its end is the last event.
       self.step = Step::Ended;
       let event = EventRef::EndDocument;
-      if let Err(error) = self.dispatch.handle(&event) {
+      if let Err(error) = self.dispatch.consume(&event) {
         self.step = Step::Done;
         return Err(self.dispatch.fail(error));
       }
@@ -493,9 +493,9 @@ impl<'h, R: Read> EventCursor<'h> for StreamSource<'h, R> {
       self.base = base;
     }
     let event = current_event(&self.parser, self.base.as_deref()).expect("the parser reported an event it models");
-    match self.dispatch.handle(&event) {
+    match self.dispatch.consume(&event) {
       Ok(Flow::Continue(_)) => {}
-      // The handlers have all they wanted; the document was not read in full, so no EndDocument follows.
+      // The consumers have all they wanted; the document was not read in full, so no EndDocument follows.
       Ok(Flow::Break(_)) => self.step = Step::Stopped,
       Err(error) => {
         self.step = Step::Done;

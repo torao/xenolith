@@ -25,8 +25,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use xenolith::event::strict::StrictXmlValidator;
-use xenolith::event::{EventCursor, EventSource};
+use xenolith::event::strict::StrictXmlConstraints;
+use xenolith::event::{EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 use xenolith::io::resolve::{EntityRequest, UriResolver};
 
@@ -116,11 +116,11 @@ fn parse(path: &Path) -> Result<(), String> {
   let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
   let system_id = format!("file:///{}", path.display().to_string().replace('\\', "/"));
   // The parser leaves the lexical constraints to the strict validator, so a not-wf judgement needs both.
-  let mut strict = StrictXmlValidator::new();
+  let mut strict = StrictXmlConstraints::new();
   let resolver = FileResolver { root };
   StreamSource::with_system_id(std::io::BufReader::new(file), &system_id)
     .with_resolver(&resolver)
-    .with_handler(&mut strict)
+    .add_consumer(&mut strict)
     .emit()
     .map_err(|e| e.to_string())
 }

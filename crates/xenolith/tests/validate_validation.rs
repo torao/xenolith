@@ -1,16 +1,16 @@
-//! Validation beside application handlers: several validators combined into one, over one source, in one pass.
+//! Validation beside application consumers: several validators combined into one, over one source, in one pass.
 
 use xenolith::dom::DomSource;
 use xenolith::dom::build::DomBuilder;
 use xenolith::error::{Location, Result};
 use xenolith::event::validate::{Ended, Validator, ValidatorSet, ValidityError};
-use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
+use xenolith::event::{Dispatcher, EventConsumer, EventCursor, EventProducer, EventRef, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the parser and the builder.
 fn parse_document(xml: &[u8]) -> xenolith::Result<xenolith::dom::Document> {
   let mut builder = DomBuilder::new();
-  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  StreamSource::new(xml).add_consumer(&mut builder).emit()?;
   Ok(builder.into_document())
 }
 
@@ -21,8 +21,8 @@ struct AllowedElements {
   errors: Vec<ValidityError>,
 }
 
-impl EventHandler for AllowedElements {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for AllowedElements {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       let local = event.local;
       if !self.allowed.iter().any(|a| a == local) {
@@ -40,7 +40,7 @@ impl Validator for AllowedElements {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
@@ -56,8 +56,8 @@ struct ReportsAtTheEnd {
   errors: Vec<ValidityError>,
 }
 
-impl EventHandler for ReportsAtTheEnd {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for ReportsAtTheEnd {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(event) => self.seen.push((event.local.to_owned(), event.location.clone())),
       EventRef::EndDocument => {
@@ -78,16 +78,16 @@ impl Validator for ReportsAtTheEnd {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
 
-/// An application handler that records element names.
+/// An application consumer that records element names.
 #[derive(Default)]
 struct Names(Vec<String>);
-impl EventHandler for Names {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for Names {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     let EventRef::StartElement(event) = event else { return Ok(Flow::Continue(0)) };
     self.0.push(event.local.to_owned());
     Ok(Flow::Continue(0))
@@ -95,17 +95,17 @@ impl EventHandler for Names {
 }
 
 #[test]
-fn several_validators_and_handlers_share_one_pass() {
+fn several_validators_and_consumers_share_one_pass() {
   let mut validation = ValidatorSet::new()
-    .with_validator(allowing(&["a", "b"])) // strict: rejects "bad"
-    .with_validator(allowing(&["a", "bad", "b"])); // permissive: accepts all three
+    .add_validator(allowing(&["a", "b"])) // strict: rejects "bad"
+    .add_validator(allowing(&["a", "bad", "b"])); // permissive: accepts all three
   let mut names = Names::default();
   {
-    let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut names);
-    StreamSource::new("<a><bad/><b/></a>".as_bytes()).with_handler(&mut lane).emit().unwrap();
+    let mut lane = Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut names);
+    StreamSource::new("<a><bad/><b/></a>".as_bytes()).add_consumer(&mut lane).emit().unwrap();
   }
 
-  // The application handler saw every element in the single pass.
+  // The application consumer saw every element in the single pass.
   assert_eq!(names.0, ["a", "bad", "b"]);
   // Only the strict validator flagged the offending element, so exactly one error.
   let report = validation.report();
@@ -117,8 +117,8 @@ fn several_validators_and_handlers_share_one_pass() {
 #[test]
 fn the_same_validation_checks_a_built_dom() {
   let doc = parse_document("<a><bad/></a>".as_bytes()).unwrap();
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"]));
-  DomSource::new(&doc).with_handler(&mut validation).emit().unwrap();
+  let mut validation = ValidatorSet::new().add_validator(allowing(&["a"]));
+  DomSource::new(&doc).add_consumer(&mut validation).emit().unwrap();
 
   let report = validation.report();
   assert_eq!(report.errors().len(), 1);
@@ -129,7 +129,7 @@ fn the_same_validation_checks_a_built_dom() {
 fn xml_id_is_checked_when_the_validation_is_asked_to() {
   // Checking xml:id is the validation's own policy: the source is not consulted, the caller says so.
   let mut validation = ValidatorSet::new().checking_xml_id(true);
-  StreamSource::new("<a xml:id='x'><b xml:id='x'/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+  StreamSource::new("<a xml:id='x'><b xml:id='x'/></a>".as_bytes()).add_consumer(&mut validation).emit().unwrap();
   let report = validation.report();
   assert!(
     report.errors().iter().any(|e| e.to_string().contains("more than once")),
@@ -142,8 +142,8 @@ fn xml_id_is_checked_when_the_validation_is_asked_to() {
 fn errors_are_ordered_by_location_whenever_each_validator_found_them() {
   // `ReportsAtTheEnd` reports `a` and `b` last, at `EndDocument`; `AllowedElements` reports `b` as soon as it arrives.
   let mut validation =
-    ValidatorSet::new().with_validator(Box::new(ReportsAtTheEnd::default())).with_validator(allowing(&["a"]));
-  StreamSource::new("<a>\n<b/>\n</a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+    ValidatorSet::new().add_validator(Box::new(ReportsAtTheEnd::default())).add_validator(allowing(&["a"]));
+  StreamSource::new("<a>\n<b/>\n</a>".as_bytes()).add_consumer(&mut validation).emit().unwrap();
 
   let lines: Vec<(u32, String)> =
     validation.report().errors().iter().map(|e| (e.location().line, e.message().to_owned())).collect();
@@ -161,11 +161,11 @@ fn errors_are_ordered_by_location_whenever_each_validator_found_them() {
 
 #[test]
 fn the_run_stops_with_the_error_that_exceeded_the_maximum() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(1));
+  let mut validation = ValidatorSet::new().add_validator(allowing(&["a"])).with_max_errors(Some(1));
   let mut names = Names::default();
   let result = {
-    let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut names);
-    StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).with_handler(&mut lane).emit()
+    let mut lane = Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut names);
+    StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).add_consumer(&mut lane).emit()
   };
 
   let error = result.expect_err("the second error stops the run");
@@ -179,8 +179,8 @@ fn the_run_stops_with_the_error_that_exceeded_the_maximum() {
 
 #[test]
 fn a_maximum_of_zero_stops_at_the_first_error() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(0));
-  let error = StreamSource::new("<a><x/><y/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap_err();
+  let mut validation = ValidatorSet::new().add_validator(allowing(&["a"])).with_max_errors(Some(0));
+  let error = StreamSource::new("<a><x/><y/></a>".as_bytes()).add_consumer(&mut validation).emit().unwrap_err();
   assert!(error.message().contains("\"x\""), "{error}");
   assert_eq!(validation.report().errors().len(), 1);
 }
@@ -191,8 +191,8 @@ struct RecordsThenRefuses {
   errors: Vec<ValidityError>,
 }
 
-impl EventHandler for RecordsThenRefuses {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for RecordsThenRefuses {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       if event.local == "stop" {
         self.errors.push(ValidityError::new("\"stop\" is recorded before the refusal", event.location.clone()));
@@ -208,15 +208,15 @@ impl Validator for RecordsThenRefuses {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
 
 #[test]
 fn errors_recorded_by_a_validator_that_then_refuses_the_event_are_kept() {
-  let mut validation = ValidatorSet::new().with_validator(Box::new(RecordsThenRefuses::default()));
-  let error = StreamSource::new("<a><stop/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap_err();
+  let mut validation = ValidatorSet::new().add_validator(Box::new(RecordsThenRefuses::default()));
+  let error = StreamSource::new("<a><stop/></a>".as_bytes()).add_consumer(&mut validation).emit().unwrap_err();
 
   assert!(error.message().contains("refused"), "the refusal is what the run returns: {error}");
   let report = validation.report();
@@ -227,16 +227,16 @@ fn errors_recorded_by_a_validator_that_then_refuses_the_event_are_kept() {
 
 #[test]
 fn there_is_no_maximum_by_default() {
-  let mut validation = ValidatorSet::new().with_validator(allowing(&["a"]));
-  StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+  let mut validation = ValidatorSet::new().add_validator(allowing(&["a"]));
+  StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).add_consumer(&mut validation).emit().unwrap();
   assert_eq!(validation.report().errors().len(), 3);
 }
 
 #[test]
 fn a_maximum_of_none_lifts_one_set_before() {
   let mut validation =
-    ValidatorSet::new().with_validator(allowing(&["a"])).with_max_errors(Some(0)).with_max_errors(None);
-  StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+    ValidatorSet::new().add_validator(allowing(&["a"])).with_max_errors(Some(0)).with_max_errors(None);
+  StreamSource::new("<a><x/><y/><z/></a>".as_bytes()).add_consumer(&mut validation).emit().unwrap();
   assert_eq!(validation.report().errors().len(), 3);
 }
 
@@ -244,12 +244,12 @@ fn a_maximum_of_none_lifts_one_set_before() {
 fn each_document_is_reported_on_its_own() {
   let mut validation = ValidatorSet::new().validating_dtd(true);
   StreamSource::new("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a><b/></a>".as_bytes())
-    .with_handler(&mut validation)
+    .add_consumer(&mut validation)
     .emit()
     .unwrap();
   assert!(!validation.report().is_valid());
 
-  StreamSource::new("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>".as_bytes()).with_handler(&mut validation).emit().unwrap();
+  StreamSource::new("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>".as_bytes()).add_consumer(&mut validation).emit().unwrap();
   let report = validation.report();
   assert!(report.is_valid(), "the errors of the first document are not carried over: {:?}", report.errors());
 }

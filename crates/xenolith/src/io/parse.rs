@@ -241,8 +241,8 @@ pub use crate::event::XmlSpace;
 /// The attributes of a start element, a borrowing view that yields [`AttributeRef`]. [`TokenRef::StartElement`]
 /// carries one; iterate it with [`iter`](Self::iter) or index it with [`get`](Self::get).
 ///
-/// It implements [`AttributeList`], so a source-independent consumer, a validator or a push handler, reads it through
-/// an [`Attributes`](crate::attr::Attributes) view.
+/// It implements [`AttributeList`], so a producer-independent consumer, a validator or a push consumer, reads it
+/// through an [`Attributes`](crate::attr::Attributes) view.
 #[derive(Clone, Copy, Debug)]
 pub struct Attributes<'a> {
   attributes: &'a [Attribute],
@@ -486,7 +486,7 @@ pub struct Parser {
   /// than at wherever reading has since reached.
   token_at: Location,
   /// Where the current processing instruction's data begins, past the target and the whitespace that separates it, so
-  /// a handler can map a position inside foreign-language data back to the document.
+  /// a consumer can map a position inside foreign-language data back to the document.
   pi_data_at: Location,
   /// Lexical names of the open elements, so an end tag can be compared with its start tag.
   names: String,
@@ -645,7 +645,7 @@ impl Parser {
     self.stack.feed(bytes, last)
   }
 
-  /// Clears the per-event output so no accessor reports a value an earlier event left behind; each event's handler
+  /// Clears the per-event output so no accessor reports a value an earlier event left behind; each event's consumer
   /// then sets what it reports. Document-level state (the XML declaration and `DOCTYPE` metadata) is not per-event
   /// and stays in place.
   fn reset_event_fields(&mut self) {
@@ -897,10 +897,10 @@ impl Parser {
       self.xml_declaration(data)?;
       return Ok(Some(TokenKind::XmlDeclaration));
     }
-    // Whether `target` is a `Name` is a lexical constraint left to `StrictXmlValidator`.
+    // Whether `target` is a `Name` is a lexical constraint left to `StrictXmlConstraints`.
     self.name = QName::new(None, None, self.pool.intern(target));
     let trimmed = data.trim_start_matches(chars::is_whitespace);
-    // The source position of the data, so a handler can map a position inside foreign-language data (a `<?php ... ?>`,
+    // The source position of the data, so a consumer can map a position inside foreign-language data (a `<?php ... ?>`,
     // say) back to the document. The data begins at `text.len() - "?>".len() - trimmed.len()`; walk the token start
     // over everything before it (`<?`, the target, and the dropped separating whitespace) to find where it is.
     let mut at = self.token_at.clone();
@@ -995,7 +995,7 @@ impl Parser {
 
   fn comment(&mut self, text: &str) -> Result<TokenKind> {
     debug_assert!(text.starts_with("<!--") && text.ends_with("-->"));
-    // Whether the body holds `--` or ends in `-` is a lexical constraint left to `StrictXmlValidator`; the body is
+    // Whether the body holds `--` or ends in `-` is a lexical constraint left to `StrictXmlConstraints`; the body is
     // delivered as scanned.
     let body = &text[4..text.len() - 3];
     self.text.clear();
@@ -2115,7 +2115,7 @@ impl Parser {
         self.dtd_assembly.provide_parameter_entity(stream.remainder(), stream.location());
         Ok(())
       }
-      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransformer`, which fetches the
       // resource itself and never hands the request to a parser.
       RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
     }
@@ -2183,8 +2183,8 @@ impl Parser {
 ///
 /// The parser splits to resolve a namespace, not to judge the name: a name with no colon, or one whose prefix or local
 /// part would be empty, is kept whole as the local part, and whatever the pieces contain is left for
-/// [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator) to refuse. Splitting at the first colon only means
-/// `a:b:c` becomes prefix `a` with local part `b:c`, which that validator reports as not a `QName`.
+/// [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints) to refuse. Splitting at the first colon only
+/// means `a:b:c` becomes prefix `a` with local part `b:c`, which that validator reports as not a `QName`.
 fn split_name(name: &str) -> (Option<&str>, &str) {
   match name.split_once(':') {
     Some((prefix, local)) if !prefix.is_empty() && !local.is_empty() => (Some(prefix), local),

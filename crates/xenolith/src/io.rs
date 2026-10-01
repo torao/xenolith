@@ -8,7 +8,7 @@
 //! - [`parse`]: A sans-I/O [`Parser`] that performs no I/O itself; it requests necessary inputs or external entities
 //!   from the caller, which then provides them.
 //! - [`read`]: A set of drivers that perform actual I/O. [`StreamSource`] reads from [`std::io::Read`] and functions
-//!   as an [`EventSource`](crate::event::EventSource). When the `async` feature is enabled, `AsyncReader` performs
+//!   as an [`EventProducer`](crate::event::EventProducer). When the `async` feature is enabled, `AsyncReader` performs
 //!   similar operations via `futures_io::AsyncRead`.
 //! - [`encoding`]: Provides decoders, encoders, and functionality for detecting encoding based on BOMs (Byte Order
 //!   Marks) or declarations.

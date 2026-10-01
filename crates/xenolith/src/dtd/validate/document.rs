@@ -4,8 +4,8 @@
 //! gives it one: it waits for the `DOCTYPE`, builds a [`DtdValidator`] from the DTD the parser read, and checks the
 //! rest of the document against it. That is the counterpart of Java's `setValidating(true)`.
 //!
-//! It is an [`EventHandler`] like any other validator, so it runs beside an application's own handler in one pass
-//! through a [`Dispatch`](crate::event::Dispatch): the application is called with data the schema has already
+//! It is an [`EventConsumer`] like any other validator, so it runs beside an application's own consumer in one pass
+//! through a [`Dispatcher`](crate::event::Dispatcher): the application is called with data the schema has already
 //! judged.
 //!
 
@@ -13,7 +13,7 @@
 mod test;
 
 use crate::error::Result;
-use crate::event::{EventHandler, EventRef, Flow, Outcome};
+use crate::event::{EventConsumer, EventRef, Flow, Outcome};
 
 use crate::dtd::validate::DtdValidator;
 use crate::event::validate::ids::XmlIdValidator;
@@ -28,7 +28,7 @@ use crate::event::validate::{Validator, ValidityError};
 /// # Examples
 ///
 /// ```
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 /// use xenolith::dtd::validate::DocumentDtd;
 /// use xenolith::event::validate::Validator;
@@ -36,7 +36,7 @@ use crate::event::validate::{Validator, ValidityError};
 /// // The element `c` is used but never declared: a validity error, kept, not thrown.
 /// let xml = "<!DOCTYPE a [<!ELEMENT a (b)>]><a><c/></a>";
 /// let mut validating = DocumentDtd::new();
-/// StreamSource::new(xml.as_bytes()).with_handler(&mut validating).emit()?;
+/// StreamSource::new(xml.as_bytes()).add_consumer(&mut validating).emit()?;
 ///
 /// assert!(validating.had_dtd());
 /// assert!(validating.errors().iter().any(|e| e.to_string().contains("c")));
@@ -106,8 +106,8 @@ impl std::fmt::Debug for DocumentDtd {
   }
 }
 
-impl EventHandler for DocumentDtd {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for DocumentDtd {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::Doctype(event) = event {
       // The DTD is complete by this event, so the validator it builds is whole. A DOCTYPE with no name declares no
       // root, and there is nothing to build from it.
@@ -121,10 +121,10 @@ impl EventHandler for DocumentDtd {
 
     self.ensure_lazy();
     if let Some(dtd) = &mut self.dtd {
-      return dtd.handle(event);
+      return dtd.consume(event);
     }
     if let Some(ids) = &mut self.ids {
-      return ids.handle(event);
+      return ids.consume(event);
     }
     Ok(Flow::Continue(0))
   }
@@ -153,7 +153,7 @@ impl Validator for DocumentDtd {
     std::borrow::Cow::Borrowed(&[])
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }

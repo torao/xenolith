@@ -9,7 +9,7 @@
 
 use crate::attr::{AttributeRef, Attributes};
 use crate::error::{Location, Result};
-use crate::event::{EventHandler, EventRef, Flow};
+use crate::event::{EventConsumer, EventRef, Flow};
 use crate::name::XML_NS_URI;
 use std::collections::HashMap;
 
@@ -83,8 +83,8 @@ impl XmlIdValidator {
   }
 }
 
-impl EventHandler for XmlIdValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+impl EventConsumer for XmlIdValidator {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // Only a start element carries attributes, so no other event can hold an `xml:id`.
     let EventRef::StartElement(event) = event else { return Ok(Flow::Continue(0)) };
     let before = self.errors.len();
@@ -100,7 +100,7 @@ impl Validator for XmlIdValidator {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }

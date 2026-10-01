@@ -1,11 +1,11 @@
 //! Building a DOM while validating against the document's own DTD, in a single pass over the reader.
 //!
-//! The DOM builder is a handler, so it takes its place beside the validation in a dispatch. One read of the source
+//! The DOM builder is a consumer, so it takes its place beside the validation in a dispatcher. One read of the source
 //! both checks the document and produces the tree.
 
 use xenolith::dom::build::DomBuilder;
 use xenolith::event::validate::ValidatorSet;
-use xenolith::event::{Dispatch, EventCursor, EventSource};
+use xenolith::event::{Dispatcher, EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 
 #[test]
@@ -16,8 +16,8 @@ fn builds_a_dom_while_validating_against_the_document_dtd_in_one_pass() {
   let mut validation = ValidatorSet::new().validating_dtd(true);
   let mut builder = DomBuilder::new();
   {
-    let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut builder);
-    StreamSource::new(xml.as_bytes()).with_handler(&mut lane).emit().expect("well-formed");
+    let mut lane = Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut builder);
+    StreamSource::new(xml.as_bytes()).add_consumer(&mut lane).emit().expect("well-formed");
   }
 
   // Validated against the document's own DTD in the same pass.
@@ -41,8 +41,8 @@ fn a_dtd_violation_is_reported_and_the_tree_is_still_built() {
   let mut validation = ValidatorSet::new().validating_dtd(true);
   let mut builder = DomBuilder::new();
   {
-    let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut builder);
-    StreamSource::new(xml.as_bytes()).with_handler(&mut lane).emit().expect("well-formed");
+    let mut lane = Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut builder);
+    StreamSource::new(xml.as_bytes()).add_consumer(&mut lane).emit().expect("well-formed");
   }
 
   let report = validation.report();
