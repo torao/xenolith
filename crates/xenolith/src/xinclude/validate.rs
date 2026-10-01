@@ -6,7 +6,7 @@ use crate::chars::{is_enc_name, is_whitespace};
 use crate::error::{Location, Result};
 use crate::event::validate::Schema;
 use crate::event::validate::{Validator, ValidityError};
-use crate::event::{EventHandler, EventRef, StartElementEventRef};
+use crate::event::{EventHandler, EventRef, Flow, StartElementEventRef};
 
 use super::XINCLUDE_NS;
 
@@ -219,7 +219,8 @@ impl XIncludeValidator {
 }
 
 impl EventHandler for XIncludeValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    let before = self.errors.len();
     match event {
       EventRef::StartDocument => {
         // clear the previous state at the beginning of the document
@@ -255,7 +256,8 @@ impl EventHandler for XIncludeValidator {
       }
       _ => {}
     }
-    Ok(())
+    // A `StartDocument` clears the list, so what it held before is not counted against this event.
+    Ok(Flow::Continue(self.errors.len().saturating_sub(before)))
   }
 }
 
@@ -293,7 +295,7 @@ pub(super) struct RootElementConstraints {
 }
 
 impl EventHandler for RootElementConstraints {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if self.depth == 0 {
       match event {
         EventRef::StartElement(start) => {
@@ -325,6 +327,7 @@ impl EventHandler for RootElementConstraints {
       EventRef::EndElement(..) => self.depth = self.depth.saturating_sub(1),
       _ => {}
     }
-    Ok(())
+    // A violation refuses the document, so no error is ever recorded to be counted.
+    Ok(Flow::Continue(0))
   }
 }

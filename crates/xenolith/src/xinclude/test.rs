@@ -180,11 +180,11 @@ fn text_is_included_as_character_data() {
 struct Texts(Vec<String>);
 
 impl EventHandler for Texts {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::Characters(text) = event {
       self.0.push(text.text.to_owned());
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -221,6 +221,87 @@ fn a_fragment_ends_at_a_character_boundary() {
   assert_eq!(fragments("日本語", 4), ["日", "本", "語"]);
   // One character longer than a whole fragment is reported on its own rather than held for ever.
   assert_eq!(fragments("日本語", 1), ["日", "本", "語"]);
+}
+
+/// Records the start elements and the character data that reach it, and stops at the first event `stop` accepts.
+struct StopAt {
+  stop: fn(&EventRef<'_>) -> bool,
+  seen: Vec<String>,
+  outcome: Option<&'static str>,
+}
+
+impl StopAt {
+  fn new(stop: fn(&EventRef<'_>) -> bool) -> Self {
+    Self { stop, seen: Vec::new(), outcome: None }
+  }
+}
+
+impl EventHandler for StopAt {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    match event {
+      EventRef::StartElement(start) => self.seen.push(start.local.to_owned()),
+      EventRef::Characters(text) => self.seen.push(text.text.to_owned()),
+      _ => {}
+    }
+    Ok(if (self.stop)(event) { Flow::Break(0) } else { Flow::Continue(0) })
+  }
+
+  fn finish(&mut self, outcome: Outcome<'_>) {
+    self.outcome = Some(match outcome {
+      Outcome::Completed => "completed",
+      Outcome::Stopped => "stopped",
+      Outcome::Failed(_) => "failed",
+      Outcome::Abandoned => "abandoned",
+    });
+  }
+}
+
+/// Reads `xml` through the transform into `handler`, without the base URI fixup.
+fn run_into(xml: &str, map: &Map, config: ParserConfig, handler: &mut dyn EventHandler) -> Result<()> {
+  let mut include = XIncludeTransform::new().with_resolver(map).with_config(config).with_xml_base(false);
+  include = include.with_handler(handler);
+  StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml").with_handler(&mut include).emit()
+}
+
+#[test]
+fn a_handler_that_stops_inside_an_inclusion_ends_the_whole_run() {
+  let map = Map::with(&[("file:///doc/part.xml", "<p><q/><r/></p>")]);
+  let mut stop = StopAt::new(|event| event.start_element_named(None, "q").is_some());
+  let xml = doc("<xi:include href='part.xml'/><xi:include href='part.xml'/><after/>");
+  run_into(&xml, &map, ParserConfig::default(), &mut stop).expect("stopping early is not an error");
+
+  assert_eq!(stop.seen, ["doc", "p", "q"], "nothing of the included document or the including one after it");
+  assert_eq!(stop.outcome, Some("stopped"));
+  assert_eq!(map.asked.borrow().len(), 1, "the second inclusion was never fetched");
+}
+
+#[test]
+fn a_handler_that_stops_inside_a_text_inclusion_ends_the_whole_run() {
+  let map = Map::with(&[("file:///doc/part.txt", "0123456789")]);
+  let mut stop = StopAt::new(|event| matches!(event, EventRef::Characters(_)));
+  let config = ParserConfig { text_fragment_len: 4, ..ParserConfig::default() };
+  run_into(&doc("<xi:include href='part.txt' parse='text'/>tail"), &map, config, &mut stop).expect("stopped");
+
+  assert_eq!(stop.seen, ["doc", "0123"], "the rest of the resource is not read");
+  assert_eq!(stop.outcome, Some("stopped"));
+}
+
+#[test]
+fn the_validity_errors_found_in_an_included_document_are_counted_upstream() {
+  let map = Map::with(&[("file:///doc/part.xml", "<p xml:id='x'><q xml:id='x'/></p>")]);
+  let mut validation = ValidatorSet::new().checking_xml_id(true);
+  let error = {
+    let mut include = XIncludeTransform::new().with_resolver(&map).with_handler(&mut validation);
+    let mut lane = Dispatch::new().with_max_errors(Some(0)).with_handler(&mut include);
+    let xml = doc("<xi:include href='part.xml'/>");
+    StreamSource::with_system_id(xml.as_bytes(), "file:///doc/main.xml")
+      .with_handler(&mut lane)
+      .emit()
+      .expect_err("the duplicate xml:id exceeds the maximum")
+  };
+
+  assert!(matches!(error, Error::Validity { .. }), "{error:?}");
+  assert_eq!(validation.report().errors().len(), 1, "the error itself stays in the validator");
 }
 
 #[test]
@@ -773,8 +854,8 @@ fn the_handler_behind_is_told_that_a_run_failed_inside_an_inclusion() {
   #[derive(Default)]
   struct Ended(Option<&'static str>);
   impl EventHandler for Ended {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<()> {
-      Ok(())
+    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
+      Ok(Flow::Continue(0))
     }
     fn finish(&mut self, outcome: Outcome<'_>) {
       self.0.get_or_insert(match outcome {

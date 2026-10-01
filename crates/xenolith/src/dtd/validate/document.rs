@@ -13,7 +13,7 @@
 mod test;
 
 use crate::error::Result;
-use crate::event::{EventHandler, EventRef, Outcome};
+use crate::event::{EventHandler, EventRef, Flow, Outcome};
 
 use crate::dtd::validate::DtdValidator;
 use crate::event::validate::ids::XmlIdValidator;
@@ -107,7 +107,7 @@ impl std::fmt::Debug for DocumentDtd {
 }
 
 impl EventHandler for DocumentDtd {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::Doctype(event) = event {
       // The DTD is complete by this event, so the validator it builds is whole. A DOCTYPE with no name declares no
       // root, and there is nothing to build from it.
@@ -116,7 +116,7 @@ impl EventHandler for DocumentDtd {
         let validator = validator.with_xml_id(self.xml_id);
         self.dtd = Some(validator);
       }
-      return Ok(());
+      return Ok(Flow::Continue(0));
     }
 
     self.ensure_lazy();
@@ -126,7 +126,7 @@ impl EventHandler for DocumentDtd {
     if let Some(ids) = &mut self.ids {
       return ids.handle(event);
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 
   fn finish(&mut self, outcome: Outcome<'_>) {

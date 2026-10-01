@@ -57,13 +57,11 @@
 mod test;
 mod validate;
 
-use std::io::Read;
-
 use crate::error::{Error, Result};
 use crate::event::strict::StrictXmlValidator;
 use crate::event::validate::ValidatorSet;
 use crate::event::{
-  CharactersEventRef, Dispatch, EventCursor, EventHandler, EventRef, EventSource, Outcome, StartElementEvent,
+  CharactersEventRef, Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow, Outcome, StartElementEvent,
   StartElementEventRef,
 };
 use crate::io::resolve::{NoResolver, UriResolver};
@@ -73,6 +71,7 @@ use crate::xinclude::ScopeBehavior::{FallbackInProgress, IgnoreAll, InclusionInP
 use crate::xinclude::validate::RootElementConstraints;
 pub use crate::xinclude::validate::XIncludeSchema;
 use crate::{Attribute, Attributes, Location, XML_NS_URI, uri};
+use std::io::Read;
 
 /// The namespace to which the `xi:include` and `xi:fallback` elements belong.
 pub const XINCLUDE_NS: &str = "http://www.w3.org/2001/XInclude";
@@ -294,6 +293,11 @@ struct XIncludeProcess<'h, 'r> {
   inclusion_occurrence: usize,
   /// Open capture scopes. The last one is the innermost.
   inclusions: Vec<IncludeScope>,
+  /// The count of validation errors reported by downstream handlers that have not yet been returned upstream. Events
+  /// from included documents reach downstream components via nested lanes, but those lanes cannot return this count;
+  /// therefore, the count accumulates here and is returned by [`XIncludeTransform`] for the upstream event currently
+  /// being processed.
+  validity_error_count: usize,
 }
 
 impl<'h, 'r> XIncludeProcess<'h, 'r> {
@@ -309,6 +313,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
       xml_lang: true,
       inclusion_occurrence: 0,
       inclusions: Vec::new(),
+      validity_error_count: 0,
     }
   }
 
@@ -317,6 +322,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     self.outcome_constraints = RootElementConstraints::default();
     self.inclusions.clear();
     self.inclusion_occurrence = 0;
+    self.validity_error_count = 0;
   }
 
   /// Reads the content specified by `xi:include` and sends it to the downstream as events at the current position.
@@ -456,9 +462,9 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     let mut validators = ValidatorSet::default().with_schema(&XIncludeSchema).with_max_errors(Some(0));
     let mut lane = Dispatch::new();
     if let Some(strict) = strict.as_mut() {
-      lane = lane.with_handler(strict);
+      lane = lane.with_validator(strict);
     }
-    lane = lane.with_handler(&mut validators);
+    lane = lane.with_validator(&mut validators);
     lane = lane.with_handler(self);
 
     let mut source = StreamSource::with_document(reader, Entity::document(stream)).with_config(config);
@@ -501,6 +507,9 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
 
         // Passed on directly: this text is the inclusion itself, not a document whose layout is left out.
         self.passthrough(&EventRef::Characters(CharactersEventRef::new(text, at)))?;
+        if self.dispatch.is_stopped() {
+          return Ok(());
+        }
 
         stream.advance(len);
       }
@@ -530,10 +539,16 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     Ok(read)
   }
 
-  /// Send a single event to a downstream handler.
+  /// Send a single event to a downstream handler. The number of validity errors that the downstream reports is added
+  /// to `validity_error_count`.
   fn passthrough(&mut self, event: &EventRef<'_>) -> Result<()> {
-    self.outcome_constraints.handle(event)?;
-    self.dispatch.handle(event)
+    let (Flow::Continue(constraints_count) | Flow::Break(constraints_count)) =
+      self.outcome_constraints.handle(event)?;
+    let (Flow::Continue(downstream_count) | Flow::Break(downstream_count)) = self.dispatch.handle(event)?;
+    // the downstream count may come from an application's handler, so it saturates rather than overflows
+    self.validity_error_count =
+      self.validity_error_count.saturating_add(constraints_count).saturating_add(downstream_count);
+    Ok(())
   }
 
   /// If the deepest scope has not yet observed the top-level element of the document, it returns the base URI and
@@ -646,18 +661,22 @@ impl<'h> EventSource<'h> for XIncludeTransform<'h, '_> {
 }
 
 impl EventHandler for XIncludeTransform<'_, '_> {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // only events from upstream are received here; therefore, StartDocument always signifies the beginning of a new
     // document
     if matches!(event, EventRef::StartDocument) {
       self.process.reset();
     }
-    self.constraints.handle(event)?;
-    self.process.handle(event)
-  }
-
-  fn should_continue(&self) -> bool {
-    self.process.should_continue()
+    let (Flow::Continue(constraints_count) | Flow::Break(constraints_count)) = self.constraints.handle(event)?;
+    self.process.receive(event)?;
+    // the count also covers the events of the documents included while processing this event
+    let event_validity_error_count =
+      constraints_count.saturating_add(std::mem::take(&mut self.process.validity_error_count));
+    Ok(if self.process.dispatch.is_stopped() {
+      Flow::Break(event_validity_error_count)
+    } else {
+      Flow::Continue(event_validity_error_count)
+    })
   }
 
   fn finish(&mut self, outcome: Outcome<'_>) {
@@ -668,8 +687,10 @@ impl EventHandler for XIncludeTransform<'_, '_> {
   }
 }
 
-impl EventHandler for XIncludeProcess<'_, '_> {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl XIncludeProcess<'_, '_> {
+  /// Processes one event, whether it comes from upstream or from an included document. The number of validity errors
+  /// reported downstream is accumulated in `validity_error_count`.
+  fn receive(&mut self, event: &EventRef<'_>) -> Result<()> {
     // ignore these events that originate from documents included using xi:include
     if !self.inclusions.is_empty()
       && matches!(event, EventRef::StartDocument | EventRef::EndDocument | EventRef::Doctype(..))
@@ -757,9 +778,14 @@ impl EventHandler for XIncludeProcess<'_, '_> {
       },
     }
   }
+}
 
-  fn should_continue(&self) -> bool {
-    self.dispatch.should_continue()
+impl EventHandler for XIncludeProcess<'_, '_> {
+  /// This call occurs for events of an included document through a nested lane. The validity errors reported
+  /// downstream stay in `validity_error_count`, so this returns zero for them.
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    self.receive(event)?;
+    Ok(if self.dispatch.is_stopped() { Flow::Break(0) } else { Flow::Continue(0) })
   }
 
   /// This call occurs when the document included via `xi:include` has finished loading; it does not mark the end of

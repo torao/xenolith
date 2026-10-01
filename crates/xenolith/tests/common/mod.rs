@@ -24,7 +24,7 @@ pub(crate) fn validate<R: Read>(source: R) -> Result<Report> {
 pub(crate) fn validate_reader<R: Read>(mut reader: StreamSource<'_, R>) -> Result<Report> {
   let mut validation = ValidatorSet::new().validating_dtd(true);
   while let Some(event) = reader.next()? {
-    validation.handle(&event)?;
+    let _ = validation.handle(&event)?;
   }
   validation.finish(Outcome::Completed);
   Ok(validation.report())

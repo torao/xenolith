@@ -3,15 +3,14 @@
 #[cfg(test)]
 mod test;
 
-use std::io;
-
 use crate::error::{Error, Result};
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::io::encoding::{Encoder, Utf8Encoder, encoder_for};
 use crate::name::lexical;
+use std::io;
 
 use crate::io::write::LineBreak;
 use crate::io::write::escape::{push_attribute, push_cdata, push_text};
@@ -457,7 +456,7 @@ impl<W: io::Write> XmlWriter<W> {
 /// including a DOCTYPE declaration inside an element. Since these operations are rejected at the moment the write is
 /// attempted, the offending data is never output as bytes.
 impl<W: io::Write> EventHandler for XmlWriter<W> {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       // A document's beginning and end are not markup. What the start puts out is the declaration, which no event
       // carries, and the end puts out nothing at all.
@@ -471,7 +470,7 @@ impl<W: io::Write> EventHandler for XmlWriter<W> {
       EventRef::ProcessingInstruction(event) => self.processing_instruction(event)?,
       EventRef::Doctype(event) => self.doctype(event)?,
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 

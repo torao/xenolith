@@ -8,7 +8,7 @@ use crate::dtd::model::{AttType, Dtd};
 use crate::error::Error;
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::name::{NamePool, XML_NS_URI};
 
@@ -297,7 +297,7 @@ impl DomBuilder {
 }
 
 impl EventHandler for DomBuilder {
-  fn handle(&mut self, event: &EventRef<'_>) -> crate::Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> crate::Result<Flow> {
     if !matches!(event, EventRef::StartDocument) {
       self.fresh = false;
     }
@@ -317,7 +317,8 @@ impl EventHandler for DomBuilder {
     };
     match (handled, event.location()) {
       (Err(error), Some(at)) => Err(error.or_at(at.clone())),
-      (handled, _) => handled,
+      (Err(error), None) => Err(error),
+      (Ok(()), _) => Ok(Flow::Continue(0)),
     }
   }
 }

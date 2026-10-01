@@ -324,15 +324,16 @@ fn a_streamed_entity_is_stopped_mid_stream_by_the_expansion_limit() {
 /// These were the tests of the `io::sax` module, which was a guide and a second set of names for
 /// [`crate::event`](crate::event) and held no code of its own. What they exercise is this reader driving handlers.
 mod push {
+
   use crate::error::{Error, Result};
-  use crate::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource};
+  use crate::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
   use crate::io::StreamSource;
 
   #[derive(Default)]
   struct Trace(Vec<String>);
 
   impl EventHandler for Trace {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.0.push(match event {
         EventRef::StartDocument => "start".to_owned(),
         EventRef::EndDocument => "end".to_owned(),
@@ -341,9 +342,9 @@ mod push {
         EventRef::Characters(event) => format!("t:{}", event.text),
         EventRef::Comment(event) => format!("!:{}", event.text),
         EventRef::ProcessingInstruction(event) => format!("?:{} {}", event.target, event.data),
-        EventRef::Cdata(_) | EventRef::Doctype(_) => return Ok(()),
+        EventRef::Cdata(_) | EventRef::Doctype(_) => return Ok(Flow::Continue(0)),
       });
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 
@@ -367,17 +368,17 @@ mod push {
     #[derive(Default)]
     struct At(Vec<(String, u32, u32)>);
     impl EventHandler for At {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         let what = match event {
           EventRef::StartElement(e) => format!("<{}>", e.local),
           EventRef::EndElement(e) => format!("</{}>", e.local),
           EventRef::Characters(e) => format!("t:{}", e.text),
           EventRef::Comment(e) => format!("!:{}", e.text),
-          _ => return Ok(()),
+          _ => return Ok(Flow::Continue(0)),
         };
         let at = event.location().expect("a markup event locates itself");
         self.0.push((what, at.line, at.column));
-        Ok(())
+        Ok(Flow::Continue(0))
       }
     }
     let mut at = At::default();
@@ -405,15 +406,12 @@ mod push {
       done: bool,
     }
     impl EventHandler for First {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::StartElement(event) = event {
           self.names.push(event.local.to_owned());
           self.done = true;
         }
-        Ok(())
-      }
-      fn should_continue(&self) -> bool {
-        !self.done
+        Ok(if !self.done { Flow::Continue(0) } else { Flow::Break(0) })
       }
     }
     let mut first = First::default();
@@ -430,7 +428,7 @@ mod push {
       seen: Vec<String>,
     }
     impl EventHandler for Reject {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::StartElement(event) = event {
           let name = event.local.to_owned();
           if name == "b" {
@@ -438,7 +436,7 @@ mod push {
           }
           self.seen.push(name);
         }
-        Ok(())
+        Ok(Flow::Continue(0))
       }
     }
     let mut reject = Reject::default();
@@ -457,7 +455,7 @@ mod push {
       at: Option<(u32, u32)>,
     }
     impl EventHandler for Seen {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::Doctype(event) = event {
           self.notation = event.pool.get("gif").is_some_and(|id| event.dtd.has_notation(id));
           self.unparsed = event.pool.get("logo").is_some_and(|id| {
@@ -465,7 +463,7 @@ mod push {
           });
           self.at = Some((event.location.line, event.location.column));
         }
-        Ok(())
+        Ok(Flow::Continue(0))
       }
     }
     let doc = "<!DOCTYPE doc [\
@@ -491,13 +489,13 @@ mod push {
       data_at: Option<(u32, u32, u64)>,
     }
     impl EventHandler for Pi {
-      fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+      fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
         if let EventRef::ProcessingInstruction(e) = event {
           self.target = e.target.to_owned();
           self.data = e.data.to_owned();
           self.data_at = Some((e.data_location.line, e.data_location.column, e.data_location.offset));
         }
-        Ok(())
+        Ok(Flow::Continue(0))
       }
     }
     let mut pi = Pi::default();

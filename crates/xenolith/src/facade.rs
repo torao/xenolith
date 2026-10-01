@@ -170,7 +170,7 @@ impl<'r> Reader<'r> {
   ///
   /// ```
   /// use xenolith::Reader;
-  /// use xenolith::event::{EventHandler, EventRef};
+  /// use xenolith::event::{EventHandler, EventRef, Flow};
   ///
   /// #[derive(Default)]
   /// struct Titles {
@@ -179,7 +179,7 @@ impl<'r> Reader<'r> {
   /// }
   ///
   /// impl EventHandler for Titles {
-  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
+  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
   ///     match event {
   ///       EventRef::StartElement(start) if start.local == "title" => {
   ///         self.inside = true;
@@ -194,7 +194,7 @@ impl<'r> Reader<'r> {
   ///       EventRef::EndElement(end) if end.local == "title" => self.inside = false,
   ///       _ => {}
   ///     }
-  ///     Ok(())
+  ///     Ok(Flow::Continue(0))
   ///   }
   /// }
   ///
@@ -213,18 +213,15 @@ impl<'r> Reader<'r> {
   /// ```
   /// use xenolith::Reader;
   /// use xenolith::dom::build::DomBuilder;
-  /// use xenolith::event::{Dispatch, EventHandler, EventRef, EventSource, Outcome};
+  /// use xenolith::event::{Dispatch, EventHandler, EventRef, EventSource, Flow, Outcome};
   ///
   /// /// Passes every event on except a comment.
   /// #[derive(Default)]
   /// struct DropComments<'h>(Dispatch<'h>);
   ///
   /// impl EventHandler for DropComments<'_> {
-  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
-  ///     if matches!(event, EventRef::Comment(_)) { Ok(()) } else { self.0.handle(event) }
-  ///   }
-  ///   fn should_continue(&self) -> bool {
-  ///     self.0.should_continue()
+  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
+  ///     if matches!(event, EventRef::Comment(_)) { Ok(Flow::Continue(0)) } else { self.0.handle(event) }
   ///   }
   ///   fn finish(&mut self, outcome: Outcome<'_>) {
   ///     self.0.finish(outcome);
@@ -270,7 +267,7 @@ impl<'r> Reader<'r> {
     // Strictness is evaluated before filters or transformers are invoked, and execution halts at the first sign of a
     // problem. The XInclude vocabulary is judged by the transform itself.
     if self.strict {
-      lane = lane.with_handler(&mut strict);
+      lane = lane.with_validator(&mut strict);
     }
 
     match xinclude.as_mut() {

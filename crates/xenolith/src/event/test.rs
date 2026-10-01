@@ -93,15 +93,18 @@ impl<'h> EventCursor<'h> for TinySource<'h> {
       Step::End => EventRef::EndDocument,
       Step::Done => return Ok(None),
     };
-    if let Err(error) = self.dispatch.handle(&event) {
-      self.step = Step::Done;
-      self.told = true;
-      return Err(self.dispatch.fail(error));
-    }
-    // A handler that finishes at `EndDocument` has not cut the run short.
-    if step != Step::End && !self.dispatch.should_continue() {
-      self.step = Step::Done;
-      self.stopped = true;
+    match self.dispatch.handle(&event) {
+      // A handler that finishes at `EndDocument` has not cut the run short.
+      Ok(Flow::Break(_)) if step != Step::End => {
+        self.step = Step::Done;
+        self.stopped = true;
+      }
+      Ok(_) => {}
+      Err(error) => {
+        self.step = Step::Done;
+        self.told = true;
+        return Err(self.dispatch.fail(error));
+      }
     }
     Ok(Some(event))
   }
@@ -114,13 +117,13 @@ struct Counts {
 }
 
 impl EventHandler for Counts {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => self.elements += 1,
       EventRef::Characters(event) => self.text += event.text.len(),
       _ => {}
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -128,10 +131,10 @@ impl EventHandler for Counts {
 struct Refuse;
 
 impl EventHandler for Refuse {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => Err(Error::internal("refused")),
-      _ => Ok(()),
+      _ => Ok(Flow::Continue(0)),
     }
   }
 }
@@ -170,14 +173,11 @@ fn a_handler_that_has_read_enough_ends_the_run_without_an_error() {
     names: Vec<String>,
   }
   impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
       }
-      Ok(())
-    }
-    fn should_continue(&self) -> bool {
-      self.names.is_empty()
+      Ok(if self.names.is_empty() { Flow::Continue(0) } else { Flow::Break(0) })
     }
   }
 
@@ -236,8 +236,7 @@ fn a_caller_that_did_not_build_the_source_drives_it_with_a_handler_of_its_own() 
   fn run<'h>(source: &mut impl EventCursor<'h>) -> Result<usize> {
     let mut mine = Counts::default();
     while let Some(event) = source.next()? {
-      mine.handle(&event)?;
-      if !mine.should_continue() {
+      if mine.handle(&event)?.is_break() {
         break;
       }
     }
@@ -273,7 +272,7 @@ impl Recorder {
 }
 
 impl EventHandler for Recorder {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if self.resets && matches!(event, EventRef::StartDocument) {
       self.starts = 0;
     }
@@ -288,11 +287,7 @@ impl EventHandler for Recorder {
       EventRef::EndDocument => "end-document",
       _ => "other",
     });
-    Ok(())
-  }
-
-  fn should_continue(&self) -> bool {
-    self.limit.is_none_or(|limit| self.starts < limit)
+    Ok(if self.limit.is_none_or(|limit| self.starts < limit) { Flow::Continue(0) } else { Flow::Break(0) })
   }
 }
 
@@ -321,20 +316,16 @@ fn the_run_ends_early_once_every_handler_has_finished() {
 
 #[test]
 fn a_handler_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
-  /// Answers `false` once, after its second event, and `true` whenever it is asked again. The answer changes with the
-  /// asking rather than with the events, so a dispatch that asked again would take it back.
+  /// Answers `Break` at its second event and `Continue` at any other, so a dispatch that handed it another event would
+  /// take it back.
   #[derive(Default)]
   struct Flicker {
     events: usize,
-    said_no: std::cell::Cell<bool>,
   }
   impl EventHandler for Flicker {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
       self.events += 1;
-      Ok(())
-    }
-    fn should_continue(&self) -> bool {
-      !(self.events == 2 && !self.said_no.replace(true))
+      Ok(if self.events == 2 { Flow::Break(0) } else { Flow::Continue(0) })
     }
   }
 
@@ -349,7 +340,7 @@ fn a_handler_that_changes_its_mind_stays_out_for_the_rest_of_the_run() {
 
 #[test]
 fn a_dispatch_with_no_handlers_never_ends_the_run() {
-  assert!(Dispatch::new().should_continue());
+  assert!(!Dispatch::new().is_stopped());
 
   // So a source with nothing installed still reads to the end, and finds what is wrong with the document.
   let error = crate::io::StreamSource::new("<a><b></a>".as_bytes()).emit().unwrap_err();
@@ -369,6 +360,122 @@ fn a_nested_dispatch_finishes_once_all_of_its_own_handlers_have() {
   assert_eq!(early.seen, ["start-document", "start"]);
   assert_eq!(late.seen, ["start-document", "start", "text", "start"], "the inner dispatch fed the one still running");
   assert_eq!(beside.seen, WHOLE_RUN, "and the handler beside it read to the end");
+}
+
+#[test]
+fn a_validator_does_not_keep_the_run_going_once_every_consumer_has_finished() {
+  use crate::event::validate::{Ended, ValidatorSet};
+
+  let mut validation = ValidatorSet::new();
+  let mut early = Recorder::stopping_after(1);
+  {
+    let mut lane = Dispatch::new().with_validator(&mut validation).with_handler(&mut early);
+    TinySource::new().with_handler(&mut lane).emit().expect("finishing early is not an error");
+  }
+
+  assert_eq!(early.seen, ["start-document", "start"]);
+  assert_eq!(validation.report().ended(), Some(Ended::Stopped));
+}
+
+/// A validator that reports an error for each element named `b`.
+#[derive(Default)]
+struct FaultsB {
+  errors: Vec<validate::ValidityError>,
+}
+
+impl EventHandler for FaultsB {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    match event {
+      EventRef::StartDocument => self.errors.clear(),
+      EventRef::StartElement(start) if start.local == "b" => {
+        self.errors.push(validate::ValidityError::new("b is not allowed", start.location.clone()));
+        return Ok(Flow::Continue(1));
+      }
+      _ => {}
+    }
+    Ok(Flow::Continue(0))
+  }
+}
+
+impl Validator for FaultsB {
+  fn errors(&self) -> std::borrow::Cow<'_, [validate::ValidityError]> {
+    std::borrow::Cow::Borrowed(&self.errors)
+  }
+
+  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+    self
+  }
+}
+
+#[test]
+fn the_maximum_of_a_dispatch_counts_the_errors_found_in_a_dispatch_nested_in_it() {
+  let mut faults = FaultsB::default();
+  let mut behind = Recorder::default();
+  let error = {
+    let mut inner = Dispatch::new().with_validator(&mut faults);
+    let mut outer = Dispatch::new().with_max_errors(Some(0)).with_handler(&mut inner).with_handler(&mut behind);
+    TinySource::new().with_handler(&mut outer).emit().expect_err("the first error exceeds the maximum")
+  };
+
+  assert!(matches!(error, Error::Validity { .. }), "{error:?}");
+  assert_eq!(faults.errors.len(), 1, "the error itself stays in the validator");
+  assert_eq!(behind.seen, ["start-document", "start", "text"], "the handler behind never saw the element b");
+}
+
+#[test]
+fn a_dispatch_with_no_maximum_reads_through_the_errors() {
+  let mut faults = FaultsB::default();
+  {
+    let mut lane = Dispatch::new().with_max_errors(None).with_validator(&mut faults);
+    TinySource::new().with_handler(&mut lane).emit().expect("validity errors do not end the run");
+  }
+  assert_eq!(faults.errors.len(), 1);
+}
+
+/// A validator that reports the largest count there is at every start element, and keeps no error.
+struct Overstates;
+
+impl EventHandler for Overstates {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    Ok(Flow::Continue(if matches!(event, EventRef::StartElement(_)) { usize::MAX } else { 0 }))
+  }
+}
+
+impl Validator for Overstates {
+  fn errors(&self) -> std::borrow::Cow<'_, [validate::ValidityError]> {
+    std::borrow::Cow::Borrowed(&[])
+  }
+
+  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+    self
+  }
+}
+
+#[test]
+fn a_count_too_large_to_add_up_neither_panics_nor_slips_past_the_maximum() {
+  // With no maximum, the counts of two elements and two validators are added up without overflowing.
+  let (mut one, mut two) = (Overstates, Overstates);
+  {
+    let mut lane = Dispatch::new().with_validator(&mut one).with_validator(&mut two);
+    TinySource::new().with_handler(&mut lane).emit().expect("validity errors do not end the run");
+  }
+
+  // Summed in a nested dispatch and passed up, the count still exceeds the maximum of the dispatch above it.
+  let (mut one, mut two) = (Overstates, Overstates);
+  let error = {
+    let mut inner = Dispatch::new().with_validator(&mut one).with_validator(&mut two);
+    let mut outer = Dispatch::new().with_max_errors(Some(usize::MAX - 1)).with_handler(&mut inner);
+    TinySource::new().with_handler(&mut outer).emit().expect_err("more errors than the maximum")
+  };
+  assert!(matches!(error, Error::Validity { .. }), "{error:?}");
+
+  // A validator set given the same counts, with no errors to show for them, still stops with an error.
+  let mut validation = validate::ValidatorSet::new()
+    .with_validator(Box::new(Overstates))
+    .with_validator(Box::new(Overstates))
+    .with_max_errors(Some(usize::MAX - 1));
+  let error = TinySource::new().with_handler(&mut validation).emit().expect_err("more errors than the maximum");
+  assert!(matches!(error, Error::Validity { .. }), "{error:?}");
 }
 
 #[test]
@@ -411,7 +518,7 @@ struct Ends {
 }
 
 impl EventHandler for Ends {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(_) => self.started = true,
       EventRef::EndDocument => {
@@ -422,11 +529,7 @@ impl EventHandler for Ends {
       }
       _ => {}
     }
-    Ok(())
-  }
-
-  fn should_continue(&self) -> bool {
-    !(self.stop_at_start && self.started)
+    Ok(if self.stop_at_start && self.started { Flow::Break(0) } else { Flow::Continue(0) })
   }
 
   fn finish(&mut self, outcome: Outcome<'_>) {
@@ -636,7 +739,7 @@ fn a_document_kept_as_owned_events_builds_the_same_tree_when_replayed() {
   }
   let mut replayed = DomBuilder::new();
   for event in &kept {
-    replayed.handle(&event.as_event_ref()).unwrap();
+    let _ = replayed.handle(&event.as_event_ref()).unwrap();
   }
   let replayed = replayed.into_document();
 

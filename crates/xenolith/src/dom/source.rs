@@ -9,7 +9,7 @@ use crate::dtd::model::Dtd;
 use crate::error::{Location, Result};
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventCursor,
-  EventHandler, EventRef, EventSource, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
+  EventHandler, EventRef, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
 };
 use crate::name::NamePool;
 
@@ -27,8 +27,8 @@ use crate::dom::{Document, NodeId};
 /// [`emit`](EventCursor::emit) reports [`StartDocument`](EventRef::StartDocument) first, one event for each node in
 /// document order, and [`EndDocument`](EventRef::EndDocument) at the end; [`next`](EventCursor::next) hands them back
 /// one at a time instead, notifying the installed handlers as it goes. When the source covers the whole document or a
-/// fragment, it emits the children without an enclosing element of their own. A handler that ends the run through
-/// [`should_continue`](EventHandler::should_continue) stops the walk, so `EndDocument` does not follow.
+/// fragment, it emits the children without an enclosing element of their own. A handler that ends the run by returning
+/// [`Flow::Break`] stops the walk, so `EndDocument` does not follow.
 ///
 /// A tree has no source position, so every [`Location`] is [`unknown`](Location::unknown). It also keeps no parsed DTD,
 /// which a [`Doctype`](EventRef::Doctype) event carries, so the walk passes over the document type node unless
@@ -40,7 +40,7 @@ use crate::dom::{Document, NodeId};
 ///
 /// ```
 /// use xenolith::error::Result;
-/// use xenolith::event::{EventRef, EventCursor, EventHandler, EventSource};
+/// use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
 /// use xenolith::dom::DomSource;
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::io::StreamSource;
@@ -48,11 +48,11 @@ use crate::dom::{Document, NodeId};
 /// #[derive(Default)]
 /// struct Names(Vec<String>);
 /// impl EventHandler for Names {
-///   fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+///   fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
 ///     if let EventRef::StartElement(event) = event {
 ///       self.0.push(event.local.to_owned());
 ///     }
-///     Ok(())
+///     Ok(Flow::Continue(0))
 ///   }
 /// }
 ///
@@ -175,12 +175,13 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
         self.step = Step::Walking;
         self.walk = Some(self.doc.walk(self.node));
         let event = EventRef::StartDocument;
-        if let Err(error) = self.dispatch.handle(&event) {
-          self.step = Step::Done;
-          return Err(self.dispatch.fail(error));
-        }
-        if !self.dispatch.should_continue() {
-          self.step = Step::Stopped;
+        match self.dispatch.handle(&event) {
+          Ok(Flow::Continue(_)) => {}
+          Ok(Flow::Break(_)) => self.step = Step::Stopped,
+          Err(error) => {
+            self.step = Step::Done;
+            return Err(self.dispatch.fail(error));
+          }
         }
         return Ok(Some(event));
       }
@@ -260,12 +261,13 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
       }
       _ => unreachable!("a node with no event of its own was skipped above"),
     };
-    if let Err(error) = self.dispatch.handle(&event) {
-      self.step = Step::Done;
-      return Err(self.dispatch.fail(error));
-    }
-    if !self.dispatch.should_continue() {
-      self.step = Step::Stopped;
+    match self.dispatch.handle(&event) {
+      Ok(Flow::Continue(_)) => {}
+      Ok(Flow::Break(_)) => self.step = Step::Stopped,
+      Err(error) => {
+        self.step = Step::Done;
+        return Err(self.dispatch.fail(error));
+      }
     }
     Ok(Some(event))
   }

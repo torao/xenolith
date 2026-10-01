@@ -7,7 +7,7 @@ use xenolith::dom::DomSource;
 use xenolith::dom::build::DomBuilder;
 use xenolith::error::Result;
 use xenolith::event::validate::{Validator, ValidityError};
-use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource};
+use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the parser and the builder.
@@ -25,15 +25,16 @@ struct AllowedElements {
 }
 
 impl EventHandler for AllowedElements {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       let local = event.local;
       if !self.allowed.iter().any(|a| a == local) {
         let message = format!("element \"{local}\" is not allowed");
         self.errors.push(ValidityError::new(message, event.location.clone()));
+        return Ok(Flow::Continue(1));
       }
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 

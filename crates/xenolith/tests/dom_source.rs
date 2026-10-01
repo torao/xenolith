@@ -7,7 +7,7 @@
 use xenolith::dom::build::DomBuilder;
 use xenolith::dom::{Document, DomSource};
 use xenolith::error::Result;
-use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource};
+use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the builder.
@@ -21,7 +21,7 @@ fn parse(xml: &str) -> Document {
 struct Trace(Vec<String>);
 
 impl EventHandler for Trace {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     self.0.push(match event {
       EventRef::StartDocument => "start".to_owned(),
       EventRef::EndDocument => "end".to_owned(),
@@ -38,9 +38,9 @@ impl EventHandler for Trace {
       EventRef::Cdata(event) => format!("cdata:{}", event.text),
       EventRef::Comment(event) => format!("!:{}", event.text),
       EventRef::ProcessingInstruction(event) => format!("?:{} {}", event.target, event.data),
-      EventRef::Doctype(_) => return Ok(()),
+      EventRef::Doctype(_) => return Ok(Flow::Continue(0)),
     });
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -84,15 +84,12 @@ fn a_handler_stops_the_emission_early() {
     done: bool,
   }
   impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
         self.done = true;
       }
-      Ok(())
-    }
-    fn should_continue(&self) -> bool {
-      !self.done
+      Ok(if !self.done { Flow::Continue(0) } else { Flow::Break(0) })
     }
   }
   let doc = parse("<a><b/><c/></a>");
@@ -128,7 +125,7 @@ fn the_document_type_node_is_reported_only_when_a_dtd_is_given() {
 struct Kinds(Vec<String>);
 
 impl EventHandler for Kinds {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     self.0.push(
       match event {
         EventRef::StartDocument => "start-document",
@@ -140,6 +137,6 @@ impl EventHandler for Kinds {
       }
       .to_owned(),
     );
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }

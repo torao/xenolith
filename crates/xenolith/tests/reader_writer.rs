@@ -1,6 +1,6 @@
 //! The application layer: XML read into events or a tree, and a tree written out.
 
-use xenolith::event::{EventHandler, EventRef};
+use xenolith::event::{EventHandler, EventRef, Flow};
 use xenolith::io::write::LineBreak;
 use xenolith::{Reader, Result, Writer};
 
@@ -9,11 +9,11 @@ use xenolith::{Reader, Result, Writer};
 struct Names(Vec<String>);
 
 impl EventHandler for Names {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       self.0.push(event.lexical());
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -22,6 +22,25 @@ fn events_reach_the_handler() {
   let mut names = Names::default();
   Reader::new().events("<a><b/><c/></a>".as_bytes(), &mut names).unwrap();
   assert_eq!(names.0, ["a", "b", "c"]);
+}
+
+#[test]
+fn a_handler_that_has_read_enough_ends_the_read_although_the_strict_check_stands_in_front() {
+  /// Stops at the first start element.
+  #[derive(Default)]
+  struct First(Vec<String>);
+  impl EventHandler for First {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+      let EventRef::StartElement(event) = event else { return Ok(Flow::Continue(0)) };
+      self.0.push(event.lexical());
+      Ok(Flow::Break(0))
+    }
+  }
+
+  // The rest is never read, so the mismatched end tag after the first element is not found.
+  let mut first = First::default();
+  Reader::new().events("<a><b/></c>".as_bytes(), &mut first).expect("stopping early is not an error");
+  assert_eq!(first.0, ["a"]);
 }
 
 #[test]

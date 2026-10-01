@@ -4,7 +4,7 @@ use xenolith::dom::DomSource;
 use xenolith::dom::build::DomBuilder;
 use xenolith::error::{Location, Result};
 use xenolith::event::validate::{Ended, Validator, ValidatorSet, ValidityError};
-use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource};
+use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the parser and the builder.
@@ -22,15 +22,16 @@ struct AllowedElements {
 }
 
 impl EventHandler for AllowedElements {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       let local = event.local;
       if !self.allowed.iter().any(|a| a == local) {
         let message = format!("element \"{local}\" is not allowed");
         self.errors.push(ValidityError::new(message, event.location.clone()));
+        return Ok(Flow::Continue(1));
       }
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -56,17 +57,19 @@ struct ReportsAtTheEnd {
 }
 
 impl EventHandler for ReportsAtTheEnd {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       EventRef::StartElement(event) => self.seen.push((event.local.to_owned(), event.location.clone())),
       EventRef::EndDocument => {
+        let validity_error_count = self.seen.len();
         for (name, at) in self.seen.drain(..) {
           self.errors.push(ValidityError::new(format!("late report of \"{name}\""), at));
         }
+        return Ok(Flow::Continue(validity_error_count));
       }
       _ => {}
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -84,10 +87,10 @@ impl Validator for ReportsAtTheEnd {
 #[derive(Default)]
 struct Names(Vec<String>);
 impl EventHandler for Names {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
-    let EventRef::StartElement(event) = event else { return Ok(()) };
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    let EventRef::StartElement(event) = event else { return Ok(Flow::Continue(0)) };
     self.0.push(event.local.to_owned());
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -189,14 +192,14 @@ struct RecordsThenRefuses {
 }
 
 impl EventHandler for RecordsThenRefuses {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       if event.local == "stop" {
         self.errors.push(ValidityError::new("\"stop\" is recorded before the refusal", event.location.clone()));
         return Err(xenolith::Error::validity("\"stop\" is refused"));
       }
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 

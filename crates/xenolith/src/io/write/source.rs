@@ -13,7 +13,7 @@ use crate::dtd::model::Dtd;
 use crate::error::{Error, Location, Result};
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventHandler,
-  EventRef, EventSource, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
+  EventRef, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef, XmlSpace,
 };
 use crate::name::NamePool;
 
@@ -431,14 +431,17 @@ impl<'h> WriterSource<'h> {
 
   /// Finalizes the handler's decision regarding the event. A refusal results in the run ending as a failure, while the
   /// run ends as a stoppage if all handlers have finished. No further reports are issued for a run that has concluded.
-  fn settle(&mut self, outcome: Result<()>) -> Result<()> {
-    if let Err(error) = outcome {
-      self.step = Step::Failed;
-      return Err(self.dispatch.fail(error));
-    }
-    if !self.dispatch.should_continue() {
-      self.step = Step::Stopped;
-      self.dispatch.finish(Outcome::Stopped);
+  fn settle(&mut self, outcome: Result<Flow>) -> Result<()> {
+    match outcome {
+      Ok(Flow::Continue(_)) => {}
+      Ok(Flow::Break(_)) => {
+        self.step = Step::Stopped;
+        self.dispatch.finish(Outcome::Stopped);
+      }
+      Err(error) => {
+        self.step = Step::Failed;
+        return Err(self.dispatch.fail(error));
+      }
     }
     Ok(())
   }

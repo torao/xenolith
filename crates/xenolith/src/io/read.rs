@@ -24,14 +24,13 @@ pub use async_reader::AsyncReader;
 #[cfg(feature = "async")]
 pub use async_resolve::{AsyncEntityReader, AsyncUriResolver};
 
-use std::io::Read;
-
 use crate::error::{Error, Location, Result};
+use std::io::Read;
 
 use crate::attr::Attributes;
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventCursor,
-  EventHandler, EventSource, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
+  EventHandler, EventSource, Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::io::resolve::{NoResolver, RequestKind, UriResolver};
 use crate::io::stream::CharStream;
@@ -459,12 +458,13 @@ impl<'h, R: Read> EventCursor<'h> for StreamSource<'h, R> {
       Step::Before => {
         self.step = Step::Reading;
         let event = EventRef::StartDocument;
-        if let Err(error) = self.dispatch.handle(&event) {
-          self.step = Step::Done;
-          return Err(self.dispatch.fail(error));
-        }
-        if !self.dispatch.should_continue() {
-          self.step = Step::Stopped;
+        match self.dispatch.handle(&event) {
+          Ok(Flow::Continue(_)) => {}
+          Ok(Flow::Break(_)) => self.step = Step::Stopped,
+          Err(error) => {
+            self.step = Step::Done;
+            return Err(self.dispatch.fail(error));
+          }
         }
         return Ok(Some(event));
       }
@@ -493,13 +493,14 @@ impl<'h, R: Read> EventCursor<'h> for StreamSource<'h, R> {
       self.base = base;
     }
     let event = current_event(&self.parser, self.base.as_deref()).expect("the parser reported an event it models");
-    if let Err(error) = self.dispatch.handle(&event) {
-      self.step = Step::Done;
-      return Err(self.dispatch.fail(error));
-    }
-    if !self.dispatch.should_continue() {
-      // A handler has all it wanted; the document was not read in full, so no EndDocument follows.
-      self.step = Step::Stopped;
+    match self.dispatch.handle(&event) {
+      Ok(Flow::Continue(_)) => {}
+      // The handlers have all they wanted; the document was not read in full, so no EndDocument follows.
+      Ok(Flow::Break(_)) => self.step = Step::Stopped,
+      Err(error) => {
+        self.step = Step::Done;
+        return Err(self.dispatch.fail(error));
+      }
     }
     Ok(Some(event))
   }

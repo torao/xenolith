@@ -15,14 +15,13 @@ pub mod document;
 
 pub use document::DocumentDtd;
 
-use std::collections::HashMap;
-
 use crate::attr::Attributes;
 use crate::chars;
 use crate::dtd::{AttDef, AttType, ContentSpec, DefaultDecl, Dtd, GeneralEntity};
 use crate::error::{Location, Result};
-use crate::event::{EventHandler, EventRef};
+use crate::event::{EventHandler, EventRef, Flow};
 use crate::name::{self, NameId, NamePool};
+use std::collections::HashMap;
 
 use crate::dtd::validate::content::ContentModel;
 use crate::event::validate::{Validator, ValidityError};
@@ -501,9 +500,10 @@ impl DtdValidator {
 }
 
 impl EventHandler for DtdValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // The list is taken out for the length of this event, so a check may borrow the validator while it reports.
     let mut errors = std::mem::take(&mut self.errors);
+    let before = errors.len();
     match event {
       EventRef::StartElement(event) => {
         self.start_element(event.prefix, event.local, event.attributes, &event.location, &mut errors);
@@ -518,9 +518,10 @@ impl EventHandler for DtdValidator {
       // A comment, a processing instruction, and the document's own start and doctype are not content a DTD constrains.
       EventRef::StartDocument | EventRef::Comment(_) | EventRef::ProcessingInstruction(_) | EventRef::Doctype(_) => {}
     }
+    let event_validity_error_count = errors.len() - before;
     self.errors = errors;
     // A validity error is recoverable, so the document is not refused over one; the errors are read back afterwards.
-    Ok(())
+    Ok(Flow::Continue(event_validity_error_count))
   }
 }
 

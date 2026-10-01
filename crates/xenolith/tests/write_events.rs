@@ -3,7 +3,7 @@
 use xenolith::dom::DomSource;
 use xenolith::dom::build::DomBuilder;
 use xenolith::error::{Error, Result};
-use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource};
+use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
 use xenolith::io::StreamSource;
 use xenolith::io::write::XmlWriter;
 
@@ -64,13 +64,13 @@ fn a_doctype_is_written_before_the_root_without_its_internal_subset() {
 struct Refuse;
 
 impl EventHandler for Refuse {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event
       && event.local == "bad"
     {
       return Err(Error::validity("the schema forbids <bad>"));
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -95,7 +95,7 @@ fn an_end_element_with_nothing_open_is_refused_rather_than_a_panic() {
   // The incremental calls panic on this, because there it is a mistake in the calling code. Driven by events, which
   // may come from anywhere, it is an error the caller can handle.
   let mut writer = XmlWriter::new(Vec::new());
-  let error = writer.handle(&EventRef::EndDocument).and_then(|()| writer.handle(&event_end())).unwrap_err();
+  let error = writer.handle(&EventRef::EndDocument).and_then(|_| writer.handle(&event_end())).unwrap_err();
   assert!(error.to_string().contains("no element open"), "{error}");
 }
 

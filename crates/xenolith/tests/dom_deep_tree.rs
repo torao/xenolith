@@ -66,16 +66,16 @@ fn descending_does_not_recurse_on_depth() {
 fn emitting_a_deep_tree_does_not_recurse_on_depth() {
   use xenolith::dom::DomSource;
   use xenolith::error::Result;
-  use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource};
+  use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
 
   #[derive(Default)]
   struct CountElements(usize);
   impl EventHandler for CountElements {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if matches!(event, EventRef::StartElement(_)) {
         self.0 += 1;
       }
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 

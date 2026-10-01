@@ -43,29 +43,29 @@ fn start(w: &mut XmlWriter<Vec<u8>>, name: &str, attributes: &[(&str, &str)]) ->
     None,
     Location::unknown(),
   );
-  w.handle(&EventRef::StartElement(event))
+  w.handle(&EventRef::StartElement(event)).map(drop)
 }
 
 /// Hands `w` an end element event for `name`, which has to be the innermost element open.
 fn end(w: &mut XmlWriter<Vec<u8>>, name: &str) -> Result<()> {
-  w.handle(&EventRef::EndElement(EndElementEventRef::new(None, name, None, Location::unknown())))
+  w.handle(&EventRef::EndElement(EndElementEventRef::new(None, name, None, Location::unknown()))).map(drop)
 }
 
 fn text(w: &mut XmlWriter<Vec<u8>>, text: &str) -> Result<()> {
-  w.handle(&EventRef::Characters(CharactersEventRef::new(text, Location::unknown())))
+  w.handle(&EventRef::Characters(CharactersEventRef::new(text, Location::unknown()))).map(drop)
 }
 
 fn cdata(w: &mut XmlWriter<Vec<u8>>, text: &str) -> Result<()> {
-  w.handle(&EventRef::Cdata(CdataEventRef::new(text, Location::unknown())))
+  w.handle(&EventRef::Cdata(CdataEventRef::new(text, Location::unknown()))).map(drop)
 }
 
 fn comment(w: &mut XmlWriter<Vec<u8>>, text: &str) -> Result<()> {
-  w.handle(&EventRef::Comment(CommentEventRef::new(text, Location::unknown())))
+  w.handle(&EventRef::Comment(CommentEventRef::new(text, Location::unknown()))).map(drop)
 }
 
 fn pi(w: &mut XmlWriter<Vec<u8>>, target: &str, data: &str) -> Result<()> {
   let event = ProcessingInstructionEventRef::new(target, data, Location::unknown(), Location::unknown());
-  w.handle(&EventRef::ProcessingInstruction(event))
+  w.handle(&EventRef::ProcessingInstruction(event)).map(drop)
 }
 
 /// Hands `w` a doctype event with an empty DTD, since the writer never writes the internal subset.
@@ -78,7 +78,7 @@ fn doctype(
   let dtd = Dtd::default();
   let pool = NamePool::new();
   let event = DoctypeEventRef::new(name, public_id, system_id, &dtd, &pool, Location::unknown());
-  w.handle(&EventRef::Doctype(event))
+  w.handle(&EventRef::Doctype(event)).map(drop)
 }
 
 fn written(build: impl FnOnce(&mut XmlWriter<Vec<u8>>) -> Result<()>) -> String {
@@ -125,7 +125,7 @@ fn escapes_text_and_attributes() {
 #[test]
 fn writes_the_prolog_and_leaves() {
   let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_standalone(Some(true)), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     comment(w, "hi")?;
     start(w, "a", &[])?;
     pi(w, "pi", "d")?;
@@ -162,7 +162,7 @@ fn a_doctype_takes_the_shape_its_identifiers_allow() {
 #[test]
 fn a_doctype_sits_between_the_declaration_and_the_root() {
   let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     doctype(w, Some("note"), None, Some("note.dtd"))?;
     start(w, "note", &[])?;
     end(w, "note")
@@ -173,7 +173,7 @@ fn a_doctype_sits_between_the_declaration_and_the_root() {
 #[test]
 fn whitespace_outside_the_root_is_written_as_given() {
   let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     text(w, "\n")?;
     doctype(w, Some("a"), None, None)?;
     text(w, "\n")?;
@@ -206,7 +206,7 @@ fn anything_but_whitespace_outside_the_root_is_refused_by_the_strict_validator_a
     let mut w = XmlWriter::new(Vec::new());
     {
       let mut lane = Dispatch::new().with_handler(&mut strict).with_handler(&mut w);
-      lane.handle(&EventRef::StartDocument).unwrap();
+      let _ = lane.handle(&EventRef::StartDocument).unwrap();
       let error = lane.handle(&event).expect_err("not allowed outside the root element");
       assert!(matches!(error, Error::WellFormedness { .. }), "{error}");
     }
@@ -280,7 +280,7 @@ fn a_document_that_begins_drops_what_an_earlier_one_left_open() {
   start(&mut w, "b", &[]).unwrap();
   assert_eq!(w.open.len(), 2);
 
-  w.handle(&EventRef::StartDocument).unwrap();
+  let _ = w.handle(&EventRef::StartDocument).unwrap();
   assert_eq!(w.open.len(), 0, "a document's beginning is a new run");
   assert!(!w.pending, "the start tag the earlier run left open is not this run's to close");
 
@@ -292,7 +292,7 @@ fn a_document_that_begins_drops_what_an_earlier_one_left_open() {
 #[test]
 fn the_declaration_is_written_when_the_document_starts() {
   let out = written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_standalone(Some(false)), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     start(w, "a", &[])?;
     end(w, "a")
   });
@@ -303,7 +303,7 @@ fn the_declaration_is_written_when_the_document_starts() {
 fn what_follows_the_declaration_is_the_line_break_set_for_it() {
   let write = |line_break: Option<LineBreak>| {
     written_by(XmlWriter::new(Vec::new()).with_declaration(true).with_declaration_line_break(line_break), |w| {
-      w.handle(&EventRef::StartDocument)?;
+      let _ = w.handle(&EventRef::StartDocument)?;
       start(w, "a", &[])?;
       end(w, "a")
     })
@@ -319,7 +319,7 @@ fn what_follows_the_declaration_is_the_line_break_set_for_it() {
   assert_eq!(write(None), format!("{declaration}<a/>"));
   assert_eq!(LineBreak::default(), LineBreak::Lf);
   let unset = written_by(XmlWriter::new(Vec::new()).with_declaration(true), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     start(w, "a", &[])?;
     end(w, "a")
   });
@@ -327,7 +327,7 @@ fn what_follows_the_declaration_is_the_line_break_set_for_it() {
 
   // Without a declaration there is nothing for it to follow, so nothing is written.
   let out = written_by(XmlWriter::new(Vec::new()).with_declaration_line_break(Some(LineBreak::CrLf)), |w| {
-    w.handle(&EventRef::StartDocument)?;
+    let _ = w.handle(&EventRef::StartDocument)?;
     start(w, "a", &[])?;
     end(w, "a")
   });

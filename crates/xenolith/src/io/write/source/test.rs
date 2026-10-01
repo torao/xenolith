@@ -108,15 +108,11 @@ fn a_handler_that_finishes_early_ends_the_run() {
     outcome: Option<&'static str>,
   }
   impl EventHandler for First {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.names.push(event.local.to_owned());
       }
-      Ok(())
-    }
-
-    fn should_continue(&self) -> bool {
-      self.names.is_empty()
+      Ok(if self.names.is_empty() { Flow::Continue(0) } else { Flow::Break(0) })
     }
 
     fn finish(&mut self, outcome: Outcome<'_>) {
@@ -152,13 +148,9 @@ fn a_handler_that_finishes_at_the_end_of_the_document_completed_the_run() {
   }
 
   impl EventHandler for Whole {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.ended |= matches!(event, EventRef::EndDocument);
-      Ok(())
-    }
-
-    fn should_continue(&self) -> bool {
-      !self.ended
+      Ok(if !self.ended { Flow::Continue(0) } else { Flow::Break(0) })
     }
 
     fn finish(&mut self, outcome: Outcome<'_>) {
@@ -188,8 +180,8 @@ fn dropping_without_ending_the_document_abandons_the_run() {
   #[derive(Default)]
   struct Outcomes(Vec<&'static str>);
   impl EventHandler for Outcomes {
-    fn handle(&mut self, _event: &EventRef<'_>) -> Result<()> {
-      Ok(())
+    fn handle(&mut self, _event: &EventRef<'_>) -> Result<Flow> {
+      Ok(Flow::Continue(0))
     }
 
     fn finish(&mut self, outcome: Outcome<'_>) {
@@ -216,7 +208,7 @@ fn the_document_is_started_and_ended_once() {
   #[derive(Default)]
   struct Kinds(Vec<&'static str>);
   impl EventHandler for Kinds {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       self.0.push(match event {
         EventRef::StartDocument => "start-document",
         EventRef::EndDocument => "end-document",
@@ -224,7 +216,7 @@ fn the_document_is_started_and_ended_once() {
         EventRef::EndElement(_) => "end",
         _ => "other",
       });
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 

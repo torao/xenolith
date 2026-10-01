@@ -11,7 +11,8 @@ struct RejectBad {
 }
 
 impl EventHandler for RejectBad {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    let before = self.errors.len();
     match event {
       EventRef::StartElement(event) if event.local == "bad" => {
         self.errors.push(ValidityError::new("element \"bad\" is not allowed", event.location.clone()));
@@ -19,7 +20,7 @@ impl EventHandler for RejectBad {
       EventRef::EndDocument => self.finished = true,
       _ => {}
     }
-    Ok(())
+    Ok(Flow::Continue(self.errors.len() - before))
   }
 }
 
@@ -83,18 +84,18 @@ fn runs_beside_an_application_handler_in_one_pass() {
   #[derive(Default)]
   struct Names(Vec<String>);
   impl EventHandler for Names {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if let EventRef::StartElement(event) = event {
         self.0.push(event.local.to_owned());
       }
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 
   let mut names = Names::default();
   let mut validator = RejectBad::default();
   {
-    let mut both = Dispatch::new().with_handler(&mut names).with_handler(&mut validator);
+    let mut both = Dispatch::new().with_handler(&mut names).with_validator(&mut validator);
     StreamSource::new("<a><bad/></a>".as_bytes()).with_handler(&mut both).emit().unwrap();
   }
 

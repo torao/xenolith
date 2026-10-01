@@ -18,7 +18,7 @@ fn parse_reader<R: Read>(mut source: StreamSource<'_, R>) -> Document {
   // event handed to it as it arrives.
   let mut builder = DomBuilder::new();
   while let Some(event) = source.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.handle(&event).expect("well-formed");
   }
   builder.into_document()
 }
@@ -164,19 +164,20 @@ fn captures_the_doctype_public_and_system_ids() {
 fn the_builder_runs_beside_another_handler_in_one_pass() {
   // The DOM builder is an EventHandler, so a source can drive it and another handler together in a single read. Here a
   // counting handler runs alongside it through a `Dispatch`; a validator would take the same place.
+
   use xenolith::dom::build::DomBuilder;
   use xenolith::error::Result;
-  use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource};
+  use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource, Flow};
   use xenolith::io::StreamSource;
 
   #[derive(Default)]
   struct CountElements(usize);
   impl EventHandler for CountElements {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+    fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if matches!(event, EventRef::StartElement(_)) {
         self.0 += 1;
       }
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 
@@ -222,9 +223,9 @@ fn an_end_element_the_events_do_not_open_is_refused() {
   let mut builder = DomBuilder::new();
   let mut source = StreamSource::new("<a>".as_bytes());
   let start = source.next().expect("read").expect("start document");
-  builder.handle(&start).expect("start document");
+  let _ = builder.handle(&start).expect("start document");
   let start = source.next().expect("read").expect("a start element");
-  builder.handle(&start).expect("the root opens");
+  let _ = builder.handle(&start).expect("the root opens");
   let error = builder.handle(&end("b")).expect_err("the innermost element open is `a`");
   assert!(error.to_string().contains("expected </a>"), "{error}");
 }
@@ -240,10 +241,10 @@ fn a_document_that_begins_drops_what_an_earlier_one_left_open() {
   let mut source = StreamSource::new("<a><b/>".as_bytes());
   // The read ends in an error, since `a` is never closed; what reached the builder before that is the point here.
   while let Ok(Some(event)) = source.next() {
-    builder.handle(&event).expect("well-formed so far");
+    let _ = builder.handle(&event).expect("well-formed so far");
   }
 
-  builder.handle(&EventRef::StartDocument).expect("a new run");
+  let _ = builder.handle(&EventRef::StartDocument).expect("a new run");
   let end = EventRef::EndElement(EndElementEventRef::new(None, "a", None, Location::unknown()));
   let error = builder.handle(&end).expect_err("nothing is open in this run");
   assert!(error.to_string().contains("no element open"), "{error}");
@@ -274,12 +275,12 @@ fn the_first_document_is_built_in_the_one_the_builder_was_made_with() {
   // The document a run begins with is the one already there when nothing has been handled, so the first
   // `StartDocument` puts nothing back. Several in a row are the same run beginning, and leave the tree alone.
   let mut builder = DomBuilder::new();
-  builder.handle(&EventRef::StartDocument).expect("the run begins");
-  builder.handle(&EventRef::StartDocument).expect("still nothing handled");
+  let _ = builder.handle(&EventRef::StartDocument).expect("the run begins");
+  let _ = builder.handle(&EventRef::StartDocument).expect("still nothing handled");
 
   let mut source = StreamSource::new("<a/>".as_bytes());
   while let Some(event) = source.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.handle(&event).expect("well-formed");
   }
   let doc = builder.into_document();
   assert_eq!(doc.node_name(doc.document_element().unwrap()), "a");
@@ -296,7 +297,7 @@ fn a_dom_exception_reaches_the_caller_as_the_error_that_stopped_the_run() {
   let mut builder = DomBuilder::new();
   let mut first = StreamSource::new("<a/>".as_bytes());
   while let Some(event) = first.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.handle(&event).expect("well-formed");
   }
 
   let mut second = StreamSource::new("<b/>".as_bytes());
@@ -330,7 +331,7 @@ fn a_refusal_is_reported_where_the_event_that_caused_it_was() {
   let mut builder = DomBuilder::new();
   let mut first = StreamSource::with_system_id("<a/>".as_bytes(), "file:///doc.xml");
   while let Some(event) = first.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.handle(&event).expect("well-formed");
   }
 
   let mut second = StreamSource::with_system_id(

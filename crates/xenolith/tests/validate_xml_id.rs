@@ -62,7 +62,7 @@ fn an_xml_id_from_a_source_that_did_not_normalize_it_is_normalized_before_checki
       None,
       Location::unknown(),
     ));
-    ids.handle(&event).unwrap();
+    let _ = ids.handle(&event).unwrap();
   }
 
   let reported: Vec<String> = ids.errors().iter().map(|e| e.message().to_owned()).collect();

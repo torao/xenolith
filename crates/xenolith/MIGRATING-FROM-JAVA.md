@@ -132,7 +132,7 @@ class Titles extends DefaultHandler {
 
 ```rust
 use xenolith::io::StreamSource;
-use xenolith::event::{EventRef, EventCursor, EventHandler, EventSource};
+use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource, Flow};
 
 #[derive(Default)]
 struct Titles {
@@ -141,13 +141,13 @@ struct Titles {
 }
 
 impl EventHandler for Titles {
-  fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
     match event {
       EventRef::StartElement(event) => self.in_title = event.local == "title",
       EventRef::Characters(event) if self.in_title => self.found.push(event.text.to_owned()),
       _ => {}
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -172,8 +172,8 @@ violation and a recoverable one falls out of the types. A well-formedness violat
 from `emit` and the run stops; a validity violation is recorded as a `ValidityError` that a
 `Validator` keeps while the run goes on. A handler has the same channel: returning `Err` from
 `handle` refuses the document, and that error is what `emit` returns. Where nothing is wrong and
-the handler simply has all it wanted, it returns `false` from `should_continue` instead, and the
-run ends successfully.
+the handler simply has all it wanted, it returns `Flow::Break` from `handle` instead, and
+the run ends successfully.
 
 ### `DTDHandler` and `DeclHandler`
 
@@ -183,8 +183,12 @@ which it reports once the `DOCTYPE` and both subsets are read — so the DTD is 
 arrives, and a handler that wanted only the DTD can stop there:
 
 ```rust
-fn should_continue(&self) -> bool {
-  !self.done // set on the Doctype event; the document body is never read
+fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<Flow> {
+  if let EventRef::Doctype(doctype) = event {
+    // ... read what is needed from doctype.dtd ...
+    return Ok(Flow::Break(0)); // the document body is never read
+  }
+  Ok(Flow::Continue(0))
 }
 ```
 

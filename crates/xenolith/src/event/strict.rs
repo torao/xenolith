@@ -21,11 +21,13 @@ mod test;
 use crate::attr::AttributeRef;
 use crate::chars;
 use crate::error::{Error, Location, Result};
+use crate::event::validate::{Validator, ValidityError};
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
+use std::borrow::Cow;
 
 /// Validates whether the input events constitute a well-formed XML document.
 ///
@@ -98,7 +100,7 @@ use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 /// ```
 /// use xenolith::Result;
 /// use xenolith::event::strict::StrictXmlValidator;
-/// use xenolith::event::{CommentEventRef, EventCursor, EventHandler, EventRef, EventSource};
+/// use xenolith::event::{CommentEventRef, EventCursor, EventHandler, EventRef, EventSource, Flow};
 /// use xenolith::io::StreamSource;
 ///
 /// /// Checks a document as strictly as `StrictXmlValidator`, except that a comment may hold `--`.
@@ -109,7 +111,7 @@ use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 /// }
 ///
 /// impl EventHandler for CommentDashesAllowed {
-///   fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+///   fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
 ///     let EventRef::Comment(comment) = event else { return self.strict.handle(event) };
 ///     // One character is replaced by one, so every position is kept. A final dash is not followed by another and
 ///     // stays, so a comment that ends in `-` is still refused.
@@ -421,7 +423,26 @@ impl StrictXmlValidator {
 }
 
 impl EventHandler for StrictXmlValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  fn handle(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    // A violation refuses the document, so no error is ever recorded to be counted.
+    self.check(event).map(|()| Flow::Continue(0))
+  }
+}
+
+impl Validator for StrictXmlValidator {
+  /// Always empty: this validator refuses the document at the first violation instead of recording it.
+  fn errors(&self) -> Cow<'_, [ValidityError]> {
+    Cow::Borrowed(&[])
+  }
+
+  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+    self
+  }
+}
+
+impl StrictXmlValidator {
+  /// Checks one event against the rules this validator applies.
+  fn check(&mut self, event: &EventRef<'_>) -> Result<()> {
     if self.lexical_only {
       return lexical(event);
     }
