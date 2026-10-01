@@ -28,7 +28,7 @@ fn ascii_error(build: impl FnOnce(&mut WriterSource<'_>) -> Result<(), Error>) -
 #[test]
 fn the_declaration_gives_the_encoding_the_bytes_are_in() {
   let out = bytes(
-    |w| w.with_encoding("ISO-8859-1").expect("a built-in encoding").with_declaration(None),
+    |w| w.with_encoding("ISO-8859-1").expect("a built-in encoding").with_declaration(true),
     |doc| {
       doc.write_start_element("a")?;
       doc.write_characters("caf\u{e9}")?;
@@ -49,7 +49,7 @@ fn the_declared_name_can_differ_from_the_encoding_written() {
       w.with_encoding("ISO-8859-1")
         .expect("a built-in encoding")
         .with_declared_encoding("latin1")
-        .with_declaration(None)
+        .with_declaration(true)
     },
     |doc| doc.start_document(),
   );
@@ -127,7 +127,7 @@ fn a_legacy_japanese_encoding_writes_under_the_name_a_reader_knows() {
       w.with_encoding("windows-31j")
         .expect("through encoding_rs")
         .with_declared_encoding("Shift_JIS")
-        .with_declaration(None)
+        .with_declaration(true)
     },
     |doc| {
       doc.write_start_element("a")?;

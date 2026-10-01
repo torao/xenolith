@@ -205,3 +205,61 @@ fn escaping_leaves_existing_escapes_and_encodes_utf8() {
   assert_eq!(escape_uri("\u{3042}"), "%E3%81%82");
   assert_eq!(escape_uri("ok/path?q=1#f"), "ok/path?q=1#f");
 }
+
+/// The normal form of `s`, as text.
+fn normalized(s: &str) -> String {
+  UriReference::parse(s).unwrap().normalize().to_string()
+}
+
+#[test]
+fn normalization_lower_cases_what_is_case_insensitive() {
+  // §6.2.2.1: the scheme and the host, and nothing else — a path and a userinfo are case-sensitive.
+  assert_eq!(normalized("HTTP://Example.ORG/A/b"), "http://example.org/A/b");
+  assert_eq!(normalized("http://User@Example.ORG/"), "http://User@example.org/");
+  // An IPv6 literal is a host like any other.
+  assert_eq!(normalized("http://[2001:DB8::1]/a"), "http://[2001:db8::1]/a");
+}
+
+#[test]
+fn normalization_writes_percent_encoding_one_way() {
+  // §6.2.2.2: an octet that stands for an unreserved character is written as that character, and the hex digits of
+  // one that stays encoded are upper case.
+  assert_eq!(normalized("http://example.org/%7Euser/a%2fb"), "http://example.org/~user/a%2Fb");
+  assert_eq!(normalized("http://example.org/a?q=%7e#%7e"), "http://example.org/a?q=~#~");
+  // A sequence that is not `%` followed by two hex digits is left as it stands.
+  assert_eq!(normalized("http://example.org/a%zz%2"), "http://example.org/a%zz%2");
+}
+
+#[test]
+fn normalization_removes_the_dot_segments_of_a_hierarchy_only() {
+  assert_eq!(normalized("http://example.org/a/./b/../c"), "http://example.org/a/c");
+  // `%2E` is `.`, so an encoded dot segment is removed as well (§6.2.2.2 runs before §6.2.2.3).
+  assert_eq!(normalized("http://example.org/a/%2E%2E/b"), "http://example.org/b");
+  // In a relative reference the dots say where the reference points; `resolve` is what removes them.
+  assert_eq!(normalized("../a/./b"), "../a/./b");
+  assert_eq!(normalized("urn:isbn:0451450523"), "urn:isbn:0451450523");
+}
+
+#[test]
+fn normalization_applies_what_it_knows_of_a_scheme() {
+  // §6.2.3, for the schemes in `SCHEMES`: the implied port is dropped, and an empty path is the root.
+  assert_eq!(normalized("http://example.org:80"), "http://example.org/");
+  assert_eq!(normalized("https://example.org:443/a"), "https://example.org/a");
+  // An empty authority is still an authority, and a path that is not empty is kept as it was written.
+  assert_eq!(normalized("file://///"), "file://///");
+  assert_eq!(normalized("file://host"), "file://host/");
+  // An empty port stands for the implied one, whatever the scheme.
+  assert_eq!(normalized("http://example.org:/a"), "http://example.org/a");
+  // A port that is not the implied one stays, and so does the port of a scheme that is not listed.
+  assert_eq!(normalized("http://example.org:8080/a"), "http://example.org:8080/a");
+  assert_eq!(normalized("ftp://example.org:21/a"), "ftp://example.org:21/a");
+  assert_eq!(normalized("urn:example:a"), "urn:example:a", "no authority, so no root to imply");
+}
+
+#[test]
+fn a_normal_form_is_its_own_normal_form() {
+  for uri in ["HTTP://Example.ORG:80", "http://example.org/a/./b/../c", "http://example.org/%7Ea%2fb", "../a"] {
+    let once = normalized(uri);
+    assert_eq!(normalized(&once), once, "{uri}");
+  }
+}

@@ -10,9 +10,11 @@ use crate::dtd::model::Dtd;
 use crate::error::Result;
 use crate::event::strict::StrictXmlValidator;
 use crate::event::{Dispatch, EventCursor, EventHandler, EventSource};
-use crate::io::write::XmlWriter;
+use crate::io::resolve::{NoResolver, UriResolver};
+use crate::io::write::{LineBreak, XmlWriter};
 use crate::io::{ParserConfig, StreamSource};
 use crate::name::NamePool;
+use crate::xinclude::XIncludeTransform;
 
 /// Reads XML from a file or a byte sequence in memory and either passes it to a handler as events or constructs a DOM
 /// to return to the application.
@@ -38,25 +40,49 @@ use crate::name::NamePool;
 /// assert_eq!(doc.node_value(comment), Some(" one -- two "));
 /// # Ok::<(), xenolith::Error>(())
 /// ```
-#[derive(Debug)]
-pub struct Reader {
+pub struct Reader<'r> {
   system_id: Option<String>,
   strict: bool,
   encoding: Option<String>,
   config: ParserConfig,
+  /// Whether `xi:include` elements are replaced with what they name.
+  xinclude: bool,
+  /// The resolver every external resource is fetched through, lent by the application. A shared reference, since one
+  /// read has more than one borrower: the parser, and the XInclude stage when it is on.
+  resolver: &'r dyn UriResolver,
 }
 
-impl Default for Reader {
+impl std::fmt::Debug for Reader<'_> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    // Written by hand because a resolver is the application's own type and need not be printable.
+    f.debug_struct("Reader")
+      .field("system_id", &self.system_id)
+      .field("strict", &self.strict)
+      .field("encoding", &self.encoding)
+      .field("xinclude", &self.xinclude)
+      .field("resolver", &"…")
+      .finish_non_exhaustive()
+  }
+}
+
+impl Default for Reader<'_> {
   fn default() -> Self {
     Self::new()
   }
 }
 
-impl Reader {
+impl<'r> Reader<'r> {
   /// Creates a reader that performs a strict read without using a system identifier.
   #[must_use]
   pub fn new() -> Self {
-    Self { system_id: None, strict: true, encoding: None, config: ParserConfig::default() }
+    Self {
+      system_id: None,
+      strict: true,
+      encoding: None,
+      config: ParserConfig::default(),
+      xinclude: false,
+      resolver: NoResolver::shared(),
+    }
   }
 
   /// Sets the system identifier for the document read by this reader.
@@ -86,7 +112,7 @@ impl Reader {
   /// Sets the input encoding. This takes precedence over any declarations or the interpretation of the actual byte
   /// sequence.
   ///
-  /// The label specified here is based on parser specifications, so the acceptable values ​​depend on the `encodings`
+  /// The label specified here is based on parser specifications, so the acceptable values depend on the `encodings`
   /// feature. Specifying an unknown label will not result in a rejection at this stage; the error will occur when
   /// reading begins.
   #[must_use]
@@ -107,25 +133,156 @@ impl Reader {
     self
   }
 
+  /// Lends the resolver that every external resource is fetched through.
+  ///
+  /// Without one, a reference to an external entity is refused and an `xi:include` has nothing to include, which is
+  /// the safe default: fetching what a document names is the XML external-entity (XXE) attack surface. The resolver is
+  /// lent rather than given, so one with a cache or a catalogue in it serves every document read through this reader,
+  /// and the same one serves the parser and the XInclude stage within a read.
+  #[must_use]
+  pub fn with_resolver(mut self, resolver: &'r dyn UriResolver) -> Self {
+    self.resolver = resolver;
+    self
+  }
+
+  /// Whether `xi:include` elements are replaced with what they name, which they are not by default.
+  ///
+  /// Inclusion happens between the parser and the handler, so what the handler is given is the assembled document. It
+  /// needs a resolver: an `xi:include` in a read with none is refused, unless the element says what to do instead with
+  /// an `xi:fallback`. See [`xinclude`](crate::xinclude) for what is included and what is not, and wire an
+  /// [`XIncludeTransform`] by hand for the settings this flag does not reach.
+  #[must_use]
+  pub fn with_xinclude(mut self, on: bool) -> Self {
+    self.xinclude = on;
+    self
+  }
+
   /// Reads the `input` and passes each event to the `handler`.
   ///
   /// # Errors
   ///
   /// Aborted and an error is returned if the input cannot be read or is not well-formed.
+  ///
+  /// # Examples
+  ///
+  /// The following example reads the text of each `title` element while streaming the document, without building a
+  /// tree.
+  ///
+  /// ```
+  /// use xenolith::Reader;
+  /// use xenolith::event::{EventHandler, EventRef};
+  ///
+  /// #[derive(Default)]
+  /// struct Titles {
+  ///   inside: bool,
+  ///   found: Vec<String>,
+  /// }
+  ///
+  /// impl EventHandler for Titles {
+  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
+  ///     match event {
+  ///       EventRef::StartElement(start) if start.local == "title" => {
+  ///         self.inside = true;
+  ///         self.found.push(String::new());
+  ///       }
+  ///       // One run of text may arrive in several events, so each is appended to the title being read.
+  ///       EventRef::Characters(text) if self.inside => {
+  ///         if let Some(title) = self.found.last_mut() {
+  ///           title.push_str(text.text);
+  ///         }
+  ///       }
+  ///       EventRef::EndElement(end) if end.local == "title" => self.inside = false,
+  ///       _ => {}
+  ///     }
+  ///     Ok(())
+  ///   }
+  /// }
+  ///
+  /// let xml = "<library><book><title>Dune</title></book><book><title>Solaris</title></book></library>";
+  /// let mut titles = Titles::default();
+  /// Reader::new().events(xml.as_bytes(), &mut titles)?;
+  /// assert_eq!(titles.found, ["Dune", "Solaris"]);
+  /// # Ok::<(), xenolith::Error>(())
+  /// ```
+  ///
+  /// A transformation process can be interposed, defined by the application (one that acts as both an [`EventHandler`]
+  /// and an [`EventSource`]), between the reading process and the handler. In this example, the
+  /// application-implemented transformation process filters out all comments, while the underlying [`DomBuilder`]
+  /// constructs the tree:
+  ///
+  /// ```
+  /// use xenolith::Reader;
+  /// use xenolith::dom::build::DomBuilder;
+  /// use xenolith::event::{Dispatch, EventHandler, EventRef, EventSource, Outcome};
+  ///
+  /// /// Passes every event on except a comment.
+  /// #[derive(Default)]
+  /// struct DropComments<'h>(Dispatch<'h>);
+  ///
+  /// impl EventHandler for DropComments<'_> {
+  ///   fn handle(&mut self, event: &EventRef<'_>) -> xenolith::Result<()> {
+  ///     if matches!(event, EventRef::Comment(_)) { Ok(()) } else { self.0.handle(event) }
+  ///   }
+  ///   fn should_continue(&self) -> bool {
+  ///     self.0.should_continue()
+  ///   }
+  ///   fn finish(&mut self, outcome: Outcome<'_>) {
+  ///     self.0.finish(outcome);
+  ///   }
+  /// }
+  ///
+  /// impl<'h> EventSource<'h> for DropComments<'h> {
+  ///   fn with_handler(mut self, handler: &'h mut dyn EventHandler) -> Self {
+  ///     self.0.add(handler);
+  ///     self
+  ///   }
+  /// }
+  ///
+  /// let mut builder = DomBuilder::new();
+  /// {
+  ///   let mut transform = DropComments::default().with_handler(&mut builder);
+  ///   Reader::new().events("<a>one<!-- note -->two</a>".as_bytes(), &mut transform)?;
+  /// }
+  /// let doc = builder.into_document();
+  /// let root = doc.document_element().unwrap();
+  /// assert_eq!(doc.text_content(root), "onetwo");
+  /// assert_eq!(doc.children(root).count(), 1, "the comment is gone, and the text around it is one node");
+  /// # Ok::<(), xenolith::Error>(())
+  /// ```
   pub fn events<R: io::Read>(&self, input: R, handler: &mut dyn EventHandler) -> Result<()> {
+    // Everything here is built before the source, which is given the handlers and the resolver and therefore has to be
+    // dropped before them.
+    //
+    // Events are emitted by the parser; however, since the parser rejects invalid structures, namespaces, and
+    // characters themselves, the validator is responsible only for verifying lexical rules. As the validator is
+    // positioned upstream in the processing flow, any violation causes processing to halt before the events reach the
+    // handler — and before the XInclude stage fetches anything for it.
+    let mut strict = StrictXmlValidator::lexical_only();
+    let mut xinclude = self.xinclude.then(|| {
+      let mut xinclude = XIncludeTransform::new().with_config(self.config).with_strict(self.strict);
+      // A handle of the one resolver, which the parser below is given as well.
+      xinclude = xinclude.with_resolver(self.resolver);
+      xinclude
+    });
+
+    let mut lane = Dispatch::new();
+
+    // Strictness is evaluated before filters or transformers are invoked, and execution halts at the first sign of a
+    // problem. The XInclude vocabulary is judged by the transform itself.
     if self.strict {
-      // Events are emitted by the parser; however, since the parser rejects invalid structures, namespaces, and
-      // characters themselves, the validator is responsible only for verifying lexical rules.
-      let mut strict = StrictXmlValidator::lexical_only();
-
-      // As the validator is positioned upstream in the processing flow, any violation causes processing to halt
-      // before the events reach the handler.
-      let mut lane = Dispatch::new().with_handler(&mut strict).with_handler(handler);
-
-      self.source(input)?.with_handler(&mut lane).emit()
-    } else {
-      self.source(input)?.with_handler(handler).emit()
+      lane = lane.with_handler(&mut strict);
     }
+
+    match xinclude.as_mut() {
+      Some(include) => {
+        // The inclusion reports what it read to the handler, so the handler is behind it rather than beside it.
+        *include = std::mem::take(include).with_handler(handler);
+        lane = lane.with_handler(include);
+      }
+      None => lane = lane.with_handler(handler),
+    }
+
+    self.source(input, self.resolver)?.with_handler(&mut lane).emit()
   }
 
   /// Reads `input` into a tree.
@@ -144,7 +301,10 @@ impl Reader {
   }
 
   /// A source over `input`, carrying what this reader was configured with.
-  fn source<'h, R: io::Read>(&self, input: R) -> Result<StreamSource<'h, R>> {
+  ///
+  /// The resolver is passed in rather than read from the reader, because the source borrows it for as long as it lives
+  /// and so must be handed a borrow the caller keeps alive.
+  fn source<'h, R: io::Read>(&self, input: R, resolver: &'h dyn UriResolver) -> Result<StreamSource<'h, R>> {
     let mut source = match &self.system_id {
       Some(system_id) => StreamSource::with_system_id(input, system_id),
       None => StreamSource::new(input),
@@ -152,6 +312,7 @@ impl Reader {
     if let Some(label) = &self.encoding {
       source = source.with_encoding(label)?;
     }
+    source = source.with_resolver(resolver);
     Ok(source.with_config(self.config))
   }
 }
@@ -184,6 +345,7 @@ impl Reader {
 pub struct Writer {
   declaration: bool,
   standalone: Option<bool>,
+  declaration_line_break: Option<LineBreak>,
   doctype: bool,
   encoding: Option<String>,
   declared_encoding: Option<String>,
@@ -211,6 +373,17 @@ impl Writer {
   #[must_use]
   pub fn with_standalone(mut self, standalone: Option<bool>) -> Self {
     self.standalone = standalone;
+    self
+  }
+
+  /// Sets the line break to be written immediately after the XML declaration. The default is `None`, meaning nothing
+  /// is written (the XML declaration and the start of the root element or DOCTYPE will appear on the same line).
+  ///
+  /// This setting is effective only when the output of an XML declaration has been specified via
+  /// [`with_xml_declaration`](Self::with_xml_declaration).
+  #[must_use]
+  pub fn with_declaration_line_break(mut self, line_break: Option<LineBreak>) -> Self {
+    self.declaration_line_break = line_break;
     self
   }
 
@@ -256,9 +429,10 @@ impl Writer {
     if let Some(label) = &self.declared_encoding {
       writer = writer.with_declared_encoding(label);
     }
-    if self.declaration {
-      writer = writer.with_declaration(self.standalone);
-    }
+    writer = writer
+      .with_declaration(self.declaration)
+      .with_standalone(self.standalone)
+      .with_declaration_line_break(self.declaration_line_break);
     let mut source = DomSource::new(document);
     if self.doctype {
       // The writer reads the declaration's name and identifiers from the event and nothing else, so an empty DTD is

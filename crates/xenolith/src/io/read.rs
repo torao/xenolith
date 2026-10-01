@@ -20,7 +20,7 @@ pub mod async_resolve;
 mod test;
 
 #[cfg(feature = "async")]
-pub use async_reader::{AsyncReader, NoResolver};
+pub use async_reader::AsyncReader;
 #[cfg(feature = "async")]
 pub use async_resolve::{AsyncEntityReader, AsyncUriResolver};
 
@@ -33,7 +33,7 @@ use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, Dispatch, DoctypeEventRef, EndElementEventRef, EventCursor,
   EventHandler, EventSource, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
 };
-use crate::io::resolve::{RequestKind, UriResolver};
+use crate::io::resolve::{NoResolver, RequestKind, UriResolver};
 use crate::io::stream::CharStream;
 
 use crate::io::parse::config::ParserConfig;
@@ -71,7 +71,9 @@ pub struct StreamSource<'h, R> {
   buffer: Vec<u8>,
   /// Whether `source` has reached its end; once set, the document is fed nothing more.
   finished: bool,
-  resolver: Option<Box<dyn UriResolver>>,
+  /// The resolver used when it is necessary to fetch external resources. Like a handler, this is borrowed rather than
+  /// owned. It is [`NoResolver`] until the application lends one, so there is always one to ask.
+  resolver: &'h dyn UriResolver,
   /// The handlers this source was built with, which every event reaches.
   dispatch: Dispatch<'h>,
   /// Where the cursor has reached, so `next` knows whether the document has begun or ended.
@@ -109,7 +111,7 @@ impl<R> std::fmt::Debug for StreamSource<'_, R> {
     f.debug_struct("StreamSource")
       .field("finished", &self.finished)
       .field("open_entities", &self.entities.len())
-      .field("has_resolver", &self.resolver.is_some())
+      .field("resolver", &"…")
       .finish_non_exhaustive()
   }
 }
@@ -157,7 +159,7 @@ impl<'h, R: Read> StreamSource<'h, R> {
       parser: Parser::with_document(document),
       buffer: vec![0; READ_BUFFER_SIZE],
       finished: false,
-      resolver: None,
+      resolver: NoResolver::shared(),
       dispatch: Dispatch::new(),
       step: Step::Before,
       base: None,
@@ -169,9 +171,37 @@ impl<'h, R: Read> StreamSource<'h, R> {
   /// Without one, a reference to an external entity is a fatal error — the safe default, since
   /// resolving external entities is the XML external-entity (XXE) attack surface. Supply a
   /// resolver only for trusted input; see [`UriResolver`].
+  ///
+  /// The application retains ownership of the resolver, and its lifespan can extend beyond the duration of a single
+  /// processing operation; consequently, a single resolver — such as one incorporating a cache or catalog — can be
+  /// shared across multiple document processing tasks.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use std::io::Read;
+  /// use xenolith::event::{EventCursor, EventSource};
+  /// use xenolith::io::StreamSource;
+  /// use xenolith::io::resolve::{EntityRequest, UriResolver};
+  ///
+  /// struct Catalog;
+  /// impl UriResolver for Catalog {
+  ///   fn resolve(&self, request: &EntityRequest) -> xenolith::Result<Option<Box<dyn Read>>> {
+  ///     Ok((request.system_id() == "urn:greeting").then(|| Box::new(&b"<hello/>"[..]) as Box<dyn Read>))
+  ///   }
+  /// }
+  ///
+  /// // The resolver is a local of the caller's, lent to each read in turn.
+  /// let mut catalog = Catalog;
+  /// let xml = "<!DOCTYPE d [<!ENTITY e SYSTEM 'urn:greeting'>]><d>&e;</d>";
+  /// StreamSource::new(xml.as_bytes()).with_resolver(&catalog).emit()?;
+  /// StreamSource::new(xml.as_bytes()).with_resolver(&catalog).emit()?;
+  /// # Ok::<(), xenolith::Error>(())
+  /// ```
+  ///
   #[must_use]
-  pub fn with_resolver(mut self, resolver: impl UriResolver + 'static) -> Self {
-    self.resolver = Some(Box::new(resolver));
+  pub fn with_resolver(mut self, resolver: &'h dyn UriResolver) -> Self {
+    self.resolver = resolver;
     self
   }
 
@@ -245,17 +275,11 @@ impl<'h, R: Read> StreamSource<'h, R> {
   fn resolve_entity(&mut self) -> Result<()> {
     let request = self.parser.pending_entity().expect("the parser requested an entity");
     let kind = request.kind();
-    let Some(resolver) = &mut self.resolver else {
-      // Refused here rather than resolved; the message gives the opt-in so the caller knows how to allow it.
-      let at = self.parser.location();
-      let message = format!("{request}: no resolver is configured; call StreamSource::with_resolver to allow this");
-      return Err(Error::well_formedness(message).at(at));
-    };
     // The resolver is handed a request, not a position, so a failure of its own carries none. The position added here
     // is where the construct that called for the entity begins, the reference or the `DOCTYPE`, rather than the
     // parser's current position just past it.
     let at = self.parser.event_location();
-    let Some(reader) = resolver.resolve(request).map_err(|error| error.or_at(at))? else {
+    let Some(reader) = self.resolver.resolve(request).map_err(|error| error.or_at(at))? else {
       // The resolver does not have this entity; declining lets the parser decide the error.
       return self.parser.decline_entity();
     };
@@ -266,6 +290,9 @@ impl<'h, R: Read> StreamSource<'h, R> {
         self.entities.push(EntitySource { reader, finished: false });
         Ok(())
       }
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // resource itself and never hands the request to a parser.
+      RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
       // The DTD-side kinds are added to the DTD text, so they are read whole.
       RequestKind::ExternalSubset | RequestKind::ParameterEntity => {
         let mut reader = reader;
@@ -308,6 +335,9 @@ impl<'h, R: Read> StreamSource<'h, R> {
       let what = if from_entity { "an external entity" } else { "the document" };
       Error::io(format!("cannot read {what}: {e}")).at(at).caused_by(e)
     })?;
+    if read > self.buffer.len() {
+      return Err(Error::overlong_read(read, self.buffer.len()));
+    }
     let last = read == 0;
     self.parser.feed(&self.buffer[..read], last)?;
     if from_entity {

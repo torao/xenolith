@@ -111,6 +111,8 @@ pub enum TokenKind {
   /// One run of character data is not always one event: a long run is delivered as several adjacent `Text` events so
   /// it is not buffered without bound, and a reference or entity boundary within a run also splits it. A consumer that
   /// wants one maximal text node coalesces adjacent `Text` events, as the DOM tree builder does.
+  ///
+  /// Only whitespace characters permitted by XML may be placed before or after the root element of the document.
   Text,
 
   /// The content of a CDATA section, in [`TokenRef::CData`]. Reported separately from text because the DOM and the
@@ -1146,19 +1148,15 @@ impl Parser {
 
   /// Emits the pending text run as a `Text` event, or returns `None` when there is nothing to report.
   ///
-  /// Inside the root element, this moves the run into the `text` field, from where [`TokenRef::Text`] borrows it, and
-  /// reports a `Text` event. The prolog and epilog allow only whitespace, so there this discards a whitespace-only run
-  /// and returns `None` but rejects any other text, pointing the error at its first non-whitespace character. An empty
-  /// run also returns `None`.
+  /// This moves the run into the `text` field (where [`TokenRef::Text`] references it) and reports a `Text` event.
+  /// Since only whitespace characters are permitted in the prologue and epilogue, runs consisting solely of whitespace
+  /// are reported in the same way; however, other text is rejected, and an error pointing to the first non-whitespace
+  /// character is returned. `None` is returned for an empty run.
   fn flush_text(&mut self) -> Result<Option<TokenKind>> {
     if self.pending_text.is_empty() {
       return Ok(None);
     }
-    if self.phase != Phase::Content {
-      if self.pending_text.chars().all(chars::is_whitespace) {
-        self.pending_text.clear();
-        return Ok(None);
-      }
+    if self.phase != Phase::Content && !self.pending_text.chars().all(chars::is_whitespace) {
       // Point at the first non-whitespace character, the one actually out of place, not the leading whitespace the run
       // may open with.
       self.token_at = self.pending_text_at.clone();
@@ -2049,10 +2047,10 @@ impl Parser {
   /// the limit errors that guard against a hostile entity.
   pub fn begin_entity(&mut self) -> Result<()> {
     let Some(request) = self.pending_entity.as_ref() else {
-      return Err(Error::internal("begin_entity called while the parser is not waiting for an entity"));
+      return Err(Error::misuse("begin_entity called while the parser is not waiting for an entity"));
     };
     if request.kind() != RequestKind::GeneralEntity {
-      return Err(Error::internal(
+      return Err(Error::misuse(
         "begin_entity is only for general entities; the DTD-side kinds go through provide_entity",
       ));
     }
@@ -2087,7 +2085,7 @@ impl Parser {
   /// and passes on the limit errors that guard against a hostile entity.
   pub fn provide_entity(&mut self, bytes: &[u8]) -> Result<()> {
     let Some(request) = self.pending_entity.take() else {
-      return Err(Error::internal("provide_entity called while the parser is not waiting for an entity"));
+      return Err(Error::misuse("provide_entity called while the parser is not waiting for an entity"));
     };
     let system_id = request.resolved_uri();
     let mut stream = CharStream::new();
@@ -2117,6 +2115,9 @@ impl Parser {
         self.dtd_assembly.provide_parameter_entity(stream.remainder(), stream.location());
         Ok(())
       }
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // resource itself and never hands the request to a parser.
+      RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
     }
   }
 
@@ -2132,7 +2133,7 @@ impl Parser {
   /// if the parser is not waiting for an entity.
   pub fn decline_entity(&mut self) -> Result<()> {
     let Some(request) = self.pending_entity.take() else {
-      return Err(Error::internal("decline_entity called while the parser is not waiting for an entity"));
+      return Err(Error::misuse("decline_entity called while the parser is not waiting for an entity"));
     };
     if request.kind() == RequestKind::ExternalSubset {
       self.external_subset_unread = true;

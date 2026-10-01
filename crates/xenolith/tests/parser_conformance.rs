@@ -103,7 +103,7 @@ struct FileResolver {
 }
 
 impl UriResolver for FileResolver {
-  fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
+  fn resolve(&self, request: &EntityRequest) -> Result<Option<Box<dyn std::io::Read>>, xenolith::Error> {
     let Some(uri) = request.resolved_uri() else { return Ok(None) };
     let path = uri.strip_prefix("file:///").map(PathBuf::from).unwrap_or_else(|| self.root.join(request.system_id()));
     Ok(std::fs::File::open(&path).ok().map(|f| Box::new(f) as Box<dyn std::io::Read>))
@@ -117,8 +117,9 @@ fn parse(path: &Path) -> Result<(), String> {
   let system_id = format!("file:///{}", path.display().to_string().replace('\\', "/"));
   // The parser leaves the lexical constraints to the strict validator, so a not-wf judgement needs both.
   let mut strict = StrictXmlValidator::new();
+  let resolver = FileResolver { root };
   StreamSource::with_system_id(std::io::BufReader::new(file), &system_id)
-    .with_resolver(FileResolver { root })
+    .with_resolver(&resolver)
     .with_handler(&mut strict)
     .emit()
     .map_err(|e| e.to_string())

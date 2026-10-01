@@ -171,9 +171,9 @@ impl ContentModel {
 #[derive(Debug)]
 pub(crate) struct MatchFailure {
   /// The child that did not fit, or `None` if the sequence ended too soon.
-  pub(crate) at: Option<NameId>,
+  pub at: Option<NameId>,
   /// The names the model would have accepted at that point.
-  pub(crate) allowed: Vec<NameId>,
+  pub allowed: Vec<NameId>,
 }
 
 fn has_duplicate_symbol(positions: &[usize], symbols: &[NameId]) -> bool {

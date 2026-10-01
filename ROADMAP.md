@@ -543,6 +543,13 @@ Phase 3 の DOM（アリーナ）と Phase 2c の基底 URI / ID の上に載る
 - **完了条件**: language fixup(ON/OFF/一致時スキップ) と検証順序ドキュメントが通る
 - **後続に回した点**: W3C XInclude 1.0 公式テストスイートの取り込み（他の公式スイート同様、未 vendored。env var 方式のハーネスは今後）。独自テストで機能面は網羅
 
+**3.5d. イベントパイプラインへの移設**（v0.1.0 の再構築）✅ 完了
+- `xenolith-xinclude` クレートを廃止し、コアクレートの `xenolith::xinclude` に `XIncludeTransform`（`EventHandler` かつ `EventSource` = transform）として実装。DOM の後処理ではなくパイプラインの一段になったので、取り込んだ内容は木を作らずそのまま下流（`DomBuilder` / `XmlWriter` / 検証器）へ流れる
+- 取得は `io::resolve::UriResolver` 経由（旧 `Loader` は廃止）。`Limits`（既定 深さ 8 / 総数 1000）、base / language fixup（既定 ON、個別に OFF 可）、ファサードは `Reader::with_xinclude` と `Reader::with_resolver`
+- **語彙の検査は検証器に分離**: 処理を続けられない誤りだけを Transform が致命として拒否し、文書の誤り（`parse` の値、`encoding` の併用、fallback の配置など）は妥当性エラーとして全件報告する。検証器は公開せず `xinclude::Schema`（`event::validate::Schema` の実装）が生成するので、`ValidatorSet::with_schema` に渡せる
+- **持ち越していない点**: `xpointer`（XPointer 実装そのものを待つ。属性があれば拒否する）。旧クレートの `xpointer.rs` は git 履歴に残る
+- **成果物**: `xenolith::xinclude`（`xinclude.rs` / `fixup.rs` / `validate.rs`、単体テスト 39 + doctest 2）、`StreamSource::with_resolver` はリゾルバを所有せず借用する形へ
+
 ### Phase 4 — XPath 1.0
 
 規模が大きいためサブフェーズに分割する（決定 3: XDM をツリーと分離し `trait` に対して評価器を動かす／名前空間ノードは XDM 側で合成。決定 4: AST を軸走査＋述語へ）。

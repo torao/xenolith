@@ -41,7 +41,7 @@ fn a_malformed_dtd_is_an_error() {
 fn an_external_parameter_entity_is_fetched_through_the_resolver() {
   struct Catalog;
   impl UriResolver for Catalog {
-    fn resolve(&mut self, request: &EntityRequest) -> Result<Option<Box<dyn Read>>, Error> {
+    fn resolve(&self, request: &EntityRequest) -> Result<Option<Box<dyn Read>>, Error> {
       if request.name() == Some("more") {
         Ok(Some(Box::new(std::io::Cursor::new(&b"<!ELEMENT extra EMPTY>"[..]))))
       } else {

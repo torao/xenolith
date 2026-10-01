@@ -24,7 +24,8 @@ use crate::dom::walk::{Visit, Walk};
 /// **Be aware of memory leaks**. The arena does not free storage. Once a node is created, it retains its allocated
 /// space for the document's lifetime, even if it's not attached to the document. Furthermore,
 /// [`remove_child`](Self::remove_child) detaches the node but still does not free the memory. The only way to free
-/// them all is to drop the document.
+/// them all is to drop the document. A single document can store a maximum of `u32::MAX` nodes. Attempting to create
+/// more than that will cause a panic.
 ///
 /// Every method that takes a [`NodeId`] requires this document. A handle from elsewhere is rejected: a method that
 /// returns a [`Result`] reports [`ExceptionCode::WRONG_DOCUMENT_ERR`], and an accessor that returns a value panics

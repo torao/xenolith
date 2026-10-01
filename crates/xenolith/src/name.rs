@@ -197,7 +197,7 @@ impl NamePool {
   ///
   /// # Panics
   ///
-  /// If the pooled string exceeds the maximum value of a u32.
+  /// If the number of pooled strings exceeds the maximum value of a u32.
   ///
   pub fn intern(&mut self, name: &str) -> NameId {
     if let Some(&index) = self.index.get(name) {

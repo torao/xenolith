@@ -14,7 +14,7 @@
 //! Applications should specify a resolver only for trusted input and restrict the scope of resources accessible to the
 //! resolver.
 
-use std::fmt;
+use std::{fmt, io::Read};
 
 /// The type of external resource requested by [`EntityRequest`].
 ///
@@ -22,7 +22,7 @@ use std::fmt;
 /// entities, on the other hand, are defined within external resources. Consequently, the parser does not attempt to
 /// load external entities itself; instead, it pauses parsing and returns the request shown below to the driver to
 /// resolve the external reference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequestKind {
   /// An external general entity referenced from the document body.
   GeneralEntity,
@@ -30,6 +30,23 @@ pub enum RequestKind {
   ExternalSubset,
   /// An external parameter entity referenced while loading the DTD.
   ParameterEntity,
+  /// A resource an `xi:include` element names. The parser never asks for one of these: the request comes from
+  /// [`XIncludeTransform`](crate::xinclude::XIncludeTransform), which reads the resource itself.
+  XInclude {
+    /// The accept attribute on xi:include. §3.1:
+    /// > The value of the accept attribute may be used by the XInclude processor to aid in content negotiation.
+    /// > When the XInclude processor fetches a resource via HTTP, it should place the value of the accept attribute,
+    /// > if one exists, in the HTTP request as an Accept header as described in section 14.1 of [IETF RFC 2616].
+    /// > Values containing characters outside the range #x20 through #x7E must be flagged as fatal errors.
+    accept: Option<String>,
+    /// The `accept-language` attribute on xi:include. §3.1:
+    /// > The value of the accept-language attribute may be used by the XInclude processor to aid in content
+    /// > negotiation. When the XInclude processor fetches a resource via HTTP, it should place the value of the
+    /// > accept-language attribute, if one exists, in the HTTP request as an Accept-Language header as described in
+    /// > section 14.4 of [IETF RFC 2616]. Values containing characters outside the range #x20 through #x7E are
+    /// > disallowed in HTTP headers, and must be flagged as fatal errors.
+    accept_language: Option<String>,
+  },
 }
 
 /// A Request for an external entity. The parser itself cannot read.
@@ -92,7 +109,7 @@ impl EntityRequest {
   /// The type of request applied to the entity.
   #[must_use]
   pub fn kind(&self) -> RequestKind {
-    self.kind
+    self.kind.clone()
   }
 
   /// The system identifier obtained by resolving the URI against the [base URI](Self::base_uri). If the base URI is an
@@ -145,7 +162,7 @@ impl fmt::Display for EntityRequest {
 /// struct Catalog(HashMap<String, Vec<u8>>);
 ///
 /// impl UriResolver for Catalog {
-///   fn resolve(&mut self, request: &EntityRequest) -> xenolith::Result<Option<Box<dyn Read>>> {
+///   fn resolve(&self, request: &EntityRequest) -> xenolith::Result<Option<Box<dyn Read>>> {
 ///     let entry = request.name().and_then(|name| self.0.get(name)).cloned();
 ///     Ok(entry.map(|bytes| Box::new(Cursor::new(bytes)) as Box<dyn Read>))
 ///   }
@@ -160,5 +177,32 @@ pub trait UriResolver {
   /// Returns an error if an issue occurs while retrieving the resource. Wrap application-specific errors, such as
   /// database or network failures, in [`Error::resolver`](crate::Error::resolver). This preserves the error's origin
   /// information, allowing the caller to recover the original error via down-casting.
-  fn resolve(&mut self, request: &EntityRequest) -> crate::error::Result<Option<Box<dyn std::io::Read + 'static>>>;
+  fn resolve(&self, request: &EntityRequest) -> crate::error::Result<Option<Box<dyn std::io::Read + 'static>>>;
+}
+
+/// The resolver a reader has until the application lends one: it resolves nothing, and says how to change that.
+///
+/// Nothing is fetched by default, since fetching what a document names is the external-entity (XXE) attack surface. A
+/// reference to an external entity is therefore a fatal error, and an `xi:include` a resource error, until
+/// [`StreamSource::with_resolver`](crate::io::StreamSource::with_resolver) or its equivalent supplies a resolver. It
+/// answers an asynchronous driver in the same way, since it implements that side's resolver as well.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoResolver;
+
+impl NoResolver {
+  /// The one of these a reader holds before a resolver is lent to it.
+  ///
+  /// It resolves nothing, so nothing needs more than this one; a reader that has not been given a resolver borrows it
+  /// rather than holding an empty option of its own.
+  #[must_use]
+  pub fn shared() -> &'static dyn UriResolver {
+    &Self
+  }
+}
+
+impl UriResolver for NoResolver {
+  fn resolve(&self, request: &EntityRequest) -> crate::error::Result<Option<Box<dyn Read>>> {
+    let message = format!("{request}: no resolver is configured; attach one with with_resolver to allow this");
+    Err(crate::error::Error::resolver(message))
+  }
 }

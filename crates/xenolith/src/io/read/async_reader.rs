@@ -20,7 +20,7 @@ use crate::io::parse::config::ParserConfig;
 use crate::io::parse::entity::Entity;
 use crate::io::parse::{Parser, Progress, TokenKind};
 use crate::io::read::async_resolve::{AsyncEntityReader, AsyncUriResolver};
-use crate::io::resolve::RequestKind;
+use crate::io::resolve::{NoResolver, RequestKind};
 use crate::io::stream::CharStream;
 
 /// The read buffer's size, and so how many bytes are read from the source at a time.
@@ -80,14 +80,9 @@ impl<R, Resolver> std::fmt::Debug for AsyncReader<R, Resolver> {
   }
 }
 
-/// The default resolver of an [`AsyncReader`] refuses every external entity, so a reference to one is a fatal error
-/// until [`AsyncReader::with_resolver`] supplies a real one.
-///
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoResolver;
-
+/// The resolver that resolves nothing answers an asynchronous driver as it answers a synchronous one.
 impl AsyncUriResolver for NoResolver {
-  async fn resolve(&mut self, request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
+  async fn resolve(&self, request: &crate::io::resolve::EntityRequest) -> Result<Option<AsyncEntityReader>> {
     let message = format!("{request}: no resolver is configured; attach one with with_resolver to allow this");
     Err(Error::well_formedness(message))
   }
@@ -250,6 +245,9 @@ impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> 
         self.entities.push(AsyncEntitySource { reader, finished: false });
         Ok(())
       }
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // resource itself and never hands the request to a parser.
+      RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
       // The DTD-side kinds are added to the DTD text, so they are read whole.
       RequestKind::ExternalSubset | RequestKind::ParameterEntity => {
         let mut reader = reader;
@@ -293,6 +291,9 @@ impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> 
       let what = if from_entity { "an external entity" } else { "the document" };
       Error::io(format!("cannot read {what}: {e}")).at(at).caused_by(e)
     })?;
+    if read > self.buffer.len() {
+      return Err(Error::overlong_read(read, self.buffer.len()));
+    }
     let last = read == 0;
     self.parser.feed(&self.buffer[..read], last)?;
     if from_entity {

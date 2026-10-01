@@ -9,12 +9,11 @@
 
 ## Layout
 
-8 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
+7 クレート。依存は下から上への一方向で、各層は下の層しか知らない。
 
 | Crate | 責務 |
 |---|---|
-| `xenolith` | 本体。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI（平場）、イベント語彙・strict 検証・スキーマ非依存の `Schema`/`Validator` 契約と `xml:id` 検証（`event`）、XML 1.0 のプルパーサ・文字デコード・実体解決・SAX 相当の push アダプタ・シリアライザと StAX 相当の `XmlWriter`（`io`）、DTD の宣言モデル・構文解析・検証器（`dtd`）、アリーナ木（`dom`）、それらを繋いだ `Reader` / `Writer`（クレート直下） |
-| `xenolith-xinclude` | `xi:include` の展開。XPointer の framework / `element()` / `xmlns()` |
+| `xenolith` | 本体。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI（平場）、イベント語彙・strict 検証・スキーマ非依存の `Schema`/`Validator` 契約と `xml:id` 検証（`event`）、XML 1.0 のプルパーサ・文字デコード・実体解決と StAX 相当の `XmlWriter`（`io`）、DTD の宣言モデル・構文解析・検証器（`dtd`）、アリーナ木（`dom`）、`xi:include` の展開（`xinclude`）、それらを繋いだ `Reader` / `Writer`（クレート直下） |
 | `xenolith-xdm` | XPath データモデル。`Model` トレイトと DOM 実装 |
 | `xenolith-xpath` | XPath 1.0。字句、構文、評価器、コア関数、拡張関数の登録機構 |
 | `xenolith-xslt` | XSLT 1.0。パターン、スタイルシート、エンジン、`xsl:output` |
@@ -135,7 +134,7 @@ Linux で走らせる。
 | `xenolith-xpath` | JDK の `javax.xml.xpath` との差分テスト、プロパティテスト、ファジング |
 | `xenolith-xslt` | OASIS/Xalan 適合スイート |
 | `xenolith` の `dom` / `io::write` | ファジングの往復性質（書いたものが読み戻せ、同じ木になる） |
-| `xenolith-xdm` / `xenolith-xinclude` / `xenolith-exslt` / `xenolith-cli` | 自前のテストのみ |
+| `xenolith` の `xinclude` / `xenolith-xdm` / `xenolith-exslt` / `xenolith-cli` | 自前のテストのみ |
 
 ## Adding to the workspace
 

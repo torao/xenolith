@@ -16,6 +16,20 @@
 //! the caller via the source. Conversely, returning `false` from [`should_continue`](EventHandler::should_continue)
 //! terminates processing early without an error.
 //!
+//! <a name="transform"></a>
+//! A **transform** is a component that relays a pipeline while transforming events. It implements both [`EventHandler`]
+//! and [`EventSource`]. For example, `XIncludeTransform` replaces `xi:include` elements with the resources they
+//! specify, and transforms that adjust indentation or correct namespaces perform a similar function. This role is
+//! identical to that played by `org.xml.sax.XMLFilter` in SAX.
+//!
+//! The concept is a vocabulary rather than a trait, since a bound of `EventSource + EventHandler` says as much. What a
+//! transform is expected to uphold is therefore written here: every event it reports, whether it came from upstream or
+//! from the transform itself, goes to the handlers it was given through a [`Dispatch`] of its own; an event it has no
+//! reason to change is passed on unchanged; [`should_continue`](EventHandler::should_continue) and
+//! [`finish`](EventHandler::finish) are relayed to those handlers, since the end of the run is theirs as well; and its
+//! own state is reset on [`StartDocument`](EventRef::StartDocument), as for any handler used for more than one
+//! document. A transform is not an [`EventCursor`]: it pulls nothing, and is driven by whatever is upstream of it.
+//!
 //! [`Dispatch`] forwards a single event to multiple handlers. This allows application-level handlers and validators to
 //! receive the same event without requiring the source to be read twice.
 //!
@@ -308,6 +322,12 @@ pub enum EventRef<'a> {
 
   /// A sequence of character data. A single contiguous block of data (a "run") may be transmitted as multiple adjacent
   /// events; therefore, handlers that wish to treat the string as a complete unit must concatenate them.
+  ///
+  /// This event reports whitespace characters located before or after the root element (specifically, whitespace
+  /// appearing between the XML declaration, document type declaration, comments, processing instructions, and the root
+  /// element). Since XML does not permit characters other than whitespace in these positions, and because such
+  /// whitespace is not considered part of the document's content, it is excluded from the tree constructed from the
+  /// event.
   Characters(CharactersEventRef<'a>),
 
   /// The content of a CDATA section, reported separately from ordinary character data.
@@ -323,7 +343,7 @@ pub enum EventRef<'a> {
   Doctype(DoctypeEventRef<'a>),
 }
 
-impl EventRef<'_> {
+impl<'a> EventRef<'a> {
   /// The location of this event within the source document. It is `None` for the start and end of the document itself
   /// (where no position is specified).
   #[must_use]
@@ -337,6 +357,24 @@ impl EventRef<'_> {
       Self::Comment(event) => Some(&event.location),
       Self::ProcessingInstruction(event) => Some(&event.location),
       Self::Doctype(event) => Some(&event.location),
+    }
+  }
+
+  /// The start of an element with the given name, or `None` for any other event.
+  #[must_use]
+  pub fn start_element_named(&self, namespace: Option<&str>, local: &str) -> Option<&StartElementEventRef<'a>> {
+    match self {
+      EventRef::StartElement(start) if start.namespace == namespace && start.local == local => Some(start),
+      _ => None,
+    }
+  }
+
+  /// The end of an element with the given name, or `None` for any other event.
+  #[must_use]
+  pub fn end_element_named(&self, namespace: Option<&str>, local: &str) -> Option<&EndElementEventRef<'a>> {
+    match self {
+      EventRef::EndElement(end) if end.namespace == namespace && end.local == local => Some(end),
+      _ => None,
     }
   }
 }
@@ -505,6 +543,11 @@ impl StartElementEvent {
       self.base_uri.as_deref(),
       self.location.clone(),
     )
+  }
+
+  /// References the attribute with the specified name.
+  pub fn attribute(&self, namespace: Option<&str>, local: &str) -> Option<&Attribute> {
+    self.attributes.iter().find(|attr| attr.namespace.as_deref() == namespace && attr.local == local)
   }
 }
 

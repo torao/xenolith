@@ -93,24 +93,24 @@ impl NodeType {
 /// Attribute node data: name, value, owner element, and whether it is of type ID.
 #[derive(Clone, Debug)]
 pub(crate) struct AttrData {
-  pub(crate) name: QName,
-  pub(crate) value: String,
+  pub name: QName,
+  pub value: String,
   /// The element this attribute belongs to, or `None` while it is detached.
-  pub(crate) owner: Option<NodeId>,
+  pub owner: Option<NodeId>,
   /// Whether the attribute is of type `ID`, so [`get_element_by_id`](crate::dom::Document::get_element_by_id)
   /// considers it.
-  pub(crate) is_id: bool,
+  pub is_id: bool,
 }
 
 /// Element data: its name, its attribute nodes in document order, and, if recorded during tree construction, its
 /// effective base URI (XML Base).
 #[derive(Clone, Debug)]
 pub(crate) struct ElementData {
-  pub(crate) name: QName,
-  pub(crate) attributes: Vec<NodeId>,
+  pub name: QName,
+  pub attributes: Vec<NodeId>,
   /// The fully resolved base URI in effect at this element, interned. It is `None` for a
   /// hand-built element, or when no base is known.
-  pub(crate) base: Option<NameId>,
+  pub base: Option<NameId>,
 }
 
 /// The kind-specific payload of a node.
@@ -168,12 +168,12 @@ impl NodeData {
 /// A node's place in the tree, together with its payload.
 #[derive(Clone, Debug)]
 pub(crate) struct NodeSlot {
-  pub(crate) parent: Option<NodeId>,
-  pub(crate) first_child: Option<NodeId>,
-  pub(crate) last_child: Option<NodeId>,
-  pub(crate) previous_sibling: Option<NodeId>,
-  pub(crate) next_sibling: Option<NodeId>,
-  pub(crate) data: NodeData,
+  pub parent: Option<NodeId>,
+  pub first_child: Option<NodeId>,
+  pub last_child: Option<NodeId>,
+  pub previous_sibling: Option<NodeId>,
+  pub next_sibling: Option<NodeId>,
+  pub data: NodeData,
 }
 
 impl NodeSlot {

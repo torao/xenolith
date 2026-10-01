@@ -381,7 +381,7 @@ struct Recording {
 }
 
 impl crate::io::resolve::UriResolver for Recording {
-  fn resolve(&mut self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn std::io::Read>>> {
+  fn resolve(&self, request: &crate::io::resolve::EntityRequest) -> Result<Option<Box<dyn std::io::Read>>> {
     self.bases.borrow_mut().push((request.system_id().to_owned(), request.base_uri().map(ToOwned::to_owned)));
     let uri = request.resolved_uri().unwrap_or_default();
     let text = self.files.iter().find(|(id, _)| *id == uri).map(|(_, text)| *text);

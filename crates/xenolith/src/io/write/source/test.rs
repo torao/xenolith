@@ -80,7 +80,7 @@ fn a_validator_in_front_refuses_what_it_forbids() {
   let dtd = "<!ELEMENT a EMPTY>";
   let (dtd, pool) = crate::dtd::DtdReader::new(dtd.as_bytes()).read().expect("the DTD is read");
   let schema = crate::dtd::DtdSchema::new(dtd, pool);
-  let mut validation = ValidatorSet::new().with_schema(&schema).with_error_limit(1);
+  let mut validation = ValidatorSet::new().with_schema(&schema).with_max_errors(Some(0));
   let mut writer = XmlWriter::new(Vec::new());
   let error = {
     let mut lane = crate::event::Dispatch::new().with_handler(&mut validation).with_handler(&mut writer);

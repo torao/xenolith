@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use crate::error::Error;
 use crate::io::resolve::EntityRequest;
 
 /// A reader that reads a byte sequence from an external entity for asynchronous drivers.
@@ -49,6 +50,10 @@ impl AsyncEntityReader {
       let read = self.read(&mut chunk).await?;
       if read == 0 {
         return Ok(total);
+      }
+      if read > chunk.len() {
+        // This returns an `io::Error`, so the misuse error rides inside one.
+        return Err(std::io::Error::other(Error::overlong_read(read, chunk.len())));
       }
       out.extend_from_slice(&chunk[..read]);
       total += read;
@@ -98,7 +103,7 @@ pub trait AsyncUriResolver {
   /// database or network failure, say) with [`Error::resolver`](crate::Error::resolver), which keeps it as the
   /// error's source so a caller can recover it by downcasting.
   fn resolve(
-    &mut self,
+    &self,
     request: &EntityRequest,
   ) -> impl std::future::Future<Output = crate::error::Result<Option<AsyncEntityReader>>> + Send;
 }
