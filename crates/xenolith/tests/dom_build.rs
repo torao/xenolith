@@ -4,7 +4,7 @@ use std::io::Read;
 
 use xenolith::dom::build::DomBuilder;
 use xenolith::dom::{Document, NodeType};
-use xenolith::event::{EventCursor, EventHandler, EventSource};
+use xenolith::event::{EventConsumer, EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the builder.
@@ -18,7 +18,7 @@ fn parse_reader<R: Read>(mut source: StreamSource<'_, R>) -> Document {
   // event handed to it as it arrives.
   let mut builder = DomBuilder::new();
   while let Some(event) = source.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.consume(&event).expect("well-formed");
   }
   builder.into_document()
 }
@@ -106,7 +106,7 @@ fn xml_id_is_marked_so_get_element_by_id_finds_it() {
 fn xml_id_turned_off_leaves_an_ordinary_attribute_unless_the_dtd_declares_it() {
   let build = |xml: &str| {
     let mut builder = DomBuilder::new().with_xml_id(false);
-    StreamSource::new(xml.as_bytes()).with_handler(&mut builder).emit().unwrap();
+    StreamSource::new(xml.as_bytes()).add_consumer(&mut builder).emit().unwrap();
     builder.into_document()
   };
 
@@ -161,30 +161,31 @@ fn captures_the_doctype_public_and_system_ids() {
 }
 
 #[test]
-fn the_builder_runs_beside_another_handler_in_one_pass() {
-  // The DOM builder is an EventHandler, so a source can drive it and another handler together in a single read. Here a
-  // counting handler runs alongside it through a `Dispatch`; a validator would take the same place.
+fn the_builder_runs_beside_another_consumer_in_one_pass() {
+  // The DOM builder is an EventConsumer, so a source can drive it and another consumer together in a single read. Here
+  // a counting consumer runs alongside it through a `Dispatcher`; a validator would take the same place.
+
   use xenolith::dom::build::DomBuilder;
   use xenolith::error::Result;
-  use xenolith::event::{Dispatch, EventCursor, EventHandler, EventRef, EventSource};
+  use xenolith::event::{Dispatcher, EventConsumer, EventCursor, EventProducer, EventRef, Flow};
   use xenolith::io::StreamSource;
 
   #[derive(Default)]
   struct CountElements(usize);
-  impl EventHandler for CountElements {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  impl EventConsumer for CountElements {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if matches!(event, EventRef::StartElement(_)) {
         self.0 += 1;
       }
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 
   let mut builder = DomBuilder::new();
   let mut counter = CountElements::default();
   {
-    let mut both = Dispatch::new().with_handler(&mut builder).with_handler(&mut counter);
-    StreamSource::new("<doc><a/><b/></doc>".as_bytes()).with_handler(&mut both).emit().expect("well-formed");
+    let mut both = Dispatcher::new().add_consumer(&mut builder).add_consumer(&mut counter);
+    StreamSource::new("<doc><a/><b/></doc>".as_bytes()).add_consumer(&mut both).emit().expect("well-formed");
   }
 
   assert_eq!(counter.0, 3, "the counter saw every element in the same pass");
@@ -215,17 +216,17 @@ fn an_end_element_the_events_do_not_open_is_refused() {
 
   // Nothing open: the document sits under the elements and is not one to end, so this closes nothing.
   let mut builder = DomBuilder::new();
-  let error = builder.handle(&end("a")).expect_err("no element is open");
+  let error = builder.consume(&end("a")).expect_err("no element is open");
   assert!(error.to_string().contains("no element open"), "{error}");
 
   // Open, but named something else: closing the open one would build a tree the events do not describe.
   let mut builder = DomBuilder::new();
   let mut source = StreamSource::new("<a>".as_bytes());
   let start = source.next().expect("read").expect("start document");
-  builder.handle(&start).expect("start document");
+  let _ = builder.consume(&start).expect("start document");
   let start = source.next().expect("read").expect("a start element");
-  builder.handle(&start).expect("the root opens");
-  let error = builder.handle(&end("b")).expect_err("the innermost element open is `a`");
+  let _ = builder.consume(&start).expect("the root opens");
+  let error = builder.consume(&end("b")).expect_err("the innermost element open is `a`");
   assert!(error.to_string().contains("expected </a>"), "{error}");
 }
 
@@ -240,12 +241,12 @@ fn a_document_that_begins_drops_what_an_earlier_one_left_open() {
   let mut source = StreamSource::new("<a><b/>".as_bytes());
   // The read ends in an error, since `a` is never closed; what reached the builder before that is the point here.
   while let Ok(Some(event)) = source.next() {
-    builder.handle(&event).expect("well-formed so far");
+    let _ = builder.consume(&event).expect("well-formed so far");
   }
 
-  builder.handle(&EventRef::StartDocument).expect("a new run");
+  let _ = builder.consume(&EventRef::StartDocument).expect("a new run");
   let end = EventRef::EndElement(EndElementEventRef::new(None, "a", None, Location::unknown()));
-  let error = builder.handle(&end).expect_err("nothing is open in this run");
+  let error = builder.consume(&end).expect_err("nothing is open in this run");
   assert!(error.to_string().contains("no element open"), "{error}");
 }
 
@@ -255,11 +256,11 @@ fn a_second_document_through_one_builder_is_the_one_that_comes_out() {
   // first run built is gone. A caller that wants both takes the first with `into_document` before the second begins.
   let mut builder = DomBuilder::new();
   {
-    let mut source = StreamSource::new("<a/>".as_bytes()).with_handler(&mut builder);
+    let mut source = StreamSource::new("<a/>".as_bytes()).add_consumer(&mut builder);
     source.emit().expect("the first document is built");
   }
   {
-    let mut source = StreamSource::new("<b><c/></b>".as_bytes()).with_handler(&mut builder);
+    let mut source = StreamSource::new("<b><c/></b>".as_bytes()).add_consumer(&mut builder);
     source.emit().expect("the second document is built, not refused as a second root");
   }
   let doc = builder.into_document();
@@ -274,12 +275,12 @@ fn the_first_document_is_built_in_the_one_the_builder_was_made_with() {
   // The document a run begins with is the one already there when nothing has been handled, so the first
   // `StartDocument` puts nothing back. Several in a row are the same run beginning, and leave the tree alone.
   let mut builder = DomBuilder::new();
-  builder.handle(&EventRef::StartDocument).expect("the run begins");
-  builder.handle(&EventRef::StartDocument).expect("still nothing handled");
+  let _ = builder.consume(&EventRef::StartDocument).expect("the run begins");
+  let _ = builder.consume(&EventRef::StartDocument).expect("still nothing handled");
 
   let mut source = StreamSource::new("<a/>".as_bytes());
   while let Some(event) = source.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.consume(&event).expect("well-formed");
   }
   let doc = builder.into_document();
   assert_eq!(doc.node_name(doc.document_element().unwrap()), "a");
@@ -296,7 +297,7 @@ fn a_dom_exception_reaches_the_caller_as_the_error_that_stopped_the_run() {
   let mut builder = DomBuilder::new();
   let mut first = StreamSource::new("<a/>".as_bytes());
   while let Some(event) = first.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.consume(&event).expect("well-formed");
   }
 
   let mut second = StreamSource::new("<b/>".as_bytes());
@@ -306,7 +307,7 @@ fn a_dom_exception_reaches_the_caller_as_the_error_that_stopped_the_run() {
     if matches!(event, EventRef::StartDocument) {
       continue;
     }
-    if let Err(error) = builder.handle(&event) {
+    if let Err(error) = builder.consume(&event) {
       refused = Some(error);
       break;
     }
@@ -330,7 +331,7 @@ fn a_refusal_is_reported_where_the_event_that_caused_it_was() {
   let mut builder = DomBuilder::new();
   let mut first = StreamSource::with_system_id("<a/>".as_bytes(), "file:///doc.xml");
   while let Some(event) = first.next().expect("well-formed") {
-    builder.handle(&event).expect("well-formed");
+    let _ = builder.consume(&event).expect("well-formed");
   }
 
   let mut second = StreamSource::with_system_id(
@@ -344,7 +345,7 @@ fn a_refusal_is_reported_where_the_event_that_caused_it_was() {
     if matches!(event, EventRef::StartDocument) {
       continue;
     }
-    if let Err(error) = builder.handle(&event) {
+    if let Err(error) = builder.consume(&event) {
       refused = Some(error);
       break;
     }
@@ -355,6 +356,6 @@ fn a_refusal_is_reported_where_the_event_that_caused_it_was() {
   // The builder's own refusals are located the same way.
   let at = Location { line: 9, column: 4, ..Location::unknown() }.with_system_id("file:///doc.xml");
   let end = EventRef::EndElement(EndElementEventRef::new(None, "zz", None, at));
-  let error = DomBuilder::new().handle(&end).expect_err("nothing is open to end");
+  let error = DomBuilder::new().consume(&end).expect_err("nothing is open to end");
   assert_eq!(error.location().to_string(), "file:///doc.xml:9:4", "{error}");
 }

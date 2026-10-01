@@ -30,21 +30,21 @@ use std::io::Read;
 use xenolith::dom::build::DomBuilder;
 use xenolith::dom::{Document, DomSource};
 use xenolith::event::validate::ValidatorSet;
-use xenolith::event::{EventCursor, EventRef, EventSource};
+use xenolith::event::{EventCursor, EventProducer, EventRef};
 use xenolith::io::StreamSource;
 use xenolith::io::write::XmlWriter;
 
 /// Reads `xml` into a tree through the parser and the builder.
 fn build_tree(xml: &[u8]) -> xenolith::Result<Document> {
   let mut builder = DomBuilder::new();
-  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  StreamSource::new(xml).add_consumer(&mut builder).emit()?;
   Ok(builder.into_document())
 }
 
 /// Writes `document` out as XML text.
 fn write_tree(document: &Document) -> xenolith::Result<String> {
   let mut writer = XmlWriter::new(Vec::new());
-  DomSource::new(document).with_handler(&mut writer).emit()?;
+  DomSource::new(document).add_consumer(&mut writer).emit()?;
   Ok(String::from_utf8(writer.into_inner()).expect("the writer writes UTF-8 unless told otherwise"))
 }
 
@@ -122,7 +122,7 @@ impl Read for OneByteAtATime<'_> {
 pub fn validate_document(data: &[u8]) {
   let mut validation = ValidatorSet::new().validating_dtd(true).checking_xml_id(true);
   {
-    let mut source = StreamSource::new(data).with_handler(&mut validation);
+    let mut source = StreamSource::new(data).add_consumer(&mut validation);
     let _ = source.emit();
   }
   let report = validation.report();

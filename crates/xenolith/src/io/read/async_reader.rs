@@ -245,7 +245,7 @@ impl<R: AsyncRead + Unpin, Resolver: AsyncUriResolver> AsyncReader<R, Resolver> 
         self.entities.push(AsyncEntitySource { reader, finished: false });
         Ok(())
       }
-      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransform`, which fetches the
+      // The parser never asks for one of these: an `xi:include` is read by `XIncludeTransformer`, which fetches the
       // resource itself and never hands the request to a parser.
       RequestKind::XInclude { .. } => Err(Error::internal("the parser was handed an XInclude request")),
       // The DTD-side kinds are added to the DTD text, so they are read whole.

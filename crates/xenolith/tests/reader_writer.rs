@@ -1,6 +1,6 @@
 //! The application layer: XML read into events or a tree, and a tree written out.
 
-use xenolith::event::{EventHandler, EventRef};
+use xenolith::event::{EventConsumer, EventRef, Flow};
 use xenolith::io::write::LineBreak;
 use xenolith::{Reader, Result, Writer};
 
@@ -8,20 +8,39 @@ use xenolith::{Reader, Result, Writer};
 #[derive(Default)]
 struct Names(Vec<String>);
 
-impl EventHandler for Names {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for Names {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       self.0.push(event.lexical());
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
 #[test]
-fn events_reach_the_handler() {
+fn events_reach_the_consumer() {
   let mut names = Names::default();
   Reader::new().events("<a><b/><c/></a>".as_bytes(), &mut names).unwrap();
   assert_eq!(names.0, ["a", "b", "c"]);
+}
+
+#[test]
+fn a_consumer_that_has_read_enough_ends_the_read_although_the_strict_check_stands_in_front() {
+  /// Stops at the first start element.
+  #[derive(Default)]
+  struct First(Vec<String>);
+  impl EventConsumer for First {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+      let EventRef::StartElement(event) = event else { return Ok(Flow::Continue(0)) };
+      self.0.push(event.lexical());
+      Ok(Flow::Break(0))
+    }
+  }
+
+  // The rest is never read, so the mismatched end tag after the first element is not found.
+  let mut first = First::default();
+  Reader::new().events("<a><b/></c>".as_bytes(), &mut first).expect("stopping early is not an error");
+  assert_eq!(first.0, ["a"]);
 }
 
 #[test]
@@ -32,8 +51,8 @@ fn a_strict_read_refuses_each_lexical_violation() {
 }
 
 #[test]
-fn a_strict_read_stops_before_the_handler_sees_the_violation() {
-  // The strict validator stands in front of the handler, so the handler never receives the refused start tag.
+fn a_strict_read_stops_before_the_consumer_sees_the_violation() {
+  // The strict validator stands in front of the consumer, so the consumer never receives the refused start tag.
   let mut names = Names::default();
   let result = Reader::new().events("<a><1b/></a>".as_bytes(), &mut names);
   assert!(result.is_err());

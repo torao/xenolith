@@ -1,15 +1,15 @@
-//! The lexical constraints the parser leaves to `StrictXmlValidator`, checked end to end: the parser delivers the
+//! The lexical constraints the parser leaves to `StrictXmlConstraints`, checked end to end: the parser delivers the
 //! event, and the validator refuses it with the message and the position the parser used to give itself.
 
 use xenolith::error::Error;
-use xenolith::event::strict::StrictXmlValidator;
-use xenolith::event::{EventCursor, EventSource};
+use xenolith::event::strict::StrictXmlConstraints;
+use xenolith::event::{EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` through the strict validator and returns the violation it refused the document with, if any.
 fn strict(xml: &str) -> Option<Error> {
-  let mut validator = StrictXmlValidator::new();
-  StreamSource::new(xml.as_bytes()).with_handler(&mut validator).emit().err()
+  let mut validator = StrictXmlConstraints::new();
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut validator).emit().err()
 }
 
 fn refused(xml: &str) -> Error {

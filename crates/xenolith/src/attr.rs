@@ -2,7 +2,7 @@
 //!
 //! An element's attributes come from multiple places. The parser reports them from its input, a built tree holds them
 //! on its element nodes, and a writer receives them when it is called. Code that consumes elements, a validator or a
-//! push handler, works the same way, whatever the source. It receives the attributes through [`Attributes`], a
+//! push consumer, works the same way, whatever the producer. It receives the attributes through [`Attributes`], a
 //! borrowing view over any backing that implements [`AttributeList`].
 //!
 //! A source implements [`AttributeList`] over its own storage, so [`Attributes`] presents the attributes without

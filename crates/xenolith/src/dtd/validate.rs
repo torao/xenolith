@@ -15,14 +15,13 @@ pub mod document;
 
 pub use document::DocumentDtd;
 
-use std::collections::HashMap;
-
 use crate::attr::Attributes;
 use crate::chars;
 use crate::dtd::{AttDef, AttType, ContentSpec, DefaultDecl, Dtd, GeneralEntity};
 use crate::error::{Location, Result};
-use crate::event::{EventHandler, EventRef};
+use crate::event::{EventConsumer, EventRef, Flow};
 use crate::name::{self, NameId, NamePool};
+use std::collections::HashMap;
 
 use crate::dtd::validate::content::ContentModel;
 use crate::event::validate::{Validator, ValidityError};
@@ -116,7 +115,7 @@ impl DtdValidator {
   /// Keeps a validity error with `message` at `at`.
   ///
   /// The errors are gathered in a list the caller passes in rather than in the field they end up in, so a check may
-  /// hold a borrow of this validator while it reports. [`handle`](EventHandler::handle) takes the field out for the
+  /// hold a borrow of this validator while it reports. [`consume`](EventConsumer::consume) takes the field out for the
   /// length of one event and gives it back.
   ///
   fn report(&self, errors: &mut Vec<ValidityError>, at: &Location, message: String) {
@@ -418,7 +417,7 @@ impl DtdValidator {
 }
 
 /// The per-event checks. Each takes the error list rather than reaching for the field, so a check may hold a borrow of
-/// this validator while it reports; [`handle`](EventHandler::handle) lends the field out and takes it back.
+/// this validator while it reports; [`consume`](EventConsumer::consume) lends the field out and takes it back.
 impl DtdValidator {
   fn start_element(
     &mut self,
@@ -500,10 +499,11 @@ impl DtdValidator {
   }
 }
 
-impl EventHandler for DtdValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for DtdValidator {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // The list is taken out for the length of this event, so a check may borrow the validator while it reports.
     let mut errors = std::mem::take(&mut self.errors);
+    let before = errors.len();
     match event {
       EventRef::StartElement(event) => {
         self.start_element(event.prefix, event.local, event.attributes, &event.location, &mut errors);
@@ -518,9 +518,10 @@ impl EventHandler for DtdValidator {
       // A comment, a processing instruction, and the document's own start and doctype are not content a DTD constrains.
       EventRef::StartDocument | EventRef::Comment(_) | EventRef::ProcessingInstruction(_) | EventRef::Doctype(_) => {}
     }
+    let event_validity_error_count = errors.len() - before;
     self.errors = errors;
     // A validity error is recoverable, so the document is not refused over one; the errors are read back afterwards.
-    Ok(())
+    Ok(Flow::Continue(event_validity_error_count))
   }
 }
 
@@ -529,7 +530,7 @@ impl Validator for DtdValidator {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
@@ -554,18 +555,18 @@ fn names(names: &[NameId], pool: &NamePool) -> String {
 /// use xenolith::dtd::DtdReader;
 /// use xenolith::dtd::validate::DtdSchema;
 /// use xenolith::event::validate::ValidatorSet;
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 ///
 /// let (dtd, pool) = DtdReader::new("<!ELEMENT note (#PCDATA)>".as_bytes()).read()?;
 /// let schema = DtdSchema::new(dtd, pool).with_root("note");
 ///
-/// let mut validation = ValidatorSet::new().with_schema(&schema);
-/// StreamSource::new("<note>hi</note>".as_bytes()).with_handler(&mut validation).emit()?;
+/// let mut validation = ValidatorSet::new().add_schema(&schema);
+/// StreamSource::new("<note>hi</note>".as_bytes()).add_consumer(&mut validation).emit()?;
 /// assert!(validation.report().errors().is_empty());
 ///
-/// let mut validation = ValidatorSet::new().with_schema(&schema);
-/// StreamSource::new("<other/>".as_bytes()).with_handler(&mut validation).emit()?;
+/// let mut validation = ValidatorSet::new().add_schema(&schema);
+/// StreamSource::new("<other/>".as_bytes()).add_consumer(&mut validation).emit()?;
 /// let report = validation.report();
 /// assert!(!report.errors().is_empty(), "the root is not the one asked for, and the element is not declared");
 /// # Ok::<(), xenolith::Error>(())

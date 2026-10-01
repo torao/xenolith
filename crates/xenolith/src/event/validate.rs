@@ -1,7 +1,7 @@
 //! The validation mechanism consists of a [`Validator`] that checks events from any source and the [`ValidityError`]s
 //! it reports.
 //!
-//! A [`Validator`] is an [`EventHandler`] that compares incoming events against a schema and records any violations
+//! A [`Validator`] is an [`EventConsumer`] that compares incoming events against a schema and records any violations
 //! found. A [`Schema`] generates a new validator for each document. Since both rely solely on the event vocabulary,
 //! the same validator can check events originating from a parser, a tree traversal, or a writer. Schema languages
 //! implement these two traits; for instance, DTDs achieve this via [`dtd::validate`](crate::dtd::validate), and
@@ -20,7 +20,7 @@
 //! # Well-formedness and validity
 //!
 //! Errors regarding *well-formedness* are fatal. The parser (or
-//! [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator), which handles events from any source) returns
+//! [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints), which handles events from any source) returns
 //! these as an [`Err`], halting processing. Errors regarding *validity* are recoverable. Although the document is
 //! well-formed, it falls outside the schema's constraints; the validator records the error, and processing continues.
 //! All such errors can be retrieved later by calling [`Validator::errors`]. This is similar to the distinction between
@@ -31,11 +31,10 @@ pub mod ids;
 
 pub use ids::XmlIdValidator;
 
-use std::borrow::Cow;
-
 use crate::dtd::validate::DocumentDtd;
 use crate::error::{Error, Location, Result};
-use crate::event::{EventHandler, EventRef, Outcome};
+use crate::event::{EventConsumer, EventRef, Flow, Outcome};
+use std::borrow::Cow;
 
 /// A schema violation detected within the document.
 ///
@@ -85,17 +84,20 @@ impl std::fmt::Display for ValidityError {
   }
 }
 
-/// An [`EventHandler`] that validates document events against a schema and collects any detected violations.
+/// An [`EventConsumer`] that validates document events against a schema and collects any detected violations.
 ///
-/// Like any other handler, validators can be driven by any event source, but their specific purpose is to verify
+/// Like any other consumer, validators can be driven by any producer, but their specific purpose is to verify
 /// constraints. It does not perform tasks such as entity expansion, filling in default attribute values, or value
 /// normalization; these operations are expected to have been completed by the source before the events reach the
 /// validator.
 ///
-/// Typically, processing does not stop when a validation error occurs. Instead, the validator records the error and
-/// returns `Ok`, allowing processing to continue to the end of the document; ultimately, all violations are available
-/// from [`errors`](Self::errors). Conversely, a validator designed to halt upon
-/// the first violation would return [`Err`] from [`handle`](EventHandler::handle), just like any other handler.
+/// Typically, processing does not stop when a validation error occurs. Instead, the validator internally records the
+/// error and returns [`Flow::Continue`] along with the count of recorded errors for that event. This allows processing
+/// to continue to the end of the document, enabling the retrieval of all violations from [`errors`](Self::errors) at
+/// the conclusion. [`Dispatcher`](crate::event::Dispatcher) halts execution once the returned error count exceeds the
+/// limit. Conversely, a validator designed to stop upon encountering a fatal violation returns [`Err`] from
+/// [`consume`](EventConsumer::consume), just like other consumers. Validators never return [`Flow::Break`]; the
+/// decision of when to terminate execution is up to the consumer.
 ///
 /// Certain validation checks requiring the entire document, such as verifying that all `IDREF`s match corresponding
 /// `ID`s, are performed upon the [`EndDocument`](crate::event::EventRef::EndDocument) event. If processing stops
@@ -105,19 +107,19 @@ impl std::fmt::Display for ValidityError {
 /// Schema languages implement this trait. This allows validators, whether DTD, RELAX NG, XSD, or application-specific
 /// rules, to share a common interface, enabling a single implementation to validate input being parsed, a constructed
 /// tree, or a document being written.
-pub trait Validator: EventHandler {
+pub trait Validator: EventConsumer {
   /// Validation errors detected so far (in no particular order).
   ///
   /// The implementation can choose whether the validator holds the errors as [`Cow::Borrowed`] or collects them as
   /// [`Cow::Owned`].
   fn errors(&self) -> Cow<'_, [ValidityError]>;
 
-  /// An [`EventHandler`] for installing this validator into an event source.
+  /// An [`EventConsumer`] for installing this validator into an event source.
   ///
-  /// Converting `&mut dyn Validator` to `&mut dyn EventHandler` requires trait upcasting, a feature stabilized in Rust
+  /// Converting `&mut dyn Validator` to `&mut dyn EventConsumer` requires trait upcasting, a feature stabilized in Rust
   /// 1.86. However, this crate supports Rust 1.85. Therefore, each implementation currently returns `self`.
   ///
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler;
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer;
 }
 
 /// A schema that generates a new [`Validator`] for each document after it has been created.
@@ -138,11 +140,11 @@ pub enum Ended {
   /// document.
   Completed,
 
-  /// All active handlers terminated early. Checks requiring the entire document were not performed.
+  /// All active consumers terminated early. Checks requiring the entire document were not performed.
   Stopped,
 
-  /// The execution terminated due to an error (e.g., the input was not well-formed, a handler rejected an event, or
-  /// the [`ValidatorSet`] maximum number of errors was exceeded). The error itself originated from the event source.
+  /// The execution terminated due to an error (e.g., the input was not well-formed, a consumer rejected an event, or
+  /// the [`ValidatorSet`] maximum number of errors was exceeded). The error itself originated from the producer.
   Failed,
 
   /// The execution was abandoned before the source could report completion.
@@ -179,7 +181,7 @@ impl Report {
   }
 
   /// How the execution finished. Returns `None` if completion was not explicitly specified (such as when
-  /// [`finish`](EventHandler::finish) was not called during manual event delivery).
+  /// [`finish`](EventConsumer::finish) was not called during manual event delivery).
   #[must_use]
   pub fn ended(&self) -> Option<Ended> {
     self.ended
@@ -197,17 +199,17 @@ impl Report {
 ///
 /// If [`validating_dtd`](Self::validating_dtd) is enabled, validation is performed based on the document's own DTD,
 /// and if [`checking_xml_id`](Self::checking_xml_id) is enabled, `xml:id` attributes are checked. Additionally,
-/// validators added via [`with_validator`](Self::with_validator) or created via [`with_schema`](Self::with_schema) are
+/// validators added via [`add_validator`](Self::add_validator) or created via [`add_schema`](Self::add_schema) are
 /// used. Events are passed sequentially to these validators, and [`errors`](Validator::errors) gathers what they
 /// found. The same validator may be added multiple times. After processing concludes, calling
 /// [`report`](Self::report) allows you to retrieve error information and the final processing status. You can also use
 /// [`with_max_errors`](Self::with_max_errors) to halt processing once more than a specified number of errors occur.
 ///
 /// Since this validator does not generate or drive events itself, it functions consistently regardless of the event
-/// source (e.g., a source pushing events via [`emit`](crate::event::EventCursor::emit), a caller pulling events one by
-/// one, or a program manually supplying events). To ensure that application handlers receive the same events for the
-/// same path, register both this validator set and the handlers with [`Dispatch`](crate::event::Dispatch), specifying
-/// the validator set first.
+/// producer (e.g., a producer pushing events via [`emit`](crate::event::EventCursor::emit), a caller pulling events one
+/// by one, or a program manually supplying events). To ensure that application consumers receive the same events for
+/// the same path, register both this validator set and the consumers with [`Dispatcher`](crate::event::Dispatcher),
+/// adding the validator set first with [`add_validator`](crate::event::Dispatcher::add_validator).
 ///
 /// Whenever a [`StartDocument`](EventRef::StartDocument) event occurs, signaling the start of a new document, the
 /// validator set discards errors and completion statuses from the previous document and creates fresh validators for
@@ -220,15 +222,15 @@ impl Report {
 /// ```
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::event::validate::ValidatorSet;
-/// use xenolith::event::{Dispatch, EventCursor, EventSource};
+/// use xenolith::event::{Dispatcher, EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 ///
 /// let xml = "<!DOCTYPE r [<!ELEMENT r (item+)><!ELEMENT item (#PCDATA)>]><r><item>hi</item></r>";
 /// let mut validators = ValidatorSet::new().validating_dtd(true);
 /// let mut builder = DomBuilder::new();
 /// {
-///   let mut lane = Dispatch::new().with_handler(&mut validators).with_handler(&mut builder);
-///   StreamSource::new(xml.as_bytes()).with_handler(&mut lane).emit()?;
+///   let mut lane = Dispatcher::new().add_validator(&mut validators).add_consumer(&mut builder);
+///   StreamSource::new(xml.as_bytes()).add_consumer(&mut lane).emit()?;
 /// }
 /// assert!(validators.report().is_valid());
 /// let doc = builder.into_document();
@@ -254,6 +256,9 @@ pub struct ValidatorSet {
   validators: Vec<Box<dyn Validator>>,
   /// How the validation process for the current document concluded.
   ended: Option<Ended>,
+  /// The total number of validity errors reported by members for the current document, calculated from the return
+  /// values of each event.
+  validity_error_count: usize,
 }
 
 impl std::fmt::Debug for ValidatorSet {
@@ -287,6 +292,7 @@ impl ValidatorSet {
       standalone_ids: None,
       validators: Vec::new(),
       ended: None,
+      validity_error_count: 0,
     }
   }
 
@@ -313,31 +319,31 @@ impl ValidatorSet {
 
   /// Adds a validator. It receives each event after the validators already added.
   #[must_use]
-  pub fn with_validator(mut self, validator: Box<dyn Validator>) -> Self {
+  pub fn add_validator(mut self, validator: Box<dyn Validator>) -> Self {
     self.validators.push(validator);
     self
   }
 
   /// Adds the validators while maintaining their order.
   #[must_use]
-  pub fn with_validators(mut self, validators: impl IntoIterator<Item = Box<dyn Validator>>) -> Self {
+  pub fn add_validators(mut self, validators: impl IntoIterator<Item = Box<dyn Validator>>) -> Self {
     for validator in validators {
-      self = self.with_validator(validator);
+      self = self.add_validator(validator);
     }
     self
   }
 
   /// Adds a validator created with `schema`.
   #[must_use]
-  pub fn with_schema(self, schema: &dyn Schema) -> Self {
-    self.with_validator(schema.validator())
+  pub fn add_schema(self, schema: &dyn Schema) -> Self {
+    self.add_validator(schema.validator())
   }
 
   /// Sets the maximum number of validity errors tolerated before processing is halted.
   ///
   /// When the number of validity errors exceeds this `max` while processing an event, the `max + 1`-th error (in the
   /// order found within [`Report::errors`]) is returned as an [`Err`] (specifically, [`Error::Validity`]). Processing
-  /// stops at that point, and no subsequent events are sent to downstream handlers. Since multiple errors can occur
+  /// stops at that point, and no subsequent events are sent to downstream consumers. Since multiple errors can occur
   /// within a single event, [`report`](Self::report) retains all errors detected up to that moment (at least `max + 1`
   /// of them). A `max` of `Some(0)` halts at the first error. `None` (the default) signifies *no limit*, meaning
   /// processing continues to the end of the document regardless of how many validity errors are found.
@@ -370,6 +376,7 @@ impl ValidatorSet {
     self.document_dtd = self.use_dtd.then(|| DocumentDtd::new().checking_xml_id(self.xml_id));
     self.standalone_ids = (!self.use_dtd && self.xml_id).then(XmlIdValidator::new);
     self.ended = None;
+    self.validity_error_count = 0;
     self.prepared = true;
   }
 
@@ -405,23 +412,30 @@ impl ValidatorSet {
   }
 }
 
-impl EventHandler for ValidatorSet {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for ValidatorSet {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     // Events fed without a `StartDocument` still need the validators of a document.
     if matches!(event, EventRef::StartDocument) || !self.prepared {
       self.start_document();
     }
+    let mut event_validity_error_count: usize = 0;
     for validator in self.members() {
-      validator.handle(event)?;
+      // A validator has no say in when the run ends, so only its count is taken from what it returns.
+      // An application's validator may report a wrong count, so it saturates rather than overflows.
+      event_validity_error_count = event_validity_error_count.saturating_add(match validator.consume(event)? {
+        Flow::Continue(count) | Flow::Break(count) => count,
+      });
     }
-    if let Some(max) = self.max_errors {
-      // Counted without gathering, since a validator that holds its errors lends them at no cost.
-      let count: usize = self.members().map(|validator| validator.errors().len()).sum();
-      if count > max {
-        return Err(self.sorted_errors()[max].to_error());
-      }
+    self.validity_error_count = self.validity_error_count.saturating_add(event_validity_error_count);
+    if let Some(max) = self.max_errors.filter(|&max| self.validity_error_count > max) {
+      // The counts come from the validators, an application's among them, so one that reported more than it kept
+      // still gets an error rather than an index out of range.
+      return Err(match self.sorted_errors().get(max) {
+        Some(error) => error.to_error(),
+        None => Error::validity(format!("more than {max} validity errors were found")),
+      });
     }
-    Ok(())
+    Ok(Flow::Continue(event_validity_error_count))
   }
 
   fn finish(&mut self, outcome: Outcome<'_>) {
@@ -442,7 +456,7 @@ impl Validator for ValidatorSet {
     Cow::Owned(self.gathered_errors())
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }

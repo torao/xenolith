@@ -11,7 +11,7 @@
 //! What you can do with this crate:
 //!
 //! - Read a document as an event sequence. You can either retrieve the nodes one by one (pull), as in StAX, or send
-//!   them to your handler (push), as in SAX.
+//!   them to your consumer (push), as in SAX.
 //! - Build a DOM tree from the event sequence. You can also send the tree as an event sequence.
 //! - Validate the document against the DTD it declares or against a DTD maintained separately as a schema.
 //! - Replace `xi:include` with the content of the resource it references.
@@ -31,7 +31,7 @@
 //! xenolith consists of three layers. The bottom layer contains a *parser* that performs only syntax analysis, without
 //! any I/O operations. In the layer above that, the document structure parsed by the parser is considered as a
 //! sequence of events (an event stream), and processing components — such as validation, transformation, tree
-//! construction, and output — are assembled into a pipeline of handlers. The top-level facade ([`Reader`] and
+//! construction, and output — are assembled into a pipeline of consumers. The top-level facade ([`Reader`] and
 //! [`Writer`]) pre-assembles commonly used pipelines and makes them easy to use via feature flags. Each layer is built
 //! using the layers below it, and applications can use any layer depending on their needs. The following sections
 //! also provide a detailed explanation of these layers.
@@ -68,65 +68,65 @@
 //! facade layer implement a typical combination of these. By using the event pipeline directly, applications can
 //! achieve higher performance and advanced scalability.
 //!
-//! In this layer, [`EventSource`](event::EventSource) generates and sends document structure events, and
-//! [`EventHandler`](event::EventHandler) receives them. For example, [`io::StreamSource`] reads from any
-//! [`std::io::Read`] to drive the parser and sends document structure events to registered handlers. This corresponds
+//! In this layer, [`EventProducer`](event::EventProducer) generates and sends document structure events, and
+//! [`EventConsumer`](event::EventConsumer) receives them. For example, [`io::StreamSource`] reads from any
+//! [`std::io::Read`] to drive the parser and sends document structure events to registered consumers. This corresponds
 //! to the traditional SAX-style (push-style) design.
 //!
 //! - **High Performance**: Since no tree (intermediate state) is constructed, operations that don't require the entire
 //!   document to be kept in memory can run highly efficiently. The design is zero-copy: events borrow their names and
 //!   text from the parser's buffer as `&str`. Once the buffer has been expanded to the required size, no additional
-//!   memory is allocated for individual events. Handlers that have obtained the necessary information can stop reading
+//!   memory is allocated for individual events. Consumers that have obtained the necessary information can stop reading
 //!   partway through the document.
-//! - **Separation of Responsibilities**: Each handler has only one role. The parser reads only the document structure,
-//!   while separate handlers handle lexical rule checking, validity verification, tree construction, and output
+//! - **Separation of Responsibilities**: Each consumer has only one role. The parser reads only the document structure,
+//!   while separate consumers handle lexical rule checking, validity verification, tree construction, and output
 //!   processing. This means certain combinations are possible — for example, omitting lexical rule validation when
 //!   reading a document guaranteed to be well-formed XML.
-//! - **Extensibility**: You can register multiple handlers for a single source, and each handler receives the same
+//! - **Extensibility**: You can register multiple consumers for a single producer, and each consumer receives the same
 //!   event in sequence. This allows multiple operations — such as [`DomBuilder`](dom::build::DomBuilder) (tree
 //!   construction) and [`XmlWriter`](io::write::XmlWriter) (XML writing) — to be accomplished in a single-pass event
-//!   stream. A *transform* that acts as both an `EventHandler` and an `EventSource` is placed between the source and
-//!   the handlers to modify events. For example, [`XIncludeTransform`](xinclude::XIncludeTransform) resolves XInclude
-//!   elements in document events received from upstream and forwards the results to downstream handlers. This is
-//!   independent of the components before and after it in the pipeline. Since a transform has the same event sequence
-//!   for both input and output, any number of them can be chained together, allowing you to build a pipeline as a
-//!   composition of small functions. Your application can also add its own application's `EventHandler`
+//!   stream. A *transformer* that acts as both an `EventConsumer` and an `EventProducer` is placed between the producer
+//!   and the consumers to modify events. For example, [`XIncludeTransformer`](xinclude::XIncludeTransformer) resolves
+//!   XInclude elements in document events received from upstream and forwards the results to downstream consumers. This
+//!   is independent of the components before and after it in the pipeline. Since a transformer has the same event
+//!   sequence for both input and output, any number of them can be chained together, allowing you to build a pipeline
+//!   as a composition of small functions. Your application can also add its own application's `EventConsumer`
 //!   implementations to the same pipeline.
 //!
 //! The following example directly links the process from reading to writing via events, without building a tree. For
 //! an example of using `XInclude`, see the [`xinclude`] module.
 //!
 //! ```
-//! use xenolith::event::{EventCursor, EventSource};
+//! use xenolith::event::{EventCursor, EventProducer};
 //! use xenolith::io::StreamSource;
 //! use xenolith::io::write::XmlWriter;
 //!
 //! let mut writer = XmlWriter::new(Vec::new());
-//! StreamSource::new("<order><item qty='2'>pen</item></order>".as_bytes()).with_handler(&mut writer).emit()?;
+//! StreamSource::new("<order><item qty='2'>pen</item></order>".as_bytes()).add_consumer(&mut writer).emit()?;
 //! assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "<order><item qty=\"2\">pen</item></order>");
 //! # Ok::<(), xenolith::Error>(())
 //! ```
 //!
 //! ## StAX-Style Sequential Processing
 //!
-//! While the event pipeline sends events to handlers, you can also use the StAX-style (pull-style), in which the
+//! While the event pipeline sends events to consumers, you can also use the StAX-style (pull-style), in which the
 //! application processes events one by one according to its own procedure.
 //!
 //! - **Reading**: *Event cursor*, an event source that supports the pull-type, allows you to access events one by one
 //!   — the same event as pipeline — each time you call [`next`](event::EventCursor::next). This corresponds to StAX's
 //!   `XMLStreamReader`.
 //! - **Writing**: Each time a `write_*` method of [`WriterSource`](io::write::WriterSource) is called, the
-//!   corresponding event is sent to the handlers. By combining this with [`XmlWriter`](io::write::XmlWriter), you can
+//!   corresponding event is sent to the consumers. By combining this with [`XmlWriter`](io::write::XmlWriter), you can
 //!   achieve XML writing equivalent to StAX's `XMLStreamWriter`.
 //!
-//! The same events reach the registered handlers because both push- and pull-style build on the event pipeline
-//! mechanism. For example, if you place [`StrictXmlValidator`](event::strict::StrictXmlValidator) in the preprocessing
-//! stage before [`XmlWriter`](io::write::XmlWriter), you can reject structures or names that unintentionally violate
-//! XML rules before they are written to a file.
+//! The same events reach the registered consumers because both push- and pull-style build on the event pipeline
+//! mechanism. For example, if you place [`StrictXmlConstraints`](event::strict::StrictXmlConstraints) in the
+//! preprocessing stage before [`XmlWriter`](io::write::XmlWriter), you can reject structures or names that
+//! unintentionally violate XML rules before they are written to a file.
 //!
 //! ```
-//! use xenolith::event::strict::StrictXmlValidator;
-//! use xenolith::event::{Dispatch, EventCursor, EventRef, EventSource};
+//! use xenolith::event::strict::StrictXmlConstraints;
+//! use xenolith::event::{Dispatcher, EventCursor, EventRef, EventProducer};
 //! use xenolith::io::StreamSource;
 //! use xenolith::io::write::{WriterSource, XmlWriter};
 //!
@@ -141,11 +141,11 @@
 //! assert_eq!(names, ["order", "item"]);
 //!
 //! // Writing: Write while checking for lexical rules.
-//! let mut strict = StrictXmlValidator::new();
+//! let mut strict = StrictXmlConstraints::new();
 //! let mut writer = XmlWriter::new(Vec::new());
 //! {
-//!   let mut lane = Dispatch::new().with_handler(&mut strict).with_handler(&mut writer);
-//!   let mut doc = WriterSource::new().with_handler(&mut lane);
+//!   let mut lane = Dispatcher::new().add_consumer(&mut strict).add_consumer(&mut writer);
+//!   let mut doc = WriterSource::new().add_consumer(&mut lane);
 //!   doc.write_start_element("order")?;
 //!   doc.write_characters("pen")?;
 //!   doc.write_end_element()?;
@@ -211,7 +211,7 @@
 //! # Modules
 //!
 //! - [`event`]: Vocabulary related to the event pipeline: [`EventRef`](event::EventRef),
-//!   [`EventHandler`](event::EventHandler), [`EventSource`](event::EventSource), strict validation, and the
+//!   [`EventConsumer`](event::EventConsumer), [`EventProducer`](event::EventProducer), strict validation, and the
 //!   [`Validator`] contract implemented by the schema.
 //! - [`io`]: Input/output and XML parser processing. Includes decoding, character streams for each entity, XML
 //!   declarations and text declarations, entity resolution, and serialization ([`io::write`]).
@@ -219,8 +219,8 @@
 //!   ([`dtd::read`]), and validates based on a DTD ([`dtd::validate`]).
 //! - [`dom`]: A tree with an arena structure that implements [DOM Level 3 Core]. It is constructed using
 //!   [`dom::build`] and written to events using [`DomSource`](dom::DomSource).
-//! - [`xinclude`]: The `XInclude` 1.0 transform ([`XIncludeTransform`](xinclude::XIncludeTransform)) and the schema
-//!   for its vocabulary ([`XIncludeSchema`](xinclude::XIncludeSchema)).
+//! - [`xinclude`]: The `XInclude` 1.0 transformer ([`XIncludeTransformer`](xinclude::XIncludeTransformer)) and the
+//!   schema for its vocabulary ([`XIncludeSchema`](xinclude::XIncludeSchema)).
 //!
 //! The fundamental elements they share:
 //!

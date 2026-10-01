@@ -17,42 +17,42 @@
 //! - 文書を検証する 3 つの層と、それぞれが受け持つもの:
 //!   - パーサ: 読むために読みながら検証しなければならないもの。要素の入れ子、ルート要素が 1 つであること、ルート
 //!     要素の外のテキストと参照、`DOCTYPE` の位置と回数、エンティティ境界、`Char`、名前空間の束縛、`xml:space`。
-//!   - `StrictXmlValidator`: 任意のイベント列が整形式かつ名前空間整形式の文書であることを検証し、最初の違反で
+//!   - `StrictXmlConstraints`: 任意のイベント列が整形式かつ名前空間整形式の文書であることを検証し、最初の違反で
 //!     `Err` を返して止める。
 //!   - `Validator`（DTD などのスキーマ）: 妥当性を検証し、エラーをすべて保持して処理を続ける。
 //! - 整形式違反は致命的で妥当性違反は回復可能とした理由と、その区別を重大度ではなく型（`Error` と
 //!   `ValidityError`）で表す理由。`Severity` は削除した。
-//! - パーサが 4 つの字句の検証（名前が `QName` か、属性の重複、コメントの `--`、PI のターゲット）をハンドラに残す
+//! - パーサが 4 つの字句の検証（名前が `QName` か、属性の重複、コメントの `--`、PI のターゲット）を消費者に残す
 //!   理由: 入力を信頼できるアプリケーションは省略できる。パーサから来たイベントには
-//!   `StrictXmlValidator::lexical_only` でこの 4 つだけを検証できる。
+//!   `StrictXmlConstraints::lexical_only` でこの 4 つだけを検証できる。
 //! - それ以外の検証をパーサから validator へ移せなかった理由:
 //!   - `DOCTYPE` を読むと、イベントを報告する前に DTD を読み、外部サブセットを解決しうる。ルート要素の外の参照は
 //!     展開される。validator が拒否できるのはそれらの副作用の後になる。
 //!   - イベントはどのエンティティから来たかを持たないので、エンティティ境界の規則はイベントからは判定できない。
 //!   - パーサは名前空間スコープ、`xml:space`、`xml:lang`、基底 URI、深さ制限のために開いた要素のスタックをどのみち
 //!     持つので、それを使う検証のコストはほぼない。
-//! - `StrictXmlValidator` がパーサを前提にしない理由: イベントは木の走査（`DomSource`）、保存した `Event` の
+//! - `StrictXmlConstraints` がパーサを前提にしない理由: イベントは木の走査（`DomSource`）、保存した `Event` の
 //!   再生、手で組み立てるプログラムからも来て、構造の一部しか自分で検証しない `XmlWriter` にも渡る。
-//! - `XmlWriter` が何を検証するか、直接の呼び出しでは panic し、イベントハンドラとしては `Err` を返す理由: 呼び
+//! - `XmlWriter` が何を検証するか、直接の呼び出しでは panic し、イベント消費者としては `Err` を返す理由: 呼び
 //!   出しの誤用は呼び出し側コードの誤りだが、イベントはどこからでも来うる。
-//! - 「Loose XML」の定義: `StrictXmlValidator` を通していないイベント列の文書。XML であるかもしれないが、それを
+//! - 「Loose XML」の定義: `StrictXmlConstraints` を通していないイベント列の文書。XML であるかもしれないが、それを
 //!   示したものがない。
-//! - Loose XML を補正するハンドラ（`LooseRebuilder`）を削除した理由: XML 仕様の外なので、イベント列を「良い感じに
+//! - Loose XML を補正する消費者（`LooseRebuilder`）を削除した理由: XML 仕様の外なので、イベント列を「良い感じに
 //!   補正する」規則は仕様から導けず、今の段階では決められない。補正しないので、ROADMAP の「loose parsing は対象外」
 //!   とも矛盾しない。
-//! - facade である `Reader` が `lexical_only` ではなく完全版の `StrictXmlValidator` で検証する理由と、
+//! - facade である `Reader` が `lexical_only` ではなく完全版の `StrictXmlConstraints` で検証する理由と、
 //!   `with_strict(false)` が補正せずに Loose XML をそのまま渡す理由。
-//! - アプリケーションが自分の事情で 1 つの規則だけを緩める方法: `StrictXmlValidator` を包み、validator に見せる
+//! - アプリケーションが自分の事情で 1 つの規則だけを緩める方法: `StrictXmlConstraints` を包み、validator に見せる
 //!   ものを変える（コメントの `--` を許す例: 次もダッシュであるダッシュを置き換え、位置と末尾のダッシュを保つ）。
 //!   エラーを捕まえて無視する方法を採らない理由: メッセージ文字列に依存し、同じイベントの後続の検証を隠す。エラー
 //!   は variant より細かい種類を持たない。
-//! - `StrictXmlValidator` が開いた要素をインターンした名前でなく `String` で持つ理由: イベントは `&str` を運ぶので
+//! - `StrictXmlConstraints` が開いた要素をインターンした名前でなく `String` で持つ理由: イベントは `&str` を運ぶので
 //!   インターンすると名前をもう一度ハッシュすることになり、プールは文書中の異なる名前の数だけ大きくなる。
 //! - `StartDocument` ごとに validator をリセットし、状態を作り直すのではなくクリアする理由。
 //! - 複数の validator のまとめ役を、ソースを駆動する実行（旧 `ValidatingSource` / `Validatable` / `run`）ではなく、
-//!   1 つのハンドラ `ValidatorSet` にした理由: 駆動は `emit` で足り、本体は validator のとりまとめと結果の `Report`
-//!   化だった。ハンドラなら push・pull・手で送るのどれでも同じに使え、ソースより先に作るので `'h` の問題も起きず、
-//!   終了は `finish` で届く。アプリケーションのハンドラは中に入れず `Dispatch` に並べる（役割の重複を避ける）。
+//!   1 つの消費者 `ValidatorSet` にした理由: 駆動は `emit` で足り、本体は validator のとりまとめと結果の `Report`
+//!   化だった。消費者なら push・pull・手で送るのどれでも同じに使え、ソースより先に作るので `'h` の問題も起きず、
+//!   終了は `finish` で届く。アプリケーションの消費者は中に入れず `Dispatcher` に並べる（役割の重複を避ける）。
 //!   `ValidatorSet` 自身も `Validator` なので、出力の前段に置いて書く前に検証させることもできる。
 //!   - `Report` に終わり方（`Ended`）を含める理由: 文書全体を要する検査は完了した処理でしか行われない。
 //!     `is_valid` は「完了し、何かに対して検証し、エラーがない」。
@@ -64,8 +64,13 @@
 //!     文書の順で読めるようにする。システム識別子、行、桁の順で、位置不明は最後。同じ位置は validator の順（安定
 //!     ソート）。上限を超えたときに返すのは、この順で `max + 1` 番目のエラー。
 //!   - エラー数の上限（`with_max_errors`）: 1 件で止めたいアプリケーションと、まとめて直したい人の両方のため。
-//!     上限を超えたエラーを `Err` で返して処理を止める（`should_continue` では `Dispatch` の他のハンドラが止まらない
+//!     上限を超えたエラーを `Err` で返して処理を止める（`Flow::Break` では `Dispatcher` の他の消費者が止まらない
 //!     ため）。既定は上限なし（`None`）。
+//!     - 件数は各 validator が `consume` の戻り値で報告したものを数える。報告が実際より少ない validator には上限が
+//!       効かない。
+//!     - 件数の加算は飽和加算にする（`Dispatcher`、`ValidatorSet`、XInclude の変換）。件数はアプリケーションの
+//!       消費者からも来るので、過大な値で桁あふれさせると debug では panic し、release では回り込んで上限を
+//!       すり抜ける。飽和すれば上限を必ず超え、`Err` で止まる。
 //!     - 値は「許容する最大数」で、`Some(0)` は 1 件目で止まる。以前の `with_error_limit(n)` は「n 件目で止まる」で、
 //!       `Limits::max_depth` などの「そこまで許す数」と意味が逆に読めたため改めた（旧 `n` は新 `Some(n - 1)`）。
 //!     - 引数は `Option<usize>` で、`None` が上限なし。`0` を「上限なし」に読み替える特別扱いをやめ、一度付けた上限を
@@ -80,7 +85,7 @@
 //! ## イベント
 //!
 //! - すべての生産者と消費者が 1 つの語彙を使うこと: パーサ、木の走査、ビルダー、validator、writer は `EventRef` で
-//!   つながる。ソースとハンドラが特定の実装に結びつかないトレイトである理由。
+//!   つながる。生産者と消費者が特定の実装に結びつかないトレイトである理由。
 //! - `EventRef`（1 回のコールバックのための借用）と `Event`（その後も保持する所有）の分担と、両方が存在し相互に
 //!   変換できる理由。
 //! - 種類ごとにペイロード構造体（`StartElementEventRef`、`StartElementEvent` など）を持ち、enum にフィールドを
@@ -89,29 +94,64 @@
 //! - 所有の `DoctypeEvent` が `Arc<Dtd>` と fork した `NamePool` を持つ理由。
 //! - パーサ固有の層: `TokenRef` と `TokenKind` はパーサが生成するもので、XML 宣言はそこにだけ存在し、イベントの
 //!   語彙には含まれない。スキャナが独自の型を持たず `TokenKind` を共有する理由。
-//! - `EventCursor::next` がイベントを返す前に登録済みハンドラを呼ぶ理由（push と pull が 1 回の処理になり、pull
+//! - `EventCursor::next` がイベントを返す前に登録済み消費者を呼ぶ理由（push と pull が 1 回の処理になり、pull
 //!   したイベントはソースに登録した検証を通過済みになる）。
 //! - `EventCursor` が `Iterator` になれない理由（イベントがカーソルを借用する）と、`events()` が `Event` へ複製
 //!   してイテレータを提供し、最初のエラーの後で終わる理由。
-//! - `Dispatch`: 1 つのハンドラの `Err` でそのイベントを即座に止める。`should_continue` で `false` を返した
-//!   ハンドラはその処理の残りから外し、ハンドラごとに記録して `StartDocument` でクリアするので、パイプラインを
-//!   複数の文書に使い回せる。ハンドラのない dispatch は処理を終わらせない。
-//! - 処理の終わりを `EventHandler::finish` と `Outcome`（`Completed`、`Stopped`、`Failed`）で知らせる理由: ハンドラ
+//! - `Dispatcher`: 1 つの消費者の `Err` でそのイベントを即座に止める。`Flow::Break` を返した
+//!   消費者はその処理の残りから外し、消費者ごとに記録して `StartDocument` でクリアするので、パイプラインを
+//!   複数の文書に使い回せる。消費者のない dispatcher は処理を終わらせない。
+//! - `EventConsumer::consume` が `Result<Flow>` を返す（`should_continue` は廃止）。
+//!   - 名前は旧 `handle`。何をするのかが名前から読めないため、トレイト名と対になる `consume` に改めた。
+//!   - `Break` はその消費者が処理を終えたこと、`Continue` は続けることを表す。どちらも、このイベントでその消費者
+//!     とその下流が見つけた妥当性エラーの件数を運ぶ。件数は差分で、上流で合算する。
+//!   - 理由: 妥当性エラーの件数を上流へ伝える手段が要る。入れ子の dispatcher や変換の内側で見つかったエラーにも、
+//!     上流で付けた上限を効かせるため。
+//!   - 伝えるのは件数だけ。エラーそのもの（`ValidityError`）は、処理を駆動した側が自分で所有する各 `Validator`
+//!     から集める。
+//!   - `Flow` は std の `ControlFlow<usize, usize>` の別名。そのまま書くと煩雑なため名前を付けた。別名なので
+//!     `Flow::Continue(0)` と書け、`is_break` など `ControlFlow` のメソッドもそのまま使える。
+//! - `Dispatcher` は消費者（`add_consumer`）と validator（`add_validator`）を区別する。処理を終えるのは、すべての
+//!   消費者が `Break` したとき、または妥当性エラーの件数が上限（`with_max_errors`）を超えたとき。
+//!   - 理由: validator は自分からは止まらない。validator も数えると、消費者が止まった後も、前に立つ
+//!     `StrictXmlConstraints` などが処理を読み続けさせる。
+//! - XInclude の変換が件数と停止を上流へ返す方法: 取り込んだ文書のイベントは入れ子のレーンを通り、そのソースは
+//!   件数を返さない。そこで下流が返した件数は `XIncludeProcess` に貯め、`XIncludeTransformer` が上流のイベントへの
+//!   応答として返す。下流の停止は `Dispatcher::is_stopped` で知り、取り込み（`parse="text"` を含む）を打ち切る。
+//!   - 代償: 上流の上限の判定は上流のイベントごとなので、取り込みで見つかったエラーは、その取り込みを読み終えた
+//!     後に `xi:include` の位置で上限に掛かる。
+//! - 語彙の改名: `EventSource` → `EventProducer`、`EventHandler` → `EventConsumer`、`Dispatch` → `Dispatcher`。
+//!   具体的な型（`StreamSource`、`DomSource`、`WriterSource`）は名前を変えない。
+//!   - 消費者を足すメソッドは、値で受けて返すビルダーの `add_consumer`。`with_*` は「置き換える」と読めるため
+//!     採らない。validator を足すメソッドも同列に `add_*` とする（`Dispatcher::add_validator`、
+//!     `ValidatorSet::add_validator` / `add_validators` / `add_schema`。旧 `with_validator` など）。
+//!   - `Validator::as_event_handler` は `as_consumer` に改めた。
+//!   - `&mut self` を取る版（旧 `add` と旧 `add_validator`、一時 `push_consumer`）は公開しない。
+//!     `add_consumer` は `self` を値で受けるので、`Dispatcher` をフィールドに持つ transformer も
+//!     `self.dispatch = self.dispatch.add_consumer(handler)` と書ける（フィールドを持つ型が `Drop` を実装しない
+//!     限り、値の取り出しと付け直しができる）。借用しか持たない利用場面はなく、同じことをする公開メソッドが 2 つ
+//!     あるだけになるため。
+//! - Constraints、Transformer、Filter はトレイトではなく概念上の種類で、その種類の型の名前に表す。
+//!   - Constraints: どの違反の後も処理を続けられない validator（`StrictXmlConstraints`、`RootElementConstraints`）。
+//!     旧 `StrictXmlValidator`。
+//!   - Transformer: イベントを書き換え、足し、取り除く中段（`XIncludeTransformer`、旧 `XIncludeTransform`）。
+//!   - Filter: イベントを選ぶだけの中段（予定の `XPointerFilter`）。
+//! - 処理の終わりを `EventConsumer::finish` と `Outcome`（`Completed`、`Stopped`、`Failed`）で知らせる理由: 消費者
 //!   が書きかけのファイルなど、文書のために持ったリソースを後始末できるようにする。
-//!   - `EndDocument` に結果を載せない理由: ハンドラ A、B、C が並んでいて B が `EndDocument` でエラーを返すと、A は
-//!     正常終了したように、C はエラーで中断したように見え、ハンドラごとに観測する結果が食い違う。最後に `finish` で
-//!     全ハンドラに同じ結果を知らせれば、全員が同じ処理結果を観測できる。`EndDocument` は文書が完結したことを表す
+//!   - `EndDocument` に結果を載せない理由: 消費者 A、B、C が並んでいて B が `EndDocument` でエラーを返すと、A は
+//!     正常終了したように、C はエラーで中断したように見え、消費者ごとに観測する結果が食い違う。最後に `finish` で
+//!     全消費者に同じ結果を知らせれば、全員が同じ処理結果を観測できる。`EndDocument` は文書が完結したことを表す
 //!     語彙のままにし、所有 `Event` や再生に処理の実行状態を持ち込まない。
-//!   - 途中で外れたハンドラとエラーを返したハンドラ本人にも知らせる理由（後始末はどちらにも要る）。
+//!   - 途中で外れた消費者とエラーを返した消費者本人にも知らせる理由（後始末はどちらにも要る）。
 //!   - ソースが `finish` を呼ぶのは `next` が最初に `None` を返したときとエラーを返したとき。エラーの後は `next` が
 //!     `None` を返す。
 //!   - `finish` の戻り値を `()` にした理由（後始末の失敗を報告する手段は持たない）。
 //!   - 途中で放棄された処理も `Outcome::Abandoned` で知らせる理由と方法: pull を途中でやめた場合、ソースを駆動する
 //!     側が自分の事情で打ち切った場合、panic で巻き戻る場合。個々のソース
-//!     ではなく `Dispatch` が「処理中か」（`StartDocument` 以降で `finish` 前）を持ち、`Drop` で知らせるので、どの
-//!     ソースでも同じように働く。代償: `Dispatch` が `Drop` を持つので、借りたハンドラは dispatch（とそれを持つ
-//!     ソース）より長く生きる必要があり、ソースが生きている間はハンドラを読めない。巻き戻り中に `finish` が呼ばれる
-//!     ので、`finish` は panic してはならない。`StartDocument` を受け取っていないハンドラには何も知らせない。
+//!     ではなく `Dispatcher` が「処理中か」（`StartDocument` 以降で `finish` 前）を持ち、`Drop` で知らせるので、どの
+//!     ソースでも同じように働く。代償: `Dispatcher` が `Drop` を持つので、借りた消費者は dispatcher（とそれを持つ
+//!     ソース）より長く生きる必要があり、ソースが生きている間は消費者を読めない。巻き戻り中に `finish` が呼ばれる
+//!     ので、`finish` は panic してはならない。`StartDocument` を受け取っていない消費者には何も知らせない。
 //! - **ルート要素の外の空白もイベントとして流す**（`Characters`）。XML 宣言、DOCTYPE、コメント、PI、ルート要素の
 //!   間と前後に書かれた空白（`Misc` の `S`）。StAX と同じ立場で、Infoset・DOM・XPath のデータモデルとは異なる。
 //!   - 理由: 読んで書き戻す流れ（`StreamSource` → `XmlWriter`）で、入力のトップレベルの改行が保たれる。以前は
@@ -119,7 +159,7 @@
 //!     テキストを置けない。これは DOM Level 3 Core の規定どおり）。
 //!   - 各部品の扱い: パーサは空白だけの並びを報告し、それ以外の文字は従来どおり整形式の違反。`DomBuilder` は
 //!     読み飛ばす（文書の内容ではないため）。`XmlWriter` は受け取ったものを何でもそのまま書く。空白以外の文字と
-//!     CDATA を拒否するのは前段の `StrictXmlValidator` の役目で、writer は検査しない（責務の分担）。DTD の検証器は
+//!     CDATA を拒否するのは前段の `StrictXmlConstraints` の役目で、writer は検査しない（責務の分担）。DTD の検証器は
 //!     従来から空白を許していた。
 //!   - XInclude は取り込んだ文書のトップレベルの空白を渡さない。§4.2.1 が取り込む対象を「文書情報項目の子」と
 //!     定めており、空白はそこに含まれない（コメントと PI は含まれるので渡す）。`parse="text"` のテキストは取り込み
@@ -174,24 +214,24 @@
 //! - 呼び出し側が resolver を置かない限り何も取りに行かず、それなしの参照は黙って飛ばさず理由を示して拒否する理由。
 //! - StAX 風の書き出し API を、イベントを出す側（`WriterSource`）と、イベントをバイト列に書く側（`XmlWriter`）に
 //!   分けたこと。
-//!   - 分ける理由: アプリの呼び出しがイベントになれば、出力先は handler が決める。`XmlWriter` に送れば XML テキスト、
+//!   - 分ける理由: アプリの呼び出しがイベントになれば、出力先は消費者が決める。`XmlWriter` に送れば XML テキスト、
 //!     `DomBuilder` に送れば DOM、`ValidatorSet` を前段に置けば書く前に検証、と組み合わせが自由になる。
-//!   - `WriterSource` は push 型なので `EventSource` だけを実装し、`EventCursor` は実装しない。
+//!   - `WriterSource` は push 型なので `EventProducer` だけを実装し、`EventCursor` は実装しない。
 //!   - 終了通知は明示的な `finish()` を作らず自動にした。`end_document()` が `EndDocument` の後に `Completed` を出し、
-//!     早期終了は `Stopped`、拒否は `Failed`、`end_document()` を呼ばずに drop すれば `Dispatch` の `Drop` が
+//!     早期終了は `Stopped`、拒否は `Failed`、`end_document()` を呼ばずに drop すれば `Dispatcher` の `Drop` が
 //!     `Abandoned` を出す。
 //!   - 開始タグは属性がそろうまで保留して `StartElement` 1 つにまとめる。その代償として、属性が原因のエラー
 //!     （エンコーディングで表せない名前など）は、その属性を書いた呼び出しではなく次の呼び出しで報告される。
-//!   - 名前空間はアプリが `write_start_element_ns` で明示する。宣言のない接頭辞の使用は `StrictXmlValidator` が
+//!   - 名前空間はアプリが `write_start_element_ns` で明示する。宣言のない接頭辞の使用は `StrictXmlConstraints` が
 //!     検出できるので、ソース側では解決も補完もしない。
 //!   - DTD と `NamePool` は `write_doctype` の引数で渡す。ソースに `with_dtd` として持たせると、それを読むのは
 //!     `Doctype` イベントだけなので、ルート要素を書いた後に設定しても黙って捨てられる。渡す場所と使う場所を
 //!     一致させて、設定が死ぬ経路をなくす。
-//!   - `end_document()` の `EndDocument` は `settle` を通さない。ここでハンドラが終了を示しても、それは
-//!     `EndDocument` を受理したということなので `Completed`（`EventHandler::finish` の契約どおり）。`StreamSource`
+//!   - `end_document()` の `EndDocument` は `settle` を通さない。ここで消費者が終了を示しても、それは
+//!     `EndDocument` を受理したということなので `Completed`（`EventConsumer::finish` の契約どおり）。`StreamSource`
 //!     や `DomSource` も同じで、文書を最後まで出した後の終了は `Stopped` ではない。
-//!   - 実行が終わった後の書き込みは、終わり方で扱いを分ける。`end_document()` 後（呼び出し側のバグ）とハンドラが
-//!     拒否した後（拒否した呼び出しで既に報告済み）はエラー、全ハンドラが早期終了した場合は `Ok` で無視する。
+//!   - 実行が終わった後の書き込みは、終わり方で扱いを分ける。`end_document()` 後（呼び出し側のバグ）と消費者が
+//!     拒否した後（拒否した呼び出しで既に報告済み）はエラー、全消費者が早期終了した場合は `Ok` で無視する。
 //!     早期終了は異常ではないので、文書を最後まで書くアプリが誤った失敗を受け取らないようにするため。
 //!   - API の境界では panic せず、呼び出し側の過ちも `Err` で返す（属性は報告できるよう `write_attribute` の
 //!     戻り値を `Result<()>` にした）。ライブラリがアプリのプロセスを落とす理由はなく、`Err` で同じ情報が渡る。
@@ -209,11 +249,11 @@
 //!       字句形を組まずに突き合わせる。
 //!     - `EndElement` は、閉じる要素（writer が記録した名前）とイベントの名前が一致することを確かめ、違えば
 //!       well-formedness エラー。記録した名前で黙って閉じると、イベントが述べていない文書を出力してしまうため。
-//!   - `XmlWriter` は `EventHandler` だけにし、`EventSource` の実装はやめた。書いたイベントを後段に流す使い道は
-//!     `WriterSource` と分けた今は残っておらず、複数の出力先に配るのも検査を前に置くのも `Dispatch` の仕事。
-//!   - `ValidatingWriter` は削除した（`Dispatch` に validator を前置すれば同じ）。`Serializer` も削除した
+//!   - `XmlWriter` は `EventConsumer` だけにし、`EventProducer` の実装はやめた。書いたイベントを後段に流す使い道は
+//!     `WriterSource` と分けた今は残っておらず、複数の出力先に配るのも検査を前に置くのも `Dispatcher` の仕事。
+//!   - `ValidatingWriter` は削除した（`Dispatcher` に validator を前置すれば同じ）。`Serializer` も削除した
 //!     （`DomSource` + `XmlWriter`）。名前空間の補完とインデントは失われたので、必要ならイベント列を整える
-//!     ユーティリティ handler として作り直す。
+//!     ユーティリティの消費者として作り直す。
 //! - `XmlWriter` の XML 宣言は `with_declaration` の設定にし、`StartDocument` で書く。XML 宣言を運ぶイベントがない
 //!   （パーサも読み飛ばす）ため、呼び出しではなく writer の設定に置いた。
 //!   - 設定は「宣言を書くか」（`with_declaration(bool)`）、`standalone`（`with_standalone(Option<bool>)`）、「宣言の
@@ -222,13 +262,13 @@
 //!   - `standalone` は 3 値のまま（書かない・`yes`・`no`）。省略と `"no"` は §2.9 上同じ意味だが、`"no"` と明示して
 //!     書く形を残す。
 //!   - 宣言の後の改行は、宣言を書く `XmlWriter` の責務。ほかのトップレベルの改行（DOCTYPE、コメント、PI、ルート
-//!     要素の後）は、後で作る整形用の transform の責務とし、writer は受け取ったものをそのまま書く。
-//!   - `LineBreak` は「CR・CRLF・LF・空白」の 4 値で、列挙型としての既定は LF。整形用の transform でも使うので
+//!     要素の後）は、後で作る整形用の transformer の責務とし、writer は受け取ったものをそのまま書く。
+//!   - `LineBreak` は「CR・CRLF・LF・空白」の 4 値で、列挙型としての既定は LF。整形用の transformer でも使うので
 //!     `io::write` に置く。「何も書かない」は列挙値に含めず `Option` の `None` で表す（`LineBreak` は書く文字の
 //!     種類であり、「書かない」はその不在だから）。`with_declaration_line_break` の既定は `None` で、宣言を
 //!     書く出力は従来どおり宣言の直後に次のマークアップが続く。入力の宣言の後の空白はイベントとして流れるので、
 //!     `StreamSource` から `XmlWriter` へそのまま流せば入力の改行が保たれる。改行を付け足すと二重になり得るので、
-//!     それを整えるのは整形用の transform の役目。
+//!     それを整えるのは整形用の transformer の役目。
 //! - パーサの設定は `ParserConfig` をルートとする入れ子の構造体にまとめる。
 //!   - `extensions`（XML Base、`xml:id`）、`limits`（`tokens`/`entities`/`document`）、`text_fragment_len`。
 //!   - 構造体は「どこで使われるか」で分ける: `TokenLimits` はスキャナ、`EntityLimits` は実体スタック、
@@ -253,14 +293,14 @@
 //!     失われる。`Error` しか見えない呼び出し側からも `exception.code()` で判断できるようにした。
 //!     `#[source]` にもしてあるので downcast でも辿れる。
 //!     - `From<DomException> for Error` も入れた。`?` が変換するので、DOM 操作の結果を包み直す関数は要らない。
-//!     - エラーの位置は `handle` の出口で処理中のイベントのものを `or_at` で付ける。DOM にはノードを渡すだけで
+//!     - エラーの位置は `consume` の出口で処理中のイベントのものを `or_at` で付ける。DOM にはノードを渡すだけで
 //!       位置を渡さないので、位置を知っているのはイベントだけ。そのため各イベントの処理はメソッドに切り出した
 //!       （`?` が match アームから関数ごと抜けてしまい、出口の処理を飛ばすため）。
 //!     - `failure` フィールドと `into_document` の `Result` は削除した。例外は実行のエラーとして伝わるので、
 //!       同じ事実が 2 経路で流れていたことになる。しかも `failure` に入るのは DOM 例外だけで、パースエラーでは
 //!       `Ok`（途中までの木）が返っていたので、「木が完全である」という約束にもなっていなかった。
 //!       `into_document` は `XmlWriter::into_inner` と同じく、あるものをそのまま返す。
-//!   - `StartDocument` で組み立て状態をリセットする。文書の開始は `Dispatch` と同じく新しい実行だから。
+//!   - `StartDocument` で組み立て状態をリセットする。文書の開始は `Dispatcher` と同じく新しい実行だから。
 //!     - リセットは `Document` ごと作り直す（開いているノード、捕捉した DTD、記録した基底 URI、止めた例外も含めて）。
 //!       ノードを残すと、新しい実行のルート要素が「2 つ目のルート」として DOM に拒否され、リセットしても何もできない
 //!       状態になる。1 回の実行が 1 つの文書を作る、とした。
@@ -302,7 +342,7 @@
 //!
 //! ## XInclude
 //!
-//! - 木の後処理ではなくパイプラインの一段（transform）として実装した。取り込んだ内容は木を作らずそのまま下流へ
+//! - 木の後処理ではなくパイプラインの一段（transformer）として実装した。取り込んだ内容は木を作らずそのまま下流へ
 //!   流れるので、`DomBuilder` でも `XmlWriter` でも検証器でも同じ形で使える。旧 `xenolith-xinclude` クレートは
 //!   DOM を作ってから差し替える形で、書き出しだけが目的でも木を必要としていた。
 //! - 取得できなかった（resource error）ときだけ `xi:fallback` を使う。整形式でない XML、復号できないバイト列など
@@ -318,15 +358,15 @@
 //!     仕様が制約していない（前者は「効果がない」だけ）。報告はするが、仕様より厳しいことをドキュメントに明示する。
 //!   - 公開ドキュメントには準拠する仕様（XInclude 1.0 Second Edition）へのリンクと、上の「仕様より厳しい 2 点」
 //!     だけを書く。どの節が何を禁じているかは仕様を読めば分かることなので、検査項目の一覧は置かない。
-//! - **`XIncludeTransform` はサブパイプ。** 上流からのイベントを 1) `with_max_errors(Some(0))` の
+//! - **`XIncludeTransformer` はサブパイプ。** 上流からのイベントを 1) `with_max_errors(Some(0))` の
 //!   `XIncludeSchema`、2) 処理本体の `XIncludeProcess`、3) `RootElementConstraints` の順に通す。公開型は設定と
 //!   配線だけを持ち、`xi:include` の処理は非公開の `XIncludeProcess` が持つ。
-//!   - 語彙の検査を Transform 自身が持つので、手で配線する利用者が前段を置き忘れて構造違反が黙って処理されることが
+//!   - 語彙の検査を Transformer 自身が持つので、手で配線する利用者が前段を置き忘れて構造違反が黙って処理されることが
 //!     なくなった。ファサードの前段の `ValidatorSet` も不要になった。
 //!   - 実行の終わり（`finish`）と新しい文書の始まり（`StartDocument`）を知るのは公開型だけ。`XIncludeProcess` は
 //!     入れ子の lane からも `finish` を受けるが、それは取り込んだ文書の終わりで実行の終わりではないので無視する。
 //!     以前は「開いている取り込みがないとき」だけ後続へ伝えていたため、取り込みの途中で失敗した実行は後続に
-//!     `Failed` ではなく（`Dispatch` の drop による）`Abandoned` として届き、次の文書でも状態が初期化されなかった。
+//!     `Failed` ではなく（`Dispatcher` の drop による）`Abandoned` として届き、次の文書でも状態が初期化されなかった。
 //!   - 3 段目を公開型に置けないのは、2 段目が 1 つの入力から複数のイベントを出し、その出力先を自分で持つ必要が
 //!     あるため（下の `RootElementConstraints` の項を参照）。3 段目は `XIncludeProcess` の送出経路に置く。
 //!     - 出力先を呼び出しごとに貸す形（「3 段目 + 後続」の送出先と「処理本体 + 送出先」の束の 2 型を足す）なら
@@ -336,12 +376,12 @@
 //!   fallback の位置と個数、子に置ける要素、未知の XInclude 要素）はすべてスキーマ側で、処理本体は「来たものは
 //!   妥当」と仮定する。処理本体に残るのは、取得結果に依存するものと結果に対する規則だけ。
 //!   - 致命にするのは配線で行う。`ValidatorSet::with_max_errors(Some(0))` を付けると 1 件目の妥当性エラーで
-//!     `Err` になり、`Dispatch` がそのイベントを止めるので、**違反イベントは Transform に届かない**（§2 の「resource
+//!     `Err` になり、`Dispatcher` がそのイベントを止めるので、**違反イベントは Transformer に届かない**（§2 の「resource
 //!     error 以外では処理を止める」を満たす）。エラー種別は `Error::XInclude` ではなく `Error::Validity` になる。
 //!   - 代償: §3.2 の「無視される `xi:fallback` の中の誤りを fatal error として報告してはならない」を満たせない。
 //!     前段の検証器は取得が成功するかを知る前に判断するため、使われずに捨てられる fallback の中の誤りでも止まる。
 //!     無視されるか否かは取得後にしか分からないので、静的な検証器と両立しない。検出漏れなしを採った。
-//!   - 処理本体の `handle()` の先頭に内包する形は採れない。取り込んだ文書のイベントは `xi:include` の開始タグと
+//!   - 処理本体の `consume()` の先頭に内包する形は採れない。取り込んだ文書のイベントは `xi:include` の開始タグと
 //!     終了タグの間に流れるので、内包した検証器から見ると**取得した文書のルート要素が `xi:include` の子**に見え、
 //!     §3.1 の「子に `xi:include` を置けない」に誤って当たる。文書境界（`StartDocument`）は処理本体が飲み込むので、
 //!     検証器が区別する手段もない。処理本体より前に置くしかない。サブパイプの 1 段目はこれを満たす: 取り込んだ
@@ -371,11 +411,11 @@
 //!   - **結果に対する規則なので前段の検証器には書けない**（ソース文書を見ても取り込み先の形は分からない）。
 //!     判定は「下流へ出るイベントのうち、どの要素も開いていない位置に何が来たか」だけで済み、ソース文書はそこに
 //!     要素 1 つと空白・コメント・PI しか置けないので、それ以外は取り込みが持ち込んだもの。
-//!   - `StrictXmlValidator` を下流に置いても同じ検査ができる（あれも「ルート要素は 1 つ」「外側のテキストは空白
+//!   - `StrictXmlConstraints` を下流に置いても同じ検査ができる（あれも「ルート要素は 1 つ」「外側のテキストは空白
 //!     だけ」を見る）が、開いた要素の名前を `String` のスタックで持つので要素ごとに確保が起きる。上流と入れ子の
 //!     lane が構造を検証済みの分を二重に見ることにもなるので、`usize` 2 つの軽い検査を選んだ。
 //!   - 処理本体が自分の `dispatch` に自分のフィールドを登録することはできない（自己参照）。送出の途中で通す形に
-//!     した。`EventHandler` にしているのは、§4.5 が fatal error なので止める必要があり、`Validator`（集めて続行）
+//!     した。`EventConsumer` にしているのは、§4.5 が fatal error なので止める必要があり、`Validator`（集めて続行）
 //!     の契約に合わないため。
 //!   - ルート要素が 0 個になる場合（空 fallback がルートを消した場合）も致命にする。§4.5 の引用が "and one
 //!     element" と言っており、XML 1.0 の `[1] document ::= prolog element Misc*` でも整形式でない。外側の文書の
@@ -395,14 +435,14 @@
 //!   - 判定はループ検査より前に置く。§4.2.7 のループの鍵は「include location と xpointer の組」だが、今の鍵は
 //!     URI だけなので、後に置くと同じ文書内の別の部分を指す `xpointer` を循環参照と誤認する。
 //!   - 検証器は `xpointer` を妥当と扱う（§3.1 が認めている）。「この実装が carry out できない」ことなので
-//!     Transform の役目、という分担はここでも保たれる。
+//!     Transformer の役目、という分担はここでも保たれる。
 //!   - `href` なしのエラーとはメッセージで区別する。こちらは XPointer 実装後に通るようになるが、あちらはならない。
 //! - **`href` のない `xi:include`（同一文書の部分取り込み）は取り込まず、リソースエラーにする。** §3.1 は `href` の
 //!   省略を `href=""`、すなわち処理中の文書自身への参照と定めているが、これはイベントパイプラインでは扱えない。
 //!   XPointer を実装した後もこのまま（TODO ではなく設計上の帰結）。§4.1 が "An implementation may choose to treat
 //!   any or all absences of a value for the href attribute as resource errors" と認めているのでリソースエラーとし
 //!   （当初は致命エラーだった）、同節の "should document the conditions" に従いモジュールドキュメントに書く。
-//!   - 理由: Transform の手元に「現在の文書」がない。イベントはコールバック 1 回の借用で、流したら忘れる。
+//!   - 理由: Transformer の手元に「現在の文書」がない。イベントはコールバック 1 回の借用で、流したら忘れる。
 //!     ポインタの指す先は `xi:include` より後ろにあり得る（前方参照）ので、その場では答えられず、前にあるものは
 //!     既に下流へ流れている。短縮ポインタが要する ID は DTD か `xml:id` から来るので、文書を読み終わるまで確定
 //!     しない。
@@ -411,7 +451,7 @@
 //!   - 必要になったら、木の上で動く別の手段（DOM を構築してから展開するパス）を用意する。旧 `xenolith-xinclude`
 //!     が DOM 後処理だったのは、この制約が理由だったと読める。
 //!   - 一方 `href` のある `xpointer`（外部リソースの部分取り込み）はこの設計でも実装でき、しかも**XPointer 自身を
-//!     フィルタ型の Transform** にできる。選択した部分木の中のイベントだけを通すハンドラを、取得したリソースを
+//!     Filter（`XPointerFilter`）** にできる。選択した部分木の中のイベントだけを通す消費者を、取得したリソースを
 //!     読む入れ子のパイプラインに挟めばよい。位置指定（`element(/1/2)`）は深さと出現位置を数えるだけ、短縮
 //!     ポインタ（ID）は `xml:id` なら開始タグの属性で判定でき、DTD 宣言の ID 型も `Doctype` イベントが運ぶ `Dtd`
 //!     から分かるので、いずれも木を作らずに流しながら選べる。何も選ばなければ §4.2 の「An error in the XPointer
@@ -420,7 +460,7 @@
 //!       前の候補が失敗したと分かるのは文書の終わりなので、バッファか 2 パスが必要になる。`xpointer()` scheme
 //!       （XPath ベース）も対象外（ROADMAP）。
 //!   - 検証器は `href` のない `xi:include` を妥当と扱う（§3.1 が認めている）。文書の誤りではなく、この実装が
-//!     carry out できないだけなので、扱うのは Transform の役目。
+//!     carry out できないだけなので、扱うのは Transformer の役目。
 //! - §4.2.7 のループ検査が比べるのは、**実際にリソースを処理しているスコープ**（`InclusionInProcessing`）だけ。
 //!   fallback 中のスコープのリソースは取得できておらず処理されていないので、fallback の中で同じ URI を取り込むのは
 //!   ループではない（「部分が選べなければ全体を」という書き方）。以前は「エラーを持たないスコープ」で絞っていた
@@ -462,10 +502,10 @@
 //!     発火するので、`pub(crate)` 型の `pub fn` は警告になる（実測で確認）。フィールドだけが簡略化できる。
 //! - `io::sax` は削除した。コードを持たず、モジュール説明（SAX 移行ガイド）と `crate::event` の再公開だけの
 //!   モジュールで、同じ型に公開パスが 2 本ある状態だった（クレート内の import も 2 通りに割れていた）。
-//!   ROADMAP が計画していた「SAX 相当の push アダプタ」は `EventHandler` + `emit` として event 語彙に吸収済み。
+//!   ROADMAP が計画していた「SAX 相当の push アダプタ」は `EventConsumer` + `emit` として event 語彙に吸収済み。
 //!   - ガイドの内容は `MIGRATING-FROM-JAVA.md`（元から同じ対応表を持つ）に寄せた。代償として、その節の例は
 //!     コンパイルされなくなる（この md は rustdoc に取り込まれていない）。振る舞いは移したユニットテストが見る。
-//!   - モジュールのテスト 8 件は「パーサがハンドラを駆動する」ことの検証なので `io::read` のテスト（`mod push`）へ
+//!   - モジュールのテスト 8 件は「パーサが消費者を駆動する」ことの検証なので `io::read` のテスト（`mod push`）へ
 //!     移した。
 //! - ファサードは内部で使う部品のオプションを `with_*` で中継する（`Reader`: `with_encoding`、`with_config`、
 //!   `with_resolver`、`with_xinclude`、
@@ -479,7 +519,7 @@
 //!   - `Writer` は `String` を持つので `Copy` を外した（`Clone` は維持）。
 //!   - `Reader` の `Default` は derive しない。derive では `strict`/`xml_id` が `false` になり、`new()`（どちらも
 //!     有効）と食い違う。
-//!   - リゾルバは `StreamSource` が所有していたが、ハンドラと同じ借用に変えた。所有だと source と一緒に drop
+//!   - リゾルバは `StreamSource` が所有していたが、消費者と同じ借用に変えた。所有だと source と一緒に drop
 //!     されるので、読みごとに作り直すか `Reader` を消費する形にするしかなく、カタログやキャッシュを持つリゾルバを
 //!     使い回せない。さらに XInclude は外側のパースと入れ子のパースで同じリゾルバを必要とするので、所有では共有
 //!     できない。アプリが持ち、実行の間だけ貸す。
@@ -488,23 +528,23 @@
 //!     `Rc`（`self` を貸した後でも掴めるハンドル）、それを渡す入口（`with_shared_resolver`）、セルを
 //!     `UriResolver` に見せるアダプタ（`Lent`）が積み上がっていた。**全部 `&mut self` の派生物だった。**
 //!     - `&self` なら共有参照は `Copy` かつ共変なので、パーサにも入れ子のパースにも同じ参照を渡すだけで済み、上の
-//!       4 つが全部消える。実行時の borrow panic の危険もなくなる。`XIncludeTransform` の寿命引数を 2 つに割った
+//!       4 つが全部消える。実行時の borrow panic の危険もなくなる。`XIncludeTransformer` の寿命引数を 2 つに割った
 //!       理由（`RefCell` が不変で `'h` を縛る）も消えた。
 //!     - 代償は、状態を持つリゾルバが自分で内部可変性（`RefCell` など）を書くこと。キャッシュや記録を持つ実装だけが
 //!       払い、借り手側は誰も背負わない配分になる。以前は逆で、状態を持たないリゾルバのためにも全借り手が共有機構を
 //!       背負っていた。
 //!     - 非同期側（`AsyncUriResolver`）も `&self` に揃えた。同期と非同期でリゾルバの書き方が変わらないようにする。
 //!   - リゾルバは `Option` で持たず、常に 1 つある形にした（`NoResolver::shared()`）。「リゾルバがない」分岐が
-//!     `StreamSource` と `XIncludeTransform` とファサードから消え、「解決しない」という振る舞いと、`with_resolver`
+//!     `StreamSource` と `XIncludeTransformer` とファサードから消え、「解決しない」という振る舞いと、`with_resolver`
 //!     を呼べというメッセージが `NoResolver` 自身に集まる。定数ではなくメソッドで渡すのは、公開するものを型と
 //!     メソッドに留めるため。
 //!     - 非同期側に同名の型があったので 1 つに統合した（`impl UriResolver` と `impl AsyncUriResolver` の両方を
 //!       持つ 1 つの型）。型 1 つに公開パス 2 本、という `io::sax` で解消した状態を作らないため。
-//! - `Transform` を語彙として定義した。`EventHandler` かつ `EventSource`、すなわちパイプラインの中段のこと
-//!   （SAX の `org.xml.sax.XMLFilter` の役割）。`XIncludeTransform` が最初の実装で、`XSLTransform` もこの形で
+//! - `Transformer` を語彙として定義した。`EventConsumer` かつ `EventProducer`、すなわちパイプラインの中段のこと
+//!   （SAX の `org.xml.sax.XMLFilter` の役割）。`XIncludeTransformer` が最初の実装で、`XSLTransform` もこの形で
 //!   実装する想定。整形や名前空間の補完もここに入る。
-//!   - トレイト `Transform: EventSource + EventHandler` は作らない。境界として書けば同じことが言えるので能力が
-//!     増えない。動的なパイプライン（`Vec<Box<dyn Transform>>`）も作れない: `EventSource::with_handler` は
+//!   - トレイト `Transformer: EventProducer + EventConsumer` は作らない。境界として書けば同じことが言えるので能力が
+//!     増えない。動的なパイプライン（`Vec<Box<dyn Transformer>>`）も作れない: `EventProducer::add_consumer` は
 //!     `self` を取る `where Self: Sized` なので vtable に載らず、`dyn` では後段を配線できない。名前だけの
 //!     マーカーになるため、語彙のままにして、中段が守るべきことは `event` のモジュールドキュメントに書く。
 //!   - 動的なパイプラインが必要になったら、足すのはトレイトではなく `set_handler(&mut self, ..)` のような

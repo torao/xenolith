@@ -67,8 +67,8 @@ fn pi<'a>(target: &'a str, data: &'a str) -> EventRef<'a> {
 
 /// Runs `events` through one validator, returning the first refusal.
 fn run(events: &[EventRef<'_>]) -> Result<()> {
-  let mut strict = StrictXmlValidator::new();
-  events.iter().try_for_each(|event| strict.handle(event))
+  let mut strict = StrictXmlConstraints::new();
+  events.iter().try_for_each(|event| strict.consume(event).map(drop))
 }
 
 /// Runs `events` as the content of a document with an empty root element `r` around them.
@@ -139,9 +139,9 @@ fn a_part_that_begins_badly_is_named_as_the_part_it_is() {
 fn an_attribute_prefix_that_is_not_bound_is_reported_at_the_attribute() {
   let at = Location { line: 4, column: 9, offset: 30, ..Location::unknown() };
   let unbound = vec![Attribute { location: at, ..attribute("q:x", Some("urn:q"), "1") }];
-  let mut strict = StrictXmlValidator::new();
-  strict.handle(&EventRef::StartDocument).unwrap();
-  let error = strict.handle(&start("a", None, &unbound)).expect_err("`q` is not bound");
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
+  let error = strict.consume(&start("a", None, &unbound)).expect_err("`q` is not bound");
   assert!(error.message().contains("prefix \"q\" is not bound"), "{error}");
   assert_eq!((error.location().line, error.location().column), (4, 9), "at the attribute, not its element");
 }
@@ -203,11 +203,11 @@ fn an_end_element_that_does_not_match_names_where_its_start_element_was() {
     Location { line: 4, column: 1, offset: 30, ..Location::unknown() },
   ));
 
-  let mut strict = StrictXmlValidator::new();
-  strict.handle(&EventRef::StartDocument).unwrap();
-  strict.handle(&start("r", None, &none)).unwrap();
-  strict.handle(&opened).unwrap();
-  let error = strict.handle(&closed).expect_err("</b> does not close <a>");
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
+  let _ = strict.consume(&start("r", None, &none)).unwrap();
+  let _ = strict.consume(&opened).unwrap();
+  let error = strict.consume(&closed).expect_err("</b> does not close <a>");
   assert!(error.message().contains("<a> (opened at line 2, column 3) is closed with an invalid </b>"), "{error}");
   assert_eq!((error.location().line, error.location().column), (4, 1), "the error itself is at the end element");
 
@@ -231,10 +231,10 @@ fn an_element_left_open_is_reported_where_it_was_opened() {
     at,
   ));
 
-  let mut strict = StrictXmlValidator::new();
-  strict.handle(&EventRef::StartDocument).unwrap();
-  strict.handle(&opened).unwrap();
-  let error = strict.handle(&EventRef::EndDocument).expect_err("<r> was never closed");
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
+  let _ = strict.consume(&opened).unwrap();
+  let error = strict.consume(&EventRef::EndDocument).expect_err("<r> was never closed");
 
   assert!(error.message().contains("<r> is not closed"), "{error}");
   assert_eq!((error.location().line, error.location().column), (3, 5), "where the start element was");
@@ -261,10 +261,10 @@ fn text_and_cdata_sections_outside_the_root_element_are_refused() {
 
 #[test]
 fn a_character_xml_does_not_allow_is_refused_where_it_is() {
-  let mut strict = StrictXmlValidator::new();
-  strict.handle(&EventRef::StartDocument).unwrap();
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
   let error =
-    strict.handle(&EventRef::Comment(CommentEventRef::new("a\u{1}", Location::new()))).expect_err("U+0001 is refused");
+    strict.consume(&EventRef::Comment(CommentEventRef::new("a\u{1}", Location::new()))).expect_err("U+0001 is refused");
   assert!(error.message().contains("U+0001"), "{error}");
   assert_eq!(error.location().column, 6, "after `<!--a`");
   let value = vec![attribute("x", None, "\u{FFFE}")];
@@ -337,24 +337,24 @@ fn xml_space_is_default_or_preserve() {
 
 #[test]
 fn a_lexical_only_validator_checks_nothing_the_parser_checks() {
-  let mut strict = StrictXmlValidator::lexical_only();
+  let mut strict = StrictXmlConstraints::lexical_only();
   let none = Vec::new();
   // Outside a document, unbalanced, and with an unbound prefix: all the parser's to refuse.
   for event in [comment("c"), end("a", None), start("p:b", None, &none), text("\u{1}")] {
-    strict.handle(&event).unwrap();
+    let _ = strict.consume(&event).unwrap();
   }
-  assert!(strict.handle(&comment("a--b")).unwrap_err().message().contains("--"));
+  assert!(strict.consume(&comment("a--b")).unwrap_err().message().contains("--"));
 }
 
 #[test]
 fn each_start_document_starts_the_check_afresh() {
   let none = Vec::new();
-  let mut strict = StrictXmlValidator::new();
+  let mut strict = StrictXmlConstraints::new();
   // A run that stopped inside its root element, then a whole document.
   for event in [EventRef::StartDocument, start("a", None, &none)] {
-    strict.handle(&event).unwrap();
+    let _ = strict.consume(&event).unwrap();
   }
   for event in [EventRef::StartDocument, start("b", None, &none), end("b", None), EventRef::EndDocument] {
-    strict.handle(&event).unwrap();
+    let _ = strict.consume(&event).unwrap();
   }
 }

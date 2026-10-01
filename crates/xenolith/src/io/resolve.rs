@@ -31,7 +31,7 @@ pub enum RequestKind {
   /// An external parameter entity referenced while loading the DTD.
   ParameterEntity,
   /// A resource an `xi:include` element names. The parser never asks for one of these: the request comes from
-  /// [`XIncludeTransform`](crate::xinclude::XIncludeTransform), which reads the resource itself.
+  /// [`XIncludeTransformer`](crate::xinclude::XIncludeTransformer), which reads the resource itself.
   XInclude {
     /// The accept attribute on xi:include. §3.1:
     /// > The value of the accept attribute may be used by the XInclude processor to aid in content negotiation.

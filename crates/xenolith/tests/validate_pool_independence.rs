@@ -10,7 +10,7 @@ use xenolith::dtd::validate::DtdValidator;
 use xenolith::error::{Location, Result};
 use xenolith::event::validate::Validator;
 use xenolith::event::{
-  EndElementEventRef, EventCursor, EventHandler, EventRef, EventSource, StartElementEventRef, XmlSpace,
+  EndElementEventRef, EventConsumer, EventCursor, EventProducer, EventRef, Flow, StartElementEventRef, XmlSpace,
 };
 use xenolith::io::StreamSource;
 use xenolith::name::{NameId, NamePool};
@@ -23,17 +23,14 @@ struct CaptureDtd {
   root: Option<NameId>,
 }
 
-impl EventHandler for CaptureDtd {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
-    let EventRef::Doctype(event) = event else { return Ok(()) };
+impl EventConsumer for CaptureDtd {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    let EventRef::Doctype(event) = event else { return Ok(Flow::Continue(0)) };
     self.root = event.name.and_then(|name| event.pool.get(name));
     self.dtd = Some(event.dtd.clone());
     self.pool = Some(event.pool.fork());
-    Ok(())
-  }
-
-  fn should_continue(&self) -> bool {
-    self.dtd.is_none() // the DTD is all this wants
+    // the DTD is all this wants
+    Ok(if self.dtd.is_none() { Flow::Continue(0) } else { Flow::Break(0) })
   }
 }
 
@@ -61,7 +58,7 @@ impl AttributeList for Attrs {
 /// Builds a validator from `xml`'s DTD, whose pool holds every name the document declared.
 fn validator_for(xml: &str) -> DtdValidator {
   let mut capture = CaptureDtd::default();
-  StreamSource::new(xml.as_bytes()).with_handler(&mut capture).emit().expect("well-formed");
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut capture).emit().expect("well-formed");
   DtdValidator::new(
     capture.dtd.expect("a DTD"),
     capture.pool.expect("the pool it was parsed in"),
@@ -82,18 +79,18 @@ fn start(validator: &mut DtdValidator, local: &str, attributes: &Attrs) {
     None,
     Location::unknown(),
   ));
-  validator.handle(&event).expect("a validity error does not refuse the document");
+  let _ = validator.consume(&event).expect("a validity error does not refuse the document");
 }
 
 /// Hands the validator an end element event.
 fn end(validator: &mut DtdValidator, local: &str) {
   let event = EventRef::EndElement(EndElementEventRef::new(None, local, None, Location::unknown()));
-  validator.handle(&event).expect("a validity error does not refuse the document");
+  let _ = validator.consume(&event).expect("a validity error does not refuse the document");
 }
 
 /// Ends the document, which is what runs the whole-document checks.
 fn finish(validator: &mut DtdValidator) {
-  validator.handle(&EventRef::EndDocument).expect("a validity error does not refuse the document");
+  let _ = validator.consume(&EventRef::EndDocument).expect("a validity error does not refuse the document");
 }
 
 /// The validator's errors as text.

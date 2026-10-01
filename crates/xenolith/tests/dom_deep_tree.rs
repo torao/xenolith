@@ -66,23 +66,23 @@ fn descending_does_not_recurse_on_depth() {
 fn emitting_a_deep_tree_does_not_recurse_on_depth() {
   use xenolith::dom::DomSource;
   use xenolith::error::Result;
-  use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource};
+  use xenolith::event::{EventConsumer, EventCursor, EventProducer, EventRef, Flow};
 
   #[derive(Default)]
   struct CountElements(usize);
-  impl EventHandler for CountElements {
-    fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+  impl EventConsumer for CountElements {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
       if matches!(event, EventRef::StartElement(_)) {
         self.0 += 1;
       }
-      Ok(())
+      Ok(Flow::Continue(0))
     }
   }
 
   on_a_small_stack(|| {
     let (doc, _root) = deep_document();
     let mut count = CountElements::default();
-    DomSource::new(&doc).with_handler(&mut count).emit().expect("emitted");
+    DomSource::new(&doc).add_consumer(&mut count).emit().expect("emitted");
     assert_eq!(count.0, DEPTH);
   });
 }

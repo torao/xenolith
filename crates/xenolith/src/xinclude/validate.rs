@@ -6,7 +6,7 @@ use crate::chars::{is_enc_name, is_whitespace};
 use crate::error::{Location, Result};
 use crate::event::validate::Schema;
 use crate::event::validate::{Validator, ValidityError};
-use crate::event::{EventHandler, EventRef, StartElementEventRef};
+use crate::event::{EventConsumer, EventRef, Flow, StartElementEventRef};
 
 use super::XINCLUDE_NS;
 
@@ -33,13 +33,13 @@ use super::XINCLUDE_NS;
 ///
 /// ```
 /// use xenolith::event::validate::ValidatorSet;
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 /// use xenolith::xinclude;
 ///
 /// let xml = "<doc xmlns:xi='http://www.w3.org/2001/XInclude'><xi:include parse='html'/></doc>";
-/// let mut validation = ValidatorSet::new().with_schema(&xinclude::XIncludeSchema);
-/// StreamSource::new(xml.as_bytes()).with_handler(&mut validation).emit()?;
+/// let mut validation = ValidatorSet::new().add_schema(&xinclude::XIncludeSchema);
+/// StreamSource::new(xml.as_bytes()).add_consumer(&mut validation).emit()?;
 ///
 /// // Note that although there are two errors in a single xi:include element, the document loads completely without
 /// // stopping at the first validation failure. Using with_max_exceptions(Some(0)) allows the code to throw an error
@@ -218,8 +218,9 @@ impl XIncludeValidator {
   }
 }
 
-impl EventHandler for XIncludeValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for XIncludeValidator {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    let before = self.errors.len();
     match event {
       EventRef::StartDocument => {
         // clear the previous state at the beginning of the document
@@ -255,7 +256,8 @@ impl EventHandler for XIncludeValidator {
       }
       _ => {}
     }
-    Ok(())
+    // A `StartDocument` clears the list, so what it held before is not counted against this event.
+    Ok(Flow::Continue(self.errors.len().saturating_sub(before)))
   }
 }
 
@@ -264,7 +266,7 @@ impl Validator for XIncludeValidator {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
@@ -278,7 +280,7 @@ impl Validator for XIncludeValidator {
 /// (§4.5): "It is a fatal error to attempt to replace an xi:include element appearing as the document (top-level)
 /// element in the source infoset with something other than a list of zero or more comments, zero or more processing
 /// instructions, and one element." Since the document itself — or the document being imported — is in a structured
-/// format, if such a structure appears when it is sent to the subsequent handler, it must have been introduced by
+/// format, if such a structure appears when it is sent to the subsequent consumer, it must have been introduced by
 /// `xi:include`.
 ///
 /// If the inclusion removes the root element entirely, this also violates the "one element" clause and is therefore
@@ -292,8 +294,8 @@ pub(super) struct RootElementConstraints {
   elements: usize,
 }
 
-impl EventHandler for RootElementConstraints {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for RootElementConstraints {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if self.depth == 0 {
       match event {
         EventRef::StartElement(start) => {
@@ -325,6 +327,7 @@ impl EventHandler for RootElementConstraints {
       EventRef::EndElement(..) => self.depth = self.depth.saturating_sub(1),
       _ => {}
     }
-    Ok(())
+    // A violation refuses the document, so no error is ever recorded to be counted.
+    Ok(Flow::Continue(0))
   }
 }

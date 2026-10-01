@@ -8,13 +8,13 @@ use xenolith::dom::build::DomBuilder;
 use xenolith::dtd::DtdReader;
 use xenolith::dtd::validate::DtdSchema;
 use xenolith::event::validate::{Report, ValidatorSet};
-use xenolith::event::{EventCursor, EventSource};
+use xenolith::event::{EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the parser and the builder.
 fn parse_document(xml: &[u8]) -> xenolith::Result<xenolith::dom::Document> {
   let mut builder = DomBuilder::new();
-  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  StreamSource::new(xml).add_consumer(&mut builder).emit()?;
   Ok(builder.into_document())
 }
 
@@ -29,8 +29,8 @@ fn schema() -> DtdSchema {
 
 /// Checks the events of a walk over `doc` against `schema`.
 fn check_tree(doc: &xenolith::dom::Document, schema: &DtdSchema) -> Report {
-  let mut validation = ValidatorSet::new().with_schema(schema);
-  DomSource::new(doc).with_handler(&mut validation).emit().expect("emitted");
+  let mut validation = ValidatorSet::new().add_schema(schema);
+  DomSource::new(doc).add_consumer(&mut validation).emit().expect("emitted");
   validation.report()
 }
 
@@ -39,8 +39,8 @@ fn a_document_stream_is_checked_against_a_dtd_of_its_own() {
   let schema = schema();
   let xml = "<note id='n1'><body>hi</body></note>";
 
-  let mut validation = ValidatorSet::new().with_schema(&schema);
-  StreamSource::new(xml.as_bytes()).with_handler(&mut validation).emit().expect("well-formed");
+  let mut validation = ValidatorSet::new().add_schema(&schema);
+  StreamSource::new(xml.as_bytes()).add_consumer(&mut validation).emit().expect("well-formed");
   let report = validation.report();
   assert!(report.errors().is_empty(), "unexpected errors: {:?}", report.errors());
   assert!(report.is_valid(), "a schema is something to be valid against, even without a DOCTYPE");
@@ -94,9 +94,9 @@ fn one_schema_serves_several_documents() {
   // them, does not leak into the next.
   let schema = schema();
   for _ in 0..3 {
-    let mut validation = ValidatorSet::new().with_schema(&schema);
+    let mut validation = ValidatorSet::new().add_schema(&schema);
     StreamSource::new("<note id='n1'><body>x</body></note>".as_bytes())
-      .with_handler(&mut validation)
+      .add_consumer(&mut validation)
       .emit()
       .expect("well-formed");
     let report = validation.report();

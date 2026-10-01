@@ -1,18 +1,19 @@
-//! Defines a [`StrictXmlValidator`] that verifies whether a sequence of events constitutes a well-formed XML document.
+//! Defines a [`StrictXmlConstraints`] that verifies whether a sequence of events constitutes a well-formed XML
+//! document.
 //!
-//! The [`StrictXmlValidator`] rejects events that cannot occur in an XML 1.0 document that is both well-formed and
+//! The [`StrictXmlConstraints`] rejects events that cannot occur in an XML 1.0 document that is both well-formed and
 //! namespace-well-formed. This validator does not assume the event sequence originated from a parser; it performs the
 //! same validation regardless of the event source — whether the events arise from tree traversal, programmatic
 //! construction, or the replay of stored events. When placed before an [`XmlWriter`](crate::io::write::XmlWriter)
-//! within a [`Dispatch`](crate::event::Dispatch), it can reject invalid events before they are serialized into a byte
-//! stream.
+//! within a [`Dispatcher`](crate::event::Dispatcher), it can reject invalid events before they are serialized into a
+//! byte stream.
 //!
 //! In xenolith, documents that have not passed validation by this validator are referred to as "Loose XML." While they
 //! may actually be well-formed XML, there is nothing to indicate that they are indeed XML.
 //!
 //! The [`Parser`](crate::io::parse::Parser) validates most of these constraints during the reading process. If the
 //! events are known to originate from a parser, redundant checks can be avoided by using
-//! [`StrictXmlValidator::lexical_only`].
+//! [`StrictXmlConstraints::lexical_only`].
 //!
 
 #[cfg(test)]
@@ -21,11 +22,13 @@ mod test;
 use crate::attr::AttributeRef;
 use crate::chars;
 use crate::error::{Error, Location, Result};
+use crate::event::validate::{Validator, ValidityError};
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventConsumer, EventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
+use std::borrow::Cow;
 
 /// Validates whether the input events constitute a well-formed XML document.
 ///
@@ -74,19 +77,19 @@ use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 /// validator can be used to validate multiple documents, even if processing stops midway.
 ///
 /// For applications that need to allow certain rule violations for various reasons, you can implement a custom
-/// [`EventHandler`] that wraps this and modifies the events being passed. The second example below allows comments
+/// [`EventConsumer`] that wraps this and modifies the events being passed. The second example below allows comments
 /// containing `--`.
 ///
 /// # Examples
 ///
 /// ```
-/// use xenolith::event::strict::StrictXmlValidator;
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::strict::StrictXmlConstraints;
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 ///
 /// let xml = "<a>\n  <!-- a -- b -->\n</a>";
-/// let mut strict = StrictXmlValidator::new();
-/// let error = StreamSource::new(xml.as_bytes()).with_handler(&mut strict).emit().unwrap_err();
+/// let mut strict = StrictXmlConstraints::new();
+/// let error = StreamSource::new(xml.as_bytes()).add_consumer(&mut strict).emit().unwrap_err();
 /// assert!(error.message().contains("--"));
 /// // Located at the first of the two dashes.
 /// assert_eq!((error.location().line, error.location().column), (2, 10));
@@ -97,20 +100,20 @@ use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 ///
 /// ```
 /// use xenolith::Result;
-/// use xenolith::event::strict::StrictXmlValidator;
-/// use xenolith::event::{CommentEventRef, EventCursor, EventHandler, EventRef, EventSource};
+/// use xenolith::event::strict::StrictXmlConstraints;
+/// use xenolith::event::{CommentEventRef, EventCursor, EventConsumer, EventRef, EventProducer, Flow};
 /// use xenolith::io::StreamSource;
 ///
-/// /// Checks a document as strictly as `StrictXmlValidator`, except that a comment may hold `--`.
+/// /// Checks a document as strictly as `StrictXmlConstraints`, except that a comment may hold `--`.
 /// #[derive(Default)]
 /// struct CommentDashesAllowed {
-///   strict: StrictXmlValidator,
+///   strict: StrictXmlConstraints,
 ///   text: String,
 /// }
 ///
-/// impl EventHandler for CommentDashesAllowed {
-///   fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
-///     let EventRef::Comment(comment) = event else { return self.strict.handle(event) };
+/// impl EventConsumer for CommentDashesAllowed {
+///   fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+///     let EventRef::Comment(comment) = event else { return self.strict.consume(event) };
 ///     // One character is replaced by one, so every position is kept. A final dash is not followed by another and
 ///     // stays, so a comment that ends in `-` is still refused.
 ///     self.text.clear();
@@ -118,21 +121,21 @@ use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 ///     while let Some(c) = chars.next() {
 ///       self.text.push(if c == '-' && chars.peek() == Some(&'-') { '_' } else { c });
 ///     }
-///     self.strict.handle(&EventRef::Comment(CommentEventRef::new(&self.text, comment.location.clone())))
+///     self.strict.consume(&EventRef::Comment(CommentEventRef::new(&self.text, comment.location.clone())))
 ///   }
 /// }
 ///
 /// let mut relaxed = CommentDashesAllowed::default();
-/// StreamSource::new("<a><!-- -- --></a>".as_bytes()).with_handler(&mut relaxed).emit()?;
+/// StreamSource::new("<a><!-- -- --></a>".as_bytes()).add_consumer(&mut relaxed).emit()?;
 ///
 /// // Only the dashes are excused: the mismatched end tag is still refused.
 /// let mut relaxed = CommentDashesAllowed::default();
-/// let error = StreamSource::new("<a><!-- -- --></b>".as_bytes()).with_handler(&mut relaxed).emit().unwrap_err();
+/// let error = StreamSource::new("<a><!-- -- --></b>".as_bytes()).add_consumer(&mut relaxed).emit().unwrap_err();
 /// assert!(error.message().contains("</b> does not close <a>"), "{error}");
 /// # Ok::<(), xenolith::Error>(())
 /// ```
 #[derive(Clone, Debug, Default)]
-pub struct StrictXmlValidator {
+pub struct StrictXmlConstraints {
   /// Whether to check only those constraints not verified by the parser (configured via
   /// [`lexical_only`](Self::lexical_only)).
   lexical_only: bool,
@@ -178,7 +181,7 @@ struct OpenElement {
   location: Location,
 }
 
-impl StrictXmlValidator {
+impl StrictXmlConstraints {
   /// Creates a validator.
   #[must_use]
   pub fn new() -> Self {
@@ -200,12 +203,12 @@ impl StrictXmlValidator {
   ///
   /// ```
   /// use xenolith::event::EventCursor;
-  /// use xenolith::event::strict::StrictXmlValidator;
+  /// use xenolith::event::strict::StrictXmlConstraints;
   /// use xenolith::io::StreamSource;
-  /// use xenolith::event::EventSource;
+  /// use xenolith::event::EventProducer;
   ///
-  /// let mut strict = StrictXmlValidator::lexical_only();
-  /// let error = StreamSource::new("<a><!-- a -- b --></a>".as_bytes()).with_handler(&mut strict).emit().unwrap_err();
+  /// let mut strict = StrictXmlConstraints::lexical_only();
+  /// let error = StreamSource::new("<a><!-- a -- b --></a>".as_bytes()).add_consumer(&mut strict).emit().unwrap_err();
   /// assert!(error.message().contains("--"));
   /// ```
   #[must_use]
@@ -420,8 +423,27 @@ impl StrictXmlValidator {
   }
 }
 
-impl EventHandler for StrictXmlValidator {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for StrictXmlConstraints {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+    // A violation refuses the document, so no error is ever recorded to be counted.
+    self.check(event).map(|()| Flow::Continue(0))
+  }
+}
+
+impl Validator for StrictXmlConstraints {
+  /// Always empty: this validator refuses the document at the first violation instead of recording it.
+  fn errors(&self) -> Cow<'_, [ValidityError]> {
+    Cow::Borrowed(&[])
+  }
+
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
+    self
+  }
+}
+
+impl StrictXmlConstraints {
+  /// Checks one event against the rules this validator applies.
+  fn check(&mut self, event: &EventRef<'_>) -> Result<()> {
     if self.lexical_only {
       return lexical(event);
     }

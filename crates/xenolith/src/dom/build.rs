@@ -1,22 +1,22 @@
 //! Builds a [`Document`] from an event sequence generated during processes such as XML parsing.
 //!
-//! [`DomBuilder`] is a type of [`EventHandler`] that builds a DOM tree based on events generated from an arbitrary
+//! [`DomBuilder`] is a type of [`EventConsumer`] that builds a DOM tree based on events generated from an arbitrary
 //! event source.
 
 use crate::chars::is_whitespace;
 use crate::dtd::model::{AttType, Dtd};
 use crate::error::Error;
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventConsumer, EventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::name::{NamePool, XML_NS_URI};
 
 use crate::dom::{Document, DomException, NodeId};
 
-/// An [`EventHandler`] that builds a [`Document`] from received events.
+/// An [`EventConsumer`] that builds a [`Document`] from received events.
 ///
-/// It can be attached to an [`EventSource`](crate::event::EventSource), such as a
+/// It can be attached to an [`EventProducer`](crate::event::EventProducer), such as a
 /// [`StreamSource`](crate::io::StreamSource), and the built document can be retrieved via
 /// [`into_document`](Self::into_document) after all events have been received.
 ///
@@ -30,22 +30,22 @@ use crate::dom::{Document, DomException, NodeId};
 /// whitespace in those locations, the DOM specification does not allow character data to be placed directly under the
 /// `document` node.
 ///
-/// Since [`DomBuilder`] is an [`EventHandler`], it can operate in a single parsing pass alongside other handlers. In
-/// many cases, a [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator) should be placed upstream to ensure
-/// that the constructed DOM is well-formed XML, and if validity is also required, it is appropriate to include another
-/// [`ValidatorSet`](crate::event::validate::ValidatorSet).
+/// Since [`DomBuilder`] is an [`EventConsumer`], it can operate in a single parsing pass alongside other consumers. In
+/// many cases, a [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints) should be placed upstream to
+/// ensure that the constructed DOM is well-formed XML, and if validity is also required, it is appropriate to include
+/// another [`ValidatorSet`](crate::event::validate::ValidatorSet).
 ///
 /// # Examples
 ///
 /// A build driven by an XML byte stream via the parser's [`emit`](crate::event::EventCursor::emit):
 ///
 /// ```
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::io::StreamSource;
 ///
 /// let mut builder = DomBuilder::new();
-/// StreamSource::new("<doc><p>Hello</p></doc>".as_bytes()).with_handler(&mut builder).emit()?;
+/// StreamSource::new("<doc><p>Hello</p></doc>".as_bytes()).add_consumer(&mut builder).emit()?;
 /// let doc = builder.into_document();
 /// let root = doc.document_element().unwrap();
 /// assert_eq!(doc.node_name(root), "doc");
@@ -54,21 +54,21 @@ use crate::dom::{Document, DomException, NodeId};
 /// ```
 ///
 /// Validation against an internal DTD and DOM construction are performed in a single pass. Add this using
-/// [`with_schema`](crate::event::validate::ValidatorSet::with_schema), either instead of or in conjunction with
+/// [`add_schema`](crate::event::validate::ValidatorSet::add_schema), either instead of or in conjunction with
 /// `validating_dtd`:
 ///
 /// ```
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::event::validate::ValidatorSet;
-/// use xenolith::event::{Dispatch, EventCursor, EventSource};
+/// use xenolith::event::{Dispatcher, EventCursor, EventProducer};
 /// use xenolith::io::StreamSource;
 ///
 /// let xml = "<!DOCTYPE r [<!ELEMENT r (item+)><!ELEMENT item (#PCDATA)>]><r><item>hi</item></r>";
 /// let mut validation = ValidatorSet::new().validating_dtd(true);
 /// let mut builder = DomBuilder::new();
 /// {
-///   let mut lane = Dispatch::new().with_handler(&mut validation).with_handler(&mut builder);
-///   StreamSource::new(xml.as_bytes()).with_handler(&mut lane).emit()?;
+///   let mut lane = Dispatcher::new().add_consumer(&mut validation).add_consumer(&mut builder);
+///   StreamSource::new(xml.as_bytes()).add_consumer(&mut lane).emit()?;
 /// }
 /// assert!(validation.report().is_valid());
 ///
@@ -296,8 +296,8 @@ impl DomBuilder {
   }
 }
 
-impl EventHandler for DomBuilder {
-  fn handle(&mut self, event: &EventRef<'_>) -> crate::Result<()> {
+impl EventConsumer for DomBuilder {
+  fn consume(&mut self, event: &EventRef<'_>) -> crate::Result<Flow> {
     if !matches!(event, EventRef::StartDocument) {
       self.fresh = false;
     }
@@ -317,7 +317,8 @@ impl EventHandler for DomBuilder {
     };
     match (handled, event.location()) {
       (Err(error), Some(at)) => Err(error.or_at(at.clone())),
-      (handled, _) => handled,
+      (Err(error), None) => Err(error),
+      (Ok(()), _) => Ok(Flow::Continue(0)),
     }
   }
 }

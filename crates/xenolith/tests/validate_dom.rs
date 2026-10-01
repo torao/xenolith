@@ -7,13 +7,13 @@ use xenolith::dom::DomSource;
 use xenolith::dom::build::DomBuilder;
 use xenolith::error::Result;
 use xenolith::event::validate::{Validator, ValidityError};
-use xenolith::event::{EventCursor, EventHandler, EventRef, EventSource};
+use xenolith::event::{EventConsumer, EventCursor, EventProducer, EventRef, Flow};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the parser and the builder.
 fn parse_document(xml: &[u8]) -> xenolith::Result<xenolith::dom::Document> {
   let mut builder = DomBuilder::new();
-  StreamSource::new(xml).with_handler(&mut builder).emit()?;
+  StreamSource::new(xml).add_consumer(&mut builder).emit()?;
   Ok(builder.into_document())
 }
 
@@ -24,16 +24,17 @@ struct AllowedElements {
   errors: Vec<ValidityError>,
 }
 
-impl EventHandler for AllowedElements {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl EventConsumer for AllowedElements {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     if let EventRef::StartElement(event) = event {
       let local = event.local;
       if !self.allowed.iter().any(|a| a == local) {
         let message = format!("element \"{local}\" is not allowed");
         self.errors.push(ValidityError::new(message, event.location.clone()));
+        return Ok(Flow::Continue(1));
       }
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
@@ -42,7 +43,7 @@ impl Validator for AllowedElements {
     std::borrow::Cow::Borrowed(&self.errors)
   }
 
-  fn as_event_handler(&mut self) -> &mut dyn EventHandler {
+  fn as_consumer(&mut self) -> &mut dyn EventConsumer {
     self
   }
 }
@@ -51,7 +52,7 @@ fn validate_dom(xml: &str, allowed: &[&str]) -> Vec<String> {
   let doc = parse_document(xml.as_bytes()).unwrap();
   let mut validator =
     AllowedElements { allowed: allowed.iter().map(|s| (*s).to_owned()).collect(), errors: Vec::new() };
-  DomSource::new(&doc).with_handler(&mut validator).emit().unwrap();
+  DomSource::new(&doc).add_consumer(&mut validator).emit().unwrap();
   validator.errors().iter().map(ToString::to_string).collect()
 }
 

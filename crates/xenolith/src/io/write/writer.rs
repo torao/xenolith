@@ -3,36 +3,35 @@
 #[cfg(test)]
 mod test;
 
-use std::io;
-
 use crate::error::{Error, Result};
 use crate::event::{
-  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventHandler, EventRef,
-  ProcessingInstructionEventRef, StartElementEventRef,
+  CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventConsumer, EventRef,
+  Flow, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::io::encoding::{Encoder, Utf8Encoder, encoder_for};
 use crate::name::lexical;
+use std::io;
 
 use crate::io::write::LineBreak;
 use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 
 /// Writes received events as XML text to an [`io::Write`] destination.
 ///
-/// As this implements [`EventHandler`], it can accept input from any source that generates document events. Since it
+/// As this implements [`EventConsumer`], it can accept input from any source that generates document events. Since it
 /// writes on an event-by-event basis, it generates output without needing to hold the entire document in memory. It
 /// also employs shorthand notation (e.g., `<a/>`) when an element has no content between its start and end tags, and
 /// performs appropriate escaping when writing text or attribute values.
 ///
 /// This component sits at the end of the processing chain; it performs the writing operation but does not pass any
-/// notifications to subsequent stages. By placing a handler such as
-/// [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator), which validates events, before this writer,
+/// notifications to subsequent stages. By placing a consumer such as
+/// [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints), which validates events, before this writer,
 /// the application can detect invalid XML and halt processing before any output is written.
 ///
 /// # Principle of separation of responsibilities
 ///
 /// The [`XmlWriter`] outputs most information exactly as it appears in the input events. Validation tasks should
 /// instead be handled by validators placed upstream of the `XmlWriter`, such as
-/// [`StrictXmlValidator`](crate::event::strict::StrictXmlValidator) or
+/// [`StrictXmlConstraints`](crate::event::strict::StrictXmlConstraints) or
 /// [`ValidatorSet`](crate::event::validate::ValidatorSet). This ensures that invalid XML is rejected before any actual
 /// byte data is written.
 ///
@@ -59,12 +58,12 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 /// When generating output from an application using the StAX-style:
 ///
 /// ```
-/// use xenolith::event::EventSource;
+/// use xenolith::event::EventProducer;
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
 /// let mut w = XmlWriter::new(Vec::new());
 /// {
-///   let mut doc = WriterSource::new().with_handler(&mut w);
+///   let mut doc = WriterSource::new().add_consumer(&mut w);
 ///   doc.write_start_element("greeting")?;
 ///   doc.write_attribute("xml:lang", "en")?;
 ///   doc.write_characters("Hello & welcome")?;
@@ -79,18 +78,18 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 /// Outputting an existing document:
 ///
 /// ```
-/// use xenolith::event::{EventCursor, EventSource};
+/// use xenolith::event::{EventCursor, EventProducer};
 /// use xenolith::dom::DomSource;
 /// use xenolith::dom::build::DomBuilder;
 /// use xenolith::io::StreamSource;
 /// use xenolith::io::write::XmlWriter;
 ///
 /// let mut builder = DomBuilder::new();
-/// StreamSource::new("<a x='1'><b>t &amp; u</b></a>".as_bytes()).with_handler(&mut builder).emit()?;
+/// StreamSource::new("<a x='1'><b>t &amp; u</b></a>".as_bytes()).add_consumer(&mut builder).emit()?;
 /// let doc = builder.into_document();
 ///
 /// let mut writer = XmlWriter::new(Vec::new());
-/// DomSource::new(&doc).with_handler(&mut writer).emit()?;
+/// DomSource::new(&doc).add_consumer(&mut writer).emit()?;
 /// assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "<a x=\"1\"><b>t &amp; u</b></a>");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -100,13 +99,13 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 ///
 /// ```
 /// # #[cfg(feature = "encodings")] {
-/// use xenolith::event::EventSource;
+/// use xenolith::event::EventProducer;
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
 /// let mut w = XmlWriter::new(Vec::new()).with_encoding("windows-31j")?;
 /// let mut w = w.with_declared_encoding("Shift_JIS").with_declaration(true);
 /// {
-///   let mut doc = WriterSource::new().with_handler(&mut w);
+///   let mut doc = WriterSource::new().add_consumer(&mut w);
 ///   doc.write_start_element("a")?;
 ///   doc.write_end_element()?;
 ///   doc.end_document()?;
@@ -120,12 +119,12 @@ use crate::io::write::escape::{push_attribute, push_cdata, push_text};
 /// Producing UTF-16, which has no encoder of its own: write UTF-8, declare `UTF-16`, then convert the whole document.
 ///
 /// ```
-/// use xenolith::event::EventSource;
+/// use xenolith::event::EventProducer;
 /// use xenolith::io::write::{WriterSource, XmlWriter};
 ///
 /// let mut w = XmlWriter::new(Vec::new()).with_declared_encoding("UTF-16").with_declaration(true);
 /// {
-///   let mut doc = WriterSource::new().with_handler(&mut w);
+///   let mut doc = WriterSource::new().add_consumer(&mut w);
 ///   doc.write_start_element("greeting")?;
 ///   doc.write_characters("hi")?;
 ///   doc.write_end_element()?;
@@ -447,7 +446,7 @@ impl<W: io::Write> XmlWriter<W> {
 }
 
 /// A writer acting as the output destination for events. It writes out each event as it arrives. It functions as a
-/// write target for any [`EventSource`](crate::event::EventSource).
+/// write target for any [`EventProducer`](crate::event::EventProducer).
 ///
 /// # Errors
 ///
@@ -456,8 +455,8 @@ impl<W: io::Write> XmlWriter<W> {
 /// no element is open, encountering an end element with a name different from that of the innermost element, or
 /// including a DOCTYPE declaration inside an element. Since these operations are rejected at the moment the write is
 /// attempted, the offending data is never output as bytes.
-impl<W: io::Write> EventHandler for XmlWriter<W> {
-  fn handle(&mut self, event: &EventRef<'_>) -> Result<()> {
+impl<W: io::Write> EventConsumer for XmlWriter<W> {
+  fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
     match event {
       // A document's beginning and end are not markup. What the start puts out is the declaration, which no event
       // carries, and the end puts out nothing at all.
@@ -471,7 +470,7 @@ impl<W: io::Write> EventHandler for XmlWriter<W> {
       EventRef::ProcessingInstruction(event) => self.processing_instruction(event)?,
       EventRef::Doctype(event) => self.doctype(event)?,
     }
-    Ok(())
+    Ok(Flow::Continue(0))
   }
 }
 
