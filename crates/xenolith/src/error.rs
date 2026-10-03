@@ -277,6 +277,16 @@ pub enum Error {
     message: String,
   },
 
+  /// An XPointer error: Include syntax violations, references to nothing within a resource, or formats that this
+  /// implementation cannot evaluate.
+  #[error("XPointer error: {message}")]
+  XPointer {
+    /// The location of the problem (if known).
+    location: Location,
+    /// Description of the problem.
+    message: String,
+  },
+
   /// A failure to parse the XPath expression or a failure during evaluation.
   #[error("XPath error: {message}")]
   XPath {
@@ -401,6 +411,12 @@ impl Error {
     Self::XInclude { location: Location::unknown(), message: message.into() }
   }
 
+  /// An XPointer failure.
+  #[must_use]
+  pub fn xpointer(message: impl Into<String>) -> Self {
+    Self::XPointer { location: Location::unknown(), message: message.into() }
+  }
+
   /// An XPath expression could not be parsed or evaluated.
   #[must_use]
   pub fn xpath(message: impl Into<String>) -> Self {
@@ -428,6 +444,7 @@ impl Error {
       | Self::Namespace { location, .. }
       | Self::Limit { location, .. }
       | Self::XInclude { location, .. }
+      | Self::XPointer { location, .. }
       | Self::XPath { location, .. }
       | Self::Xslt { location, .. } => location,
       Self::UnsupportedFeature { .. } | Self::Internal { .. } => &UNKNOWN_LOCATION,
@@ -449,6 +466,7 @@ impl Error {
       | Self::Namespace { location: at, .. }
       | Self::Limit { location: at, .. }
       | Self::XInclude { location: at, .. }
+      | Self::XPointer { location: at, .. }
       | Self::XPath { location: at, .. }
       | Self::Xslt { location: at, .. } => *at = location,
       Self::UnsupportedFeature { .. } | Self::Internal { .. } => {}
@@ -530,6 +548,7 @@ impl Error {
       | Self::Namespace { message, .. }
       | Self::Limit { message, .. }
       | Self::XInclude { message, .. }
+      | Self::XPointer { message, .. }
       | Self::XPath { message, .. }
       | Self::Xslt { message, .. }
       | Self::UnsupportedFeature { message, .. }

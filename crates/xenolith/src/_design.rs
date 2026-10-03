@@ -49,6 +49,15 @@
 //! - `StrictXmlConstraints` が開いた要素をインターンした名前でなく `String` で持つ理由: イベントは `&str` を運ぶので
 //!   インターンすると名前をもう一度ハッシュすることになり、プールは文書中の異なる名前の数だけ大きくなる。
 //! - `StartDocument` ごとに validator をリセットし、状態を作り直すのではなくクリアする理由。
+//! - `StrictXmlConstraints` は文書の途中に来た `StartDocument` を整形式エラーにする（`EndDocument` は以前から
+//!   検出していた）。アプリケーションが別の文書を取り込むときに、取り込んだ文書自身の `StartDocument` や
+//!   `EndDocument` を誤って流すのを見つけるため。
+//!   - 以前は `StartDocument` が来るたびに状態を作り直していたので、途中の `StartDocument` は検査のやり直しになり、
+//!     見逃していた。
+//!   - 途中で止まった実行（`EndDocument` が来ない）の後に次の文書へ進めるよう、`finish` で文書の外（`Outside`）に
+//!     戻す。ソースは実行の終わりに必ず `finish` を呼ぶので、使い回しはそのまま動く。イベントを手で渡す呼び出し側
+//!     は、`EndDocument` まで届かなかった実行の後に `finish` を呼ぶ必要がある（doc に記載）。
+//!   - エラーの位置は、開いている最も内側の要素（取り込んだ場所）。`StartDocument` は位置を持たないため。
 //! - 複数の validator のまとめ役を、ソースを駆動する実行（旧 `ValidatingSource` / `Validatable` / `run`）ではなく、
 //!   1 つの消費者 `ValidatorSet` にした理由: 駆動は `emit` で足り、本体は validator のとりまとめと結果の `Report`
 //!   化だった。消費者なら push・pull・手で送るのどれでも同じに使え、ソースより先に作るので `'h` の問題も起きず、
@@ -135,7 +144,7 @@
 //!   - Constraints: どの違反の後も処理を続けられない validator（`StrictXmlConstraints`、`RootElementConstraints`）。
 //!     旧 `StrictXmlValidator`。
 //!   - Transformer: イベントを書き換え、足し、取り除く中段（`XIncludeTransformer`、旧 `XIncludeTransform`）。
-//!   - Filter: イベントを選ぶだけの中段（予定の `XPointerFilter`）。
+//!   - Filter: イベントを選ぶだけの中段（`XPointerFilter`）。
 //! - 処理の終わりを `EventConsumer::finish` と `Outcome`（`Completed`、`Stopped`、`Failed`）で知らせる理由: 消費者
 //!   が書きかけのファイルなど、文書のために持ったリソースを後始末できるようにする。
 //!   - `EndDocument` に結果を載せない理由: 消費者 A、B、C が並んでいて B が `EndDocument` でエラーを返すと、A は
@@ -423,20 +432,23 @@
 //!     「数えられない」として下流に任せていたが、誤りだった。`EndDocument` は位置を持たないので、位置は不明になる。
 //! - `Limits` の既定は深さ 8 / 総数 1000。部品から組み立てた文書が必要とする範囲より十分に広く、資源を
 //!   使い尽くすには十分に狭い。上限なしは `Limits::unlimited()` で明示的に選ぶ。
-//! - `xpointer` は**無視せず、リソースエラーにする**。XPointer 未実装は §4.2 の MUST 違反なので、どちらに倒しても
-//!   非準拠であり、選べるのは壊れ方だけ。部分を求めた文書にリソース全体を黙って返すのは、読めないことより悪い
-//!   （利用者が気づけない上に、XPointer 実装後に出力が変わる）。XPointer 実装後に選択を適用する（TODO）。
-//!   - 一度「受け入れて無視する」に倒したが、2026-09-27 に戻した。「仕様が認める文書を読めなくなる」ことだけを
-//!     見て、黙って違う内容を出す側の代償を量っていなかった。
-//!   - 当初は致命エラーで拒否していたが、2026-09-28 にリソースエラーへ改めた。§4.2 の "An error in the XPointer
-//!     is a resource error" に沿う。代わりに入るのは作者が「取得できないとき」のために書いた `xi:fallback` で、
-//!     全体を黙って返すわけではないので上の懸念とは矛盾しない。fallback がなければ従来どおり止まる。代償は、
-//!     fallback を持つ文書ではこのビルドが常に fallback を選ぶこと（fallback の中身を見ないと気づけない）。
-//!   - 判定はループ検査より前に置く。§4.2.7 のループの鍵は「include location と xpointer の組」だが、今の鍵は
-//!     URI だけなので、後に置くと同じ文書内の別の部分を指す `xpointer` を循環参照と誤認する。
-//!   - 検証器は `xpointer` を妥当と扱う（§3.1 が認めている）。「この実装が carry out できない」ことなので
-//!     Transformer の役目、という分担はここでも保たれる。
-//!   - `href` なしのエラーとはメッセージで区別する。こちらは XPointer 実装後に通るようになるが、あちらはならない。
+//! - `xpointer` は `xenolith::xpointer` の `XPointerFilter` で選ぶ。取り込んだリソースを読む入れ子のレーンで、
+//!   検証器（strict と `XIncludeSchema`）の後、`XIncludeProcess` の前に置く。リソース全体を検査し、選んだ部分
+//!   だけを取り込む。
+//!   - 解析できないポインタ、何も指さないポインタ、流しながら評価できないポインタは、どれもリソースエラー（§4.2
+//!     "An error in the XPointer is a resource error"）。解析エラーは取得の前に分かるので、何も取得しない。
+//!   - リソースエラーに読み替えるのは、その取り込みの filter が返した `Error::XPointer` だけ。その時点ではリソース
+//!     の何も下流へ流れていない（filter は選んだ要素の開始から流し、失敗は開始と終了で返す）ので、fallback を
+//!     そのまま差し込める。
+//!   - fallback のない `xi:include` のリソースエラーは致命なので、スコープを閉じるときに `Error::XPointer` を
+//!     `Error::XInclude` に変えて返す。`Error::XPointer` のままだと、外側の取り込みが自分のポインタの失敗と
+//!     取り違え、外側の fallback に置き換えてしまう。
+//!   - ループ検査の鍵は §4.2.7 どおり「include location と `xpointer` の組」。同じリソースの別の部分はループでは
+//!     ない。
+//!   - 検証器は `xpointer` を妥当と扱う（§3.1 が認めている）。値の誤りは文書の誤りではなく §4.2 のリソースエラー。
+//!   - XPointer を実装するまでは、`xpointer` のある `xi:include` を一律にリソースエラーにしていた（2026-09-27 から）。
+//!     部分を求めた文書にリソース全体を黙って返すのは、読めないことより悪い（利用者が気づけない上に、実装後に出力が
+//!     変わる）ため。当初は致命エラーで拒否し、2026-09-28 にリソースエラーへ改めた。
 //! - **`href` のない `xi:include`（同一文書の部分取り込み）は取り込まず、リソースエラーにする。** §3.1 は `href` の
 //!   省略を `href=""`、すなわち処理中の文書自身への参照と定めているが、これはイベントパイプラインでは扱えない。
 //!   XPointer を実装した後もこのまま（TODO ではなく設計上の帰結）。§4.1 が "An implementation may choose to treat
@@ -450,7 +462,7 @@
 //!     何も流せなくなる）。入力を 2 回読む（`StreamSource<R: Read>` は再読み込みを保証しない）。
 //!   - 必要になったら、木の上で動く別の手段（DOM を構築してから展開するパス）を用意する。旧 `xenolith-xinclude`
 //!     が DOM 後処理だったのは、この制約が理由だったと読める。
-//!   - 一方 `href` のある `xpointer`（外部リソースの部分取り込み）はこの設計でも実装でき、しかも**XPointer 自身を
+//!   - 一方 `href` のある `xpointer`（外部リソースの部分取り込み）はこの設計でも実装でき（実装した）、しかも**XPointer 自身を
 //!     Filter（`XPointerFilter`）** にできる。選択した部分木の中のイベントだけを通す消費者を、取得したリソースを
 //!     読む入れ子のパイプラインに挟めばよい。位置指定（`element(/1/2)`）は深さと出現位置を数えるだけ、短縮
 //!     ポインタ（ID）は `xml:id` なら開始タグの属性で判定でき、DTD 宣言の ID 型も `Doctype` イベントが運ぶ `Dtd`
@@ -468,12 +480,96 @@
 //! - `encoding` 属性がこのビルドで復号できない名前なら、リソースエラーにする（§4.3 の "the resource is in an
 //!   unsupported encoding"）。以前は致命エラーだった。URI の構文エラーは §3.1 の "should be reported as a fatal
 //!   error" に従い致命エラーのまま。
-//! - MUST のうち実装していないもの: §4.2 の XPointer 対応、§4.5 の未解析実体・記法の統合（取り込んだ文書の
-//!   `DOCTYPE` を結果に持ち込まないので、同名で異なる宣言の致命エラーも報告できない）。どちらもコードのコメントに
-//!   仕様の原文とともに記録した。
+//! - MUST のうち実装していないもの: §4.5 の未解析実体・記法の統合（取り込んだ文書の `DOCTYPE` を結果に持ち込ま
+//!   ないので、同名で異なる宣言の致命エラーも報告できない）。コードのコメントに仕様の原文とともに記録した。
 //! - 実装した検査には、根拠にした仕様の原文を引用してコメントに残す。節番号だけだと版と節の対応を取り違えても
 //!   気付けない（実際に §3.1／§3.2 を §4.3 と誤って書いていた）。
 //! - `let` chains は使わない。MSRV 1.85 では不安定（Rust 1.88 以降の機能）で、`cargo +1.85 build` が落ちる。
+//!
+//! ## XPointer
+//!
+//! - ポインタは一度だけ解析して不変の `XPointer` にし、複数の `XPointerFilter` で共有する（`XPointer::parse` と
+//!   `XPointerFilter::new(&pointer)`）。filter はポインタを借用する。実行ごとの状態は filter が持つ selector だけが
+//!   持ち、`StartDocument` で作り直す。
+//!   - 元の文字列は `as_str()` と `Debug` で参照できる。`Debug` は解析結果の内部ではなく、書かれたポインタと位置を
+//!     示す。
+//! - scheme ごとに多態化する（scheme 名ごとの enum にしない）。後から scheme を順に足せるようにするため。
+//!   - 非公開のトレイト 2 つ: `SchemeData`（scheme が解析した part のデータ。不変で共有）と `SchemeSelector`（1 回の
+//!     実行での状態）。`SchemeData::selector` が selector を作る（旧名 `SchemeSession`）。
+//!   - selector の選び方は 2 通り。ストリーミングでは `filter` がイベントごとに状態を更新し、そのイベントを通すか
+//!     （`true`）落とすか（`false`）を返す。文書全体を見ないと決められない scheme（XSLT のように内部で DOM を
+//!     作るもの）は、`filter` では何も通さずに読んだものを保持し、`drain` で選んだものをカーソル
+//!     （`Option<Box<dyn EventCursor>>`）として返す。filter は `EndDocument` を selector に渡した後に `drain` を
+//!     呼び、カーソルの `StartDocument` と `EndDocument` を除いて中継してから、`EndDocument` を流す。`drain` の
+//!     既定は `None`（ストリーミングの selector）。
+//!   - `drain` が `Iterator` ではなくカーソルを返す理由: `EventRef` はイベントを出したもの（たとえば `DomSource` が
+//!     属性の一覧を置くフィールド）を借用するので、`Iterator` の要素にできない。所有の `Event` の `Iterator` なら
+//!     作れるが、イベントごとに複製が要る。カーソルなら selector が持つ木を借用したまま、複製せずに列挙できる。
+//!     名前は `flush`（consumer に送る形）から改めた。
+//!   - 何かを指したかは filter が流したイベントの有無で判定する（`identified` は置かない）。`drain` がカーソルを
+//!     返すので、保持型の selector の分も filter が数えられる。何かを指してもイベントが出ない scheme（`xpointer()`
+//!     の point、XInclude §4.2.4）を足すときは、判定を selector に問う形に戻す。
+//!   - filter は枠（`StartDocument`、`EndDocument`、`Doctype`）とエラーだけを受け持ち、選択は scheme に任せる。
+//!     `Doctype` も selector に渡す（`element()` は DTD の ID 宣言を読む）が、流すかは filter の設定で決める。
+//!   - scheme 名から `SchemeData` を作るのは `parse_scheme_data` の 1 か所。未対応の scheme、`xmlns()`、データが
+//!     構文に合わない part は保持しない（何も指さない）。`element()` は `xpointer/element.rs`。
+//!   - 短縮ポインタは `element(NCName)` と同じ part として保持する（Framework §3.2 が同じ要素を指すと定める）。
+//!   - 名前は `compile` ではなく `parse`。解析して簡単な照合手順を作るだけなので、関数合成までする XPath の
+//!     `compile` と区別する。`FromStr` も実装する。
+//!   - `parse` はポインタの先頭の `Location` を受け取り、`XPointer` が保持する。構文エラーはその位置から文字を
+//!     数えて誤りの文字に、filter のエラーはポインタに位置づける。位置は
+//!     値の文字を数えたものなので、参照を含まずに書かれたポインタでは文書の位置と一致する。
+//!   - 単独の文字列として解析するとき（`FromStr`、doc の例）は `Location::new()`（1 行 1 桁）から数える。
+//!     `Location::unknown()` では位置が数えられず、何文字目の誤りかを示せないため。
+//! - `XPointerFilter` は Filter（イベントを選ぶだけの中段）。選んだ要素とその部分木を `StartDocument` と
+//!   `EndDocument` で囲んで流す。出力は文書ではなく文書断片の形で、strict XML の保証はしない。
+//! - `Doctype` を流すかは filter ごとの設定（`with_doctype`、既定は流さない）。ID の宣言を読むので、流さなくても
+//!   読む。
+//! - 何も指さなければ `EndDocument` で `Err(Error::XPointer)` を返す。Framework §3.2・§3.3 がそれをエラーと定めて
+//!   いるので、XPointer の処理系である filter が報告する。XInclude が届いたものを数えて判定する案は採らなかった
+//!   （XInclude 以外で filter を使う利用者にも伝わらない）。
+//! - 評価できる part（対応する scheme の part）が複数あるポインタは、Framework §3.3 どおり前から順に試した結果に
+//!   なるよう、すべての part を同時に評価する（2026-10-03。それまでは「未対応」として拒否していた）。
+//!   - 2 階層に分ける。filter（`XPointerFilter`）が part ごとの `SchemeSelector`（`Candidate`）をまとめ、保留と
+//!     破棄を一手に受け持つ。各 scheme の selector に同じ保留の処理を書かせないため。一時は中間の具象の
+//!     `XPointerSelector` に持たせたが、filter の外に見せる相手がいないので filter に移した。
+//!   - 先頭の part が選んだものはその場で流す。先頭が何かを選べば結果は確定するからで、その時点で後ろの part を
+//!     保留ごと破棄する。2 番目以降の part が選んだものは、filter が所有の `Event` で保留する。ある part が選び
+//!     始めた時点で、それより後ろの part を保留ごと破棄する（前の part で、まだ何も選んでいないものは残す）。
+//!     `EndDocument` で、残っている part のうち何かを選んだ最も前のものの保留と、その part 自身の `drain` を流す。
+//!   - 「保留」（pending）と呼ぶのは、前の part の結果を待って渡すのを控えているから。以前の名前は held で、何を
+//!     なぜ持っているのかが読み取れなかった。
+//!   - 保留は所有の `Event` の列にする（DOM にしない）。`DomSource` は `xml:lang` などの有効値を復元しないので、
+//!     XInclude の言語の fixup が変わってしまうため。保留した列は、`EndDocument` で `drain` のカーソル
+//!     より先に流す。
+//!   - 保留の大きさは、2 番目以降の part が選んだ部分木の大きさ。前の part が早く選べば、すぐに捨てられる。
+//!   - 保留の量には上限を置く（`XPointerFilter::with_max_pending_chars`、XInclude からは
+//!     `Limits::max_pending_chars`、既定 16 Mi 文字、超えたら `Error::Limit`）。ほかの上限と同じく既定で有限にし、
+//!     `None` で外す。
+//!     - 数えるのは、保留するイベントが持つ文字列の文字数（要素名、属性の名前と値、テキスト、CDATA、コメント、
+//!       PI のターゲットとデータ）。イベント数よりメモリの量に近いため。イベントごとの固定の大きさは数えないので
+//!       目安であり、小さな要素が多数並ぶと実際の使用量は大きくなる。その旨を doc に書いた。
+//!     - 既定値は、CDATA 1 つの上限（16 MiB）と同じ程度。実体展開の生成文字数の上限（64 Mi 文字）より小さく、
+//!       普通の部分取り込みでは届かない。
+//!     - 先頭の part が選んだものはその場で流すので数えない。
+//!   - 各 `Candidate` が自分の列を持つのは、保留を持つのが常に高々 1 つ（何かを選んだ最も前の part）だから。
+//!     filter に共有の列を置いても保留する量は減らず、誰のイベントかが分かりにくくなるだけ（コメントに記載）。
+//!   - `drain` 型の selector（自分で保持するもの）は `filter` で何も選ばないので、何かを選んだかは `EndDocument`
+//!     で `drain` が `Some` を返すかで判断する（何も選ばなければ `None` を返す約束）。
+//! - 評価できる part が 1 つもないポインタ（未対応の scheme だけ、など）は、`StartDocument` で拒否する。何も
+//!   指せないことが最初から分かるため。
+//! - part ごとの解析結果を `Result` で持ち、エラーは 1 つを選ぶ。未対応の scheme（と `xmlns()`）の part は除いて
+//!   数え、対応する scheme の part が 1 つもなければ「対応する scheme の part がない」とする。対応する scheme の
+//!   part があってもすべてデータが構文に合わないなら、先頭の part のエラー（データの中の誤りの文字の位置）を使う。
+//!   構文に合う part が 1 つでもあれば、合わない part は仕様どおり何も指さないものとして無視する。
+//!   - 構文に合わない part のエラーは `XPointer::errors()` で順に読める。選択には使われない part でも、利用者が
+//!     書き誤りに気づけるようにするため。未対応の scheme の part は仕様どおり読み飛ばすもので、エラーではないので
+//!     含めない。`XPointer` を複製できるよう、エラーは `Arc<Error>` で保持する（`Error` は `Clone` でない）。
+//! - Framework の規定に合わせて、ポインタ全体の構文エラーは `parse` の `Err`、未対応の scheme の part は読み飛ばす
+//!   （§3.3）。`element()` のデータがその構文に合わない part は何も指さない（`element()` scheme の規定）ので、
+//!   `parse` では拒否しない。`xmlns()` は受け付けるが何も指さない。
+//! - ID は開始タグの時点で判定する。`xml:id` と、`Doctype` の DTD で `ID` 型と宣言された属性が対象。`xml:id` の
+//!   値は ID として正規化して比べる（パーサが正規化していない場合があるため）。
 //!
 //! ## 構成
 //!
