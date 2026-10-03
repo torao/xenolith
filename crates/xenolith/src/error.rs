@@ -119,6 +119,17 @@ impl Location {
     }
     self.offset += 1;
   }
+
+  /// Advances this location by the number of characters in `text`, the same as [`advance`](Self::advance) does for
+  /// each character.
+  pub fn advance_over(&mut self, text: &str) {
+    if self.is_unknown() {
+      return;
+    }
+    for c in text.chars() {
+      self.advance(c);
+    }
+  }
 }
 
 impl fmt::Display for Location {

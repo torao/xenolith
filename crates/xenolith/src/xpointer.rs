@@ -364,9 +364,7 @@ fn parse_scheme_based(pointer: &str, location: &Location) -> Result<Vec<ParsedPa
 /// The location advanced by `byte` bytes from `text` starting at `start`.
 fn located(start: &Location, text: &str, byte: usize) -> Location {
   let mut at = start.clone();
-  for c in text[..byte].chars() {
-    at.advance(c);
-  }
+  at.advance_over(&text[..byte]);
   at
 }
 

@@ -51,3 +51,14 @@ fn a_location_that_is_not_known_cannot_be_advanced() {
   at.advance('b');
   assert_eq!((at.line, at.column, at.offset), (2, 2, 3));
 }
+
+#[test]
+fn advancing_over_a_text_advances_over_each_of_its_characters() {
+  let mut at = Location::new();
+  at.advance_over("a\n\u{65e5}b");
+  assert_eq!((at.line, at.column, at.offset), (2, 3, 4), "characters are counted, not bytes");
+
+  let mut nowhere = Location::unknown();
+  nowhere.advance_over("a\nb");
+  assert!(nowhere.is_unknown(), "{nowhere:?}");
+}

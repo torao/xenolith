@@ -238,7 +238,7 @@ impl Layout {
       if child.range.start >= pos {
         break;
       }
-      advance_over(&mut at, &buf[from..child.range.start]);
+      at.advance_over(&buf[from..child.range.start]);
       if pos < child.range.end {
         return at;
       }
@@ -247,7 +247,7 @@ impl Layout {
       }
       from = child.range.end;
     }
-    advance_over(&mut at, &buf[from..pos]);
+    at.advance_over(&buf[from..pos]);
     at
   }
 
@@ -287,13 +287,6 @@ impl Layout {
     let kind = origin.map_or(PieceKind::InternalEntity, |origin| PieceKind::ExternalEntity { origin });
     let content = start + content.start..start + content.end;
     self.pieces.push(Piece { range: start..start + new_len, content, replaced, kind });
-  }
-}
-
-/// Advances `at` over the characters of `text`.
-fn advance_over(at: &mut Location, text: &str) {
-  for c in text.chars() {
-    at.advance(c);
   }
 }
 

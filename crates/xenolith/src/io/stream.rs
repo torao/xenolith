@@ -365,10 +365,7 @@ impl CharStream {
   /// If `len` extends beyond the end of the remaining data, or if it falls within a character rather than at a
   /// character boundary.
   pub fn advance(&mut self, len: usize) {
-    let consumed = &self.buf[self.start..self.start + len];
-    for c in consumed.chars() {
-      self.at.advance(c);
-    }
+    self.at.advance_over(&self.buf[self.start..self.start + len]);
     self.start += len;
     self.compact();
   }
@@ -400,9 +397,7 @@ impl CharStream {
   /// specified, the read position itself is returned, as the preceding text has already been lost.
   fn location_of(&self, index: usize) -> Location {
     let mut at = self.at.clone();
-    for c in self.buf[self.start..index.max(self.start)].chars() {
-      at.advance(c);
-    }
+    at.advance_over(&self.buf[self.start..index.max(self.start)]);
     at
   }
 

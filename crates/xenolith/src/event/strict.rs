@@ -621,9 +621,8 @@ fn describe(namespace: Option<&str>) -> String {
 /// location is its start. An unknown location, which a tree walk reports, stays unknown.
 fn advanced(at: &Location, markup: &str, text: &str) -> Location {
   let mut at = at.clone();
-  for c in markup.chars().chain(text.chars()) {
-    at.advance(c);
-  }
+  at.advance_over(markup);
+  at.advance_over(text);
   at
 }
 

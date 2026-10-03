@@ -904,9 +904,7 @@ impl Parser {
     // say) back to the document. The data begins at `text.len() - "?>".len() - trimmed.len()`; walk the token start
     // over everything before it (`<?`, the target, and the dropped separating whitespace) to find where it is.
     let mut at = self.token_at.clone();
-    for c in text[..text.len() - 2 - trimmed.len()].chars() {
-      at.advance(c);
-    }
+    at.advance_over(&text[..text.len() - 2 - trimmed.len()]);
     self.pi_data_at = at;
     self.text.clear();
     self.text.push_str(trimmed);
@@ -2172,9 +2170,7 @@ impl Parser {
   /// a byte offset within `token`, at a character boundary.
   fn location_in(&self, token: &str, index: usize) -> Location {
     let mut at = self.token_at.clone();
-    for c in token[..index.min(token.len())].chars() {
-      at.advance(c);
-    }
+    at.advance_over(&token[..index.min(token.len())]);
     at
   }
 }
