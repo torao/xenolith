@@ -25,6 +25,7 @@ reading, the invariants a change must not break, and how to run the checks CI ru
 - Build a DOM tree from the events, and send a tree back out as events.
 - Validate a document against the DTD it declares, or against a DTD kept separately as a schema.
 - Replace `xi:include` elements with the content of the resources they reference.
+- Select the part of a resource an XPointer identifies, while the events stream by.
 - Write a tree or an event sequence as well-formed XML text.
 
 ## Quick start
@@ -83,7 +84,8 @@ xenolith is designed to read untrusted documents. These are design decisions, no
   resources are loaded only through the `UriResolver` the caller supplies. This is what keeps XXE and SSRF out by
   default.
 - **Resource use is limited by default.** Token length, entity expansion (depth, count and characters), element
-  nesting, and XInclude depth and count all have limits. Removing them takes an explicit `Limits::unlimited`.
+  nesting, XInclude depth and count, and what an XPointer keeps pending while it tries its parts in order all have
+  limits. Removing them takes an explicit `Limits::unlimited`.
 - **No panic on bad input.** An error while reading or parsing is an `Err`. Fuzzing checks this.
 - **No `unsafe`.** The workspace forbids it.
 - **Few dependencies.** By default the library depends on `encoding_rs` and `thiserror` only.
@@ -92,7 +94,7 @@ xenolith is designed to read untrusted documents. These are design decisions, no
 
 | Crate | In the workspace | Contents |
 | --- | --- | --- |
-| [`xenolith`](crates/xenolith) | yes | The library: errors and locations, character classes, interned names, RFC 3986 URIs (crate root); the event vocabulary, strict checks and the `Schema`/`Validator` contract (`event`); the parser, decoding, entity resolution and writing (`io`); the DTD model, reader and validator (`dtd`); the arena DOM (`dom`); XInclude 1.0 as a pipeline stage (`xinclude`); and the `Reader`/`Writer` facade |
+| [`xenolith`](crates/xenolith) | yes | The library: errors and locations, character classes, interned names, RFC 3986 URIs (crate root); the event vocabulary, strict checks and the `Schema`/`Validator` contract (`event`); the parser, decoding, entity resolution and writing (`io`); the DTD model, reader and validator (`dtd`); the arena DOM (`dom`); XInclude 1.0 as a pipeline stage (`xinclude`); XPointer and the filter that selects by it (`xpointer`); and the `Reader`/`Writer` facade |
 | [`xenolith-fuzz`](crates/xenolith-fuzz) | yes | The properties the fuzz targets check, and their seed corpus |
 | [`xenolith-xdm`](crates/xenolith-xdm) | parked | The XPath 1.0 data model over the DOM |
 | [`xenolith-xpath`](crates/xenolith-xpath) | parked | XPath 1.0 |
@@ -164,11 +166,13 @@ against. Section numbers appear in the code beside the rules they implement.
 | [XML Base (Second Edition)](https://www.w3.org/TR/2009/REC-xmlbase-20090128/) | REC 2009-01-28 | `io`, `dom`, `xinclude` |
 | [xml:id 1.0](https://www.w3.org/TR/2005/REC-xml-id-20050909/) | REC 2005-09-09 | `io`, `event::validate` |
 | [XInclude 1.0 (Second Edition)](https://www.w3.org/TR/2006/REC-xinclude-20061115/) | REC 2006-11-15 | `xinclude` |
+| [XPointer Framework](https://www.w3.org/TR/2003/REC-xptr-framework-20030325/), [`element()`](https://www.w3.org/TR/2003/REC-xptr-element-20030325/), [`xmlns()`](https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/) | REC 2003-03-25 | `xpointer`, `xinclude` |
 | [DOM Level 3 Core](https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/) | REC 2004-04-07 | `dom` |
 | [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | STD 66, 2005-01 | `uri` |
 
-XPointer is not implemented yet. Until it is, an `xi:include` with an `xpointer` attribute is a resource error, so
-its `xi:fallback` applies. The parked crates list the specifications they implement in their own documentation.
+The `xpointer()` scheme is not implemented. A pointer of several parts is evaluated part by part at once, and what
+a part after the first selects is kept pending until it is known that no part before it selects anything. The parked
+crates list the specifications they implement in their own documentation.
 
 ## Conformance
 

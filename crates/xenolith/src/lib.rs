@@ -15,6 +15,7 @@
 //! - Build a DOM tree from the event sequence. You can also send the tree as an event sequence.
 //! - Validate the document against the DTD it declares or against a DTD maintained separately as a schema.
 //! - Replace `xi:include` with the content of the resource it references.
+//! - Select the part of a resource an XPointer identifies.
 //! - Export a tree or event sequence as well-formed XML text.
 //!
 //! In addition, I plan to make the following features available in the future:
@@ -186,9 +187,9 @@
 //!   documents. It uses only authorized byte streams provided through a resolver supplied by the application (CWE-611,
 //!   CWE-918). See below.
 //! - **Setting Resource Consumption Limits**: By default, there are limits on token length (CWE-770), the depth,
-//!   frequency, and character count of entity expansions (CWE-776), the nesting depth of elements (CWE-674), and the
-//!   depth and frequency of XInclude inclusions. To remove these limits for trusted imports, explicit configuration is
-//!   required. See below.
+//!   frequency, and character count of entity expansions (CWE-776), the nesting depth of elements (CWE-674), the
+//!   depth and frequency of XInclude inclusions, and the characters an XPointer keeps pending while it tries its parts
+//!   in order. To remove these limits for trusted imports, explicit configuration is required. See below.
 //! - **Non-Panic Loading**: Any errors that occur while loading or parsing documents are returned as `Err` rather than
 //!   causing a panic. This has also been verified through fuzzing.
 //! - **Pure Safe Rust**: The xenolith codebase does not use `unsafe`, and the compiler guarantees memory safety.
@@ -221,6 +222,8 @@
 //!   [`dom::build`] and written to events using [`DomSource`](dom::DomSource).
 //! - [`xinclude`]: The `XInclude` 1.0 transformer ([`XIncludeTransformer`](xinclude::XIncludeTransformer)) and the
 //!   schema for its vocabulary ([`XIncludeSchema`](xinclude::XIncludeSchema)).
+//! - [`xpointer`]: A parsed XPointer ([`XPointer`](xpointer::XPointer)) and a filter
+//!   ([`XPointerFilter`](xpointer::XPointerFilter)) that passes through the part it identifies.
 //!
 //! The fundamental elements they share:
 //!
@@ -257,6 +260,8 @@
 //!   See [`Parser::xml_id`](io::Parser::xml_id).
 //! - [XInclude 1.0 (Second Edition)]: W3C Recommendation (November 15, 2006). The processing of [`xinclude`]
 //!   inclusions and the constraints on the vocabulary of [`XIncludeSchema`](xinclude::XIncludeSchema).
+//! - [XPointer Framework], [XPointer `element()` Scheme] and [XPointer `xmlns()` Scheme]: W3C Recommendations (March
+//!   25, 2003). The pointers [`xpointer`] parses and selects by, and the `xpointer` attribute of [`xinclude`].
 //! - [DOM Level 3 Core]: W3C Recommendation (April 7, 2004). The structure indicated by [`dom`].
 //! - [RFC 3986]: Uniform Resource Identifier (URI): Generic Syntax (January 2005). [`uri`] is resolved according to
 //!   the reference resolution described in §5.3.
@@ -269,6 +274,9 @@
 //! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/
 //! [xml:id 1.0]: https://www.w3.org/TR/2005/REC-xml-id-20050909/
 //! [XInclude 1.0 (Second Edition)]: https://www.w3.org/TR/2006/REC-xinclude-20061115/
+//! [XPointer Framework]: https://www.w3.org/TR/2003/REC-xptr-framework-20030325/
+//! [XPointer `element()` Scheme]: https://www.w3.org/TR/2003/REC-xptr-element-20030325/
+//! [XPointer `xmlns()` Scheme]: https://www.w3.org/TR/2003/REC-xptr-xmlns-20030325/
 //! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
 //! [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
 //! [W3C XML Conformance Test Suite]: https://www.w3.org/XML/Test/
@@ -286,6 +294,7 @@ pub mod io;
 pub mod name;
 pub mod uri;
 pub mod xinclude;
+pub mod xpointer;
 
 mod facade;
 

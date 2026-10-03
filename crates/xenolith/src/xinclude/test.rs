@@ -534,26 +534,114 @@ fn an_xinclude_element_the_namespace_does_not_define_is_refused_inside_a_fallbac
 }
 
 #[test]
-fn an_xpointer_is_a_resource_error_rather_than_ignored() {
-  // §4.2 requires XPointer and this build has none: "An error in the XPointer is a resource error." Including the
-  // whole resource where the document asked for part of it would be a silently different document, so what stands in
-  // is the fallback, and without one the element is refused.
-  let map = Map::with(&[("file:///doc/part.xml", "<p><q/></p>")]);
-  let error = written(&doc("<xi:include href='part.xml' xpointer='q'/>"), &map).expect_err("no XPointer here");
-  assert!(error.message().contains("XPointer"), "{error}");
-  let content = "<xi:include href='part.xml' xpointer='q'><xi:fallback><r/></xi:fallback></xi:include>";
-  let out = plain(&doc(content), &map).expect("the fallback stood in");
-  assert!(out.contains("<r/>") && !out.contains("<q/>"), "{out}");
-  assert!(map.asked.borrow().is_empty(), "nothing is fetched for an XPointer this build cannot follow");
+fn an_xpointer_includes_only_the_part_it_identifies() {
+  let part = "<p><a>one</a><b xml:id='two'>two</b></p>";
+  let map = Map::with(&[("file:///doc/part.xml", part)]);
+  let out = plain(&doc("<xi:include href='part.xml' xpointer='element(/1/1)'/>"), &map).expect("included");
+  assert!(out.contains("<a>one</a>") && !out.contains("two"), "{out}");
+  let out = plain(&doc("<xi:include href='part.xml' xpointer='two'/>"), &map).expect("included");
+  assert!(out.contains(">two</b>") && !out.contains("one"), "{out}");
+}
 
-  // An absent href is a resource error for another reason, which XPointer will not take away (§4.1 allows it):
-  // selecting part of the document being processed is what that element asks for, and the pipeline never holds it.
+#[test]
+fn the_selected_element_keeps_its_base_uri() {
+  // §4.5.5 applies to the top-level element of what is included, which is the selected element here.
+  let map = Map::with(&[("file:///doc/sub/part.xml", "<p><a/></p>")]);
+  let out = written(&doc("<xi:include href='sub/part.xml' xpointer='element(/1/1)'/>"), &map).expect("included");
+  assert!(out.contains("<a xml:base=\"file:///doc/sub/part.xml\"/>"), "{out}");
+}
+
+#[test]
+fn an_xpointer_that_identifies_nothing_is_a_resource_error() {
+  // XPointer Framework §3.2 and §3.3 make a pointer that identifies nothing an error, and §4.2: "An error in the
+  // XPointer is a resource error."
+  let map = Map::with(&[("file:///doc/part.xml", "<p><q/></p>")]);
+  let content = "<xi:include href='part.xml' xpointer='missing'><xi:fallback><r/></xi:fallback></xi:include>";
+  let out = plain(&doc(content), &map).expect("the fallback stood in");
+  assert!(out.contains("<r/>") && !out.contains("<q/>") && !out.contains("<p>"), "{out}");
+
+  // Without a fallback, a resource error is fatal.
+  let error = written(&doc("<xi:include href='part.xml' xpointer='missing'/>"), &map).expect_err("no fallback");
+  assert!(matches!(error, Error::XInclude { .. }), "{error:?}");
+  assert!(error.message().contains("identifies no element"), "{error}");
+}
+
+#[test]
+fn an_xpointer_that_does_not_parse_is_a_resource_error_and_nothing_is_fetched() {
+  let map = Map::with(&[("file:///doc/part.xml", "<p/>")]);
+  let content = "<xi:include href='part.xml' xpointer='element(/1'><xi:fallback><r/></xi:fallback></xi:include>";
+  let out = plain(&doc(content), &map).expect("the fallback stood in");
+  assert!(out.contains("<r/>"), "{out}");
+  assert!(map.asked.borrow().is_empty(), "nothing is fetched for a pointer that is not one");
+
+  // Without a fallback, the error is located in the attribute value, at the parenthesis that is not closed.
+  let xml = doc("<xi:include href='part.xml' xpointer='element(/1'/>");
+  let error = written(&xml, &map).expect_err("no fallback");
+  let column = xml.find("element(").expect("the pointer") + "element".len() + 1;
+  assert_eq!((error.location().line, error.location().column as usize), (1, column), "{error}");
+}
+
+#[test]
+fn an_xpointer_of_several_parts_includes_by_the_first_that_selects() {
+  let map = Map::with(&[("file:///doc/part.xml", "<p><a/><b/></p>")]);
+  let content = "<xi:include href='part.xml' xpointer='element(/1/9) element(/1/2)'/>";
+  let out = plain(&doc(content), &map).expect("the second part selects");
+  assert!(out.contains("<b/>") && !out.contains("<a/>"), "{out}");
+
+  // What the second part keeps pending is limited, and going over is fatal rather than a fallback.
+  let mut writer = XmlWriter::new(Vec::new());
+  let error = {
+    let limits = Limits { max_pending_chars: Some(1), ..Limits::default() };
+    let mut include = XIncludeTransformer::new().with_resolver(&map).with_limits(limits).add_consumer(&mut writer);
+    let content = "<xi:include href='part.xml' xpointer='element(/1/9) element(/1/2)'><xi:fallback><r/></xi:fallback>\
+      </xi:include>";
+    StreamSource::with_system_id(doc(content).as_bytes(), "file:///doc/main.xml")
+      .add_consumer(&mut include)
+      .emit()
+      .expect_err("b and b come to 2 characters")
+  };
+  assert!(matches!(error, Error::Limit { .. }), "{error:?}");
+}
+
+#[test]
+fn an_include_without_href_is_still_a_resource_error() {
+  // §4.1 allows it, and the pipeline never holds the document being processed, which is what such an element asks
+  // a part of. This stays after XPointer.
+  let map = Map::with(&[]);
   let error = written(&doc("<xi:include xpointer='q'/>"), &map).expect_err("the document itself");
   assert!(error.message().contains("href"), "{error}");
-  assert!(!error.message().contains("XPointer is not yet"), "the two errors read differently: {error}");
   let out = plain(&doc("<xi:include xpointer='q'><xi:fallback><r/></xi:fallback></xi:include>"), &map)
     .expect("the fallback stood in");
   assert!(out.contains("<r/>"), "{out}");
+}
+
+#[test]
+fn the_same_resource_with_the_same_xpointer_is_a_loop() {
+  let part = "<p xml:id='p' xmlns:xi='http://www.w3.org/2001/XInclude'><xi:include href='part.xml' xpointer='p'/></p>";
+  let map = Map::with(&[("file:///doc/part.xml", part)]);
+  let error = written(&doc("<xi:include href='part.xml' xpointer='p'/>"), &map).expect_err("a loop");
+  assert!(error.message().contains("circular reference"), "{error}");
+}
+
+#[test]
+fn another_part_of_the_resource_being_processed_is_included() {
+  // §4.2.7 allows "a different part of the same local resource (same href, different xpointer)".
+  let part = "<p xmlns:xi='http://www.w3.org/2001/XInclude'><q xml:id='q'>Q</q>\
+    <xi:include href='part.xml' xpointer='q'/></p>";
+  let map = Map::with(&[("file:///doc/part.xml", part)]);
+  let out = plain(&doc("<xi:include href='part.xml'/>"), &map).expect("not a loop");
+  assert_eq!(out.matches(">Q</q>").count(), 2, "the q element itself and the inclusion of it: {out}");
+}
+
+#[test]
+fn an_inner_xpointer_error_with_no_fallback_is_not_taken_by_the_outer_fallback() {
+  // A resource error with no fallback is fatal where it happens, so the fallback of the inclusion around it does not
+  // stand in for it.
+  let one = "<o xmlns:xi='http://www.w3.org/2001/XInclude'><xi:include href='two.xml' xpointer='missing'/></o>";
+  let map = Map::with(&[("file:///doc/one.xml", one), ("file:///doc/two.xml", "<t/>")]);
+  let content = "<xi:include href='one.xml'><xi:fallback><r/></xi:fallback></xi:include>";
+  let error = plain(&doc(content), &map).expect_err("fatal");
+  assert!(matches!(error, Error::XInclude { .. }), "{error:?}");
 }
 
 #[test]
@@ -569,8 +657,8 @@ fn a_fallback_may_include_the_resource_that_failed() {
 
 #[test]
 fn another_part_of_the_resource_being_processed_is_not_a_loop() {
-  // §4.2.7 allows "a different part of the same local resource (same href, different xpointer)". This build cannot
-  // select the part, which is a resource error, rather than a loop it would be taken for by the URI alone.
+  // §4.2.7 allows "a different part of the same local resource (same href, different xpointer)". The part is not
+  // there, which is a resource error, rather than a loop it would be taken for by the URI alone.
   let part = "<p xmlns:xi='http://www.w3.org/2001/XInclude'>\
     <xi:include href='part.xml' xpointer='q'><xi:fallback><r/></xi:fallback></xi:include></p>";
   let map = Map::with(&[("file:///doc/part.xml", part)]);

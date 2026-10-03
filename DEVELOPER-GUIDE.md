@@ -17,7 +17,7 @@
 
 | Crate | 状態 | 責務 |
 |---|---|---|
-| `xenolith` | メンバー | 本体。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI（平場）、イベント語彙（producer / consumer / transformer、`Dispatcher`）・strict 検証・スキーマ非依存の `Schema`/`Validator` 契約と `xml:id` 検証（`event`）、XML 1.0 のプルパーサ・文字デコード・実体解決と書き出し（`WriterSource` と `XmlWriter`）（`io`）、DTD の宣言モデル・構文解析・検証器（`dtd`）、アリーナ木（`dom`）、パイプラインの一段としての XInclude（`xinclude`）、それらを繋いだ `Reader` / `Writer`（クレート直下） |
+| `xenolith` | メンバー | 本体。エラーと位置、XML の文字クラス、インターンされた名前、RFC 3986 の URI（平場）、イベント語彙（producer / consumer / transformer、`Dispatcher`）・strict 検証・スキーマ非依存の `Schema`/`Validator` 契約と `xml:id` 検証（`event`）、XML 1.0 のプルパーサ・文字デコード・実体解決と書き出し（`WriterSource` と `XmlWriter`）（`io`）、DTD の宣言モデル・構文解析・検証器（`dtd`）、アリーナ木（`dom`）、パイプラインの一段としての XInclude（`xinclude`）、XPointer とそれで選ぶ filter（`xpointer`）、それらを繋いだ `Reader` / `Writer`（クレート直下） |
 | `xenolith-fuzz` | メンバー | ファジングで検査する性質と、その種コーパス |
 | `xenolith-xdm` | 外している | XPath データモデル。`Model` トレイトと DOM 実装 |
 | `xenolith-xpath` | 外している | XPath 1.0。字句、構文、評価器、コア関数、拡張関数の登録機構 |
@@ -66,8 +66,8 @@
 - **`unsafe` は禁止**（`unsafe_code = "forbid"`）。
 - **クレート間依存は default features を off にする。** 各クレートは必要な feature を明示的に名指す。feature を
   全て落としたビルドも正当であり、CI がそれを組む。
-- **実装していない構文は黙って飛ばさずエラーにする。** XInclude の `xpointer` は、XPointer を実装するまで
-  resource error として扱う。外しているクレートでは、`element-available()` / `function-available()` は
+- **実装していない構文は黙って飛ばさずエラーにする。** 評価できる part のない XPointer は `Error::XPointer` で
+  拒否し、XInclude では resource error になる。外しているクレートでは、`element-available()` / `function-available()` は
   レジストリと実際の分岐に問い合わせて答える。一覧を手で同期させない。
 - **印字したものは同じ木に解析される。** writer が書いたものは読み戻せ、同じテキストを書く（ファジングの
   性質）。外しているクレートでは、XPath 式の `Display` は解析結果を可視化するためにあり、別の木に読み戻される

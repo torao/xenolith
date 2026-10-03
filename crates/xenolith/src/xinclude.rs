@@ -27,13 +27,13 @@
 //! document structure does not comply with the XInclude 1.0 specification, processing halts at the first violation
 //! with an [`Error::Validity`] error.
 //!
+//! The `xpointer` attribute selects a portion of a resource loaded as XML via [`XPointerFilter`]. The
+//! [`xpointer`](crate::xpointer) module enumerates the formats subject to evaluation. Pointers that cannot be parsed,
+//! pointers that identify nothing, and pointers that the filter cannot evaluate result in a resource error (Section
+//! 4.2, "XPointer errors are resource errors"); consequently, `xi:fallback` is used in such cases.
+//!
 //! # Unimplemented Features
 //!
-//! - The `xpointer` attribute is not yet supported. To prevent transformation into XML unintended by the application,
-//!   any `xi:include` element with this attribute set is treated as a resource error (§4.2 "An error in the XPointer
-//!   is a resource error"). If an `xi:fallback` element is present, it is used as a replacement; otherwise, processing
-//!   terminates with an error. While §4.2 requires support for the [XPointer Framework] and the [`element()` scheme],
-//!   the lack of such support constitutes a deviation from the specification.
 //! - An `xi:include` element with an omitted `href` attribute is treated as a resource error (§4.1). If an
 //!   `xi:fallback` element is present, it is used as a replacement; otherwise, processing terminates with an error.
 //!   Omitting the `href` attribute implies including the document currently being processed in the event pipeline
@@ -41,9 +41,6 @@
 //!   requires constructing and saving the document first. In cases requiring self-reference, please expand the
 //!   document as XML into memory or a file so that it can be read via a [`UriResolver`] using the URI specified in the
 //!   `href` attribute.
-//!
-//! [XPointer Framework]: https://www.w3.org/TR/2003/REC-xptr-framework-20030325/
-//! [`element()` scheme]: https://www.w3.org/TR/2003/REC-xptr-element-20030325/
 //!
 //! # Specifications
 //!
@@ -70,6 +67,7 @@ use crate::name::XML_PREFIX;
 use crate::xinclude::ScopeBehavior::{FallbackInProgress, IgnoreAll, InclusionInProcessing, SeekingFallback};
 use crate::xinclude::validate::RootElementConstraints;
 pub use crate::xinclude::validate::XIncludeSchema;
+use crate::xpointer::{XPointer, XPointerFilter};
 use crate::{Attribute, Attributes, Location, XML_NS_URI, uri};
 use std::io::Read;
 
@@ -87,12 +85,23 @@ pub struct Limits {
   /// includes those from imported documents and those that occur during fallback. The default is 1,000. `None` means
   /// no upper limit.
   pub max_includes: Option<usize>,
+  /// The maximum number of characters an `xpointer` can buffer. For an `xpointer` composed of multiple PointerParts,
+  /// parts further to the right may need to buffer their selected events until the part to their left begins
+  /// transmitting events. This value represents the maximum total number of characters (in terms of character count)
+  /// buffered across all parts (specified via [`XPointerFilter::with_max_pending_chars`]). The default is 16 Mi
+  /// characters; `None` indicates no upper limit.
+  pub max_pending_chars: Option<usize>,
 }
 
 impl Default for Limits {
-  /// Create a default [`Limits`] with a `max_depth` of 8 and a `max_includes` of 1,000.
+  /// Create a default [`Limits`] with a `max_depth` of 8, a `max_includes` of 1,000, and a `max_pending_chars` of 16 Mi
+  /// characters.
   fn default() -> Self {
-    Self { max_depth: Some(8), max_includes: Some(1000) }
+    Self {
+      max_depth: Some(8),
+      max_includes: Some(1000),
+      max_pending_chars: Some(crate::xpointer::DEFAULT_MAX_PENDING_CHARS),
+    }
   }
 }
 
@@ -100,7 +109,7 @@ impl Limits {
   /// Creates a [`Limits`] with all restrictions removed. This should only be used for trusted input.
   #[must_use]
   pub fn unlimited() -> Self {
-    Self { max_depth: None, max_includes: None }
+    Self { max_depth: None, max_includes: None, max_pending_chars: None }
   }
 }
 
@@ -126,6 +135,8 @@ struct IncludeScope {
   location: Location,
   /// A resolved and normalized resource URI. It is compared during loop detection as described in §4.2.
   uri: String,
+  /// The value of the `xpointer` attribute, which is compared together with `uri` during loop detection (§4.2.7).
+  xpointer: Option<String>,
   /// A base URI at the `xi:include` location. It is compared to the value of the root element of the retrieved
   /// document. If no actual value exists, it is `None`.
   xml_base: Option<String>,
@@ -360,24 +371,25 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
       return self.fallback(event, uri, base, Error::xinclude(message).at(at));
     };
 
-    // TODO fix it once XPointer is implemented
-    // The reading loop must be detected based on a combination of the include location and the xpointer. For this
-    // reason, it must be determined before the loop check below, which compares only the URIs.
-    let xpointer = get_attribute_value(&event, "xpointer");
-    if xpointer.is_some() {
-      // §4.2: "An error in the XPointer is a resource error." XPointer を実装するまでは、あらゆる xpointer が該当する
-      let at = get_attribute_value_location(&event, "xpointer");
-      let message = "XPointer is not yet supported".to_string();
-      return self.fallback(event, uri, base, Error::xinclude(message).at(at));
-    }
+    // §4.2: "An error in the XPointer is a resource error." A pointer that does not parse is one, and is found before
+    // anything is fetched.
+    let xpointer = get_attribute_value(&event, "xpointer").map(str::to_owned);
+    let at = get_attribute_value_location(&event, "xpointer");
+    let pointer = match xpointer.as_deref().map(|pointer| XPointer::parse(pointer, at)).transpose() {
+      Ok(pointer) => pointer,
+      Err(error) => return self.fallback(event, uri, base, error),
+    };
 
     // §4.2.7 "When recursively processing an xi:include element, it is a fatal error to process another xi:include
     // element with an include location and xpointer attribute value that have already been processed in the inclusion
-    // chain." However, the scope in which the same URI is detected is limited to the actual processing of the
-    // resource. Since the resource has not yet been retrieved during the fallback phase, detecting the same URI does
-    // not constitute a loop.
-    if let Some(existing) =
-      self.inclusions.iter().filter(|i| i.behavior == InclusionInProcessing).find(|i| i.uri == uri)
+    // chain." However, the scope in which the same (URI, XPointer) pair is detected is limited to the actual
+    // processing of the resource. Since the resource has not yet been retrieved during the fallback phase, detecting
+    // the same pair does not constitute a loop.
+    if let Some(existing) = self
+      .inclusions
+      .iter()
+      .filter(|i| i.behavior == InclusionInProcessing)
+      .find(|i| i.uri == uri && i.xpointer == xpointer)
     {
       let at = get_attribute_value_location(&event, "href");
       let message = format!("xi:include is creating a circular reference: {}", existing.location.clone());
@@ -408,6 +420,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     let include = IncludeScope {
       location: event.location.clone(),
       uri: uri.clone(),
+      xpointer,
       xml_base: base.clone(),
       xml_lang: event.xml_lang.clone(),
       included_root_observed: false,
@@ -420,7 +433,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     // start including in text or XML format
     let result = match get_attribute_value(&event, "parse") {
       Some("text") => self.include_text(reader, stream),
-      Some("xml") | None => self.include_xml(reader, stream),
+      Some("xml") | None => self.include_xml(reader, stream, pointer.as_ref()),
       Some(unsupported) => {
         let at = get_attribute_value_location(&event, "parse");
         let message = format!(
@@ -429,6 +442,15 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
         return Err(Error::xinclude(message).at(at));
       }
     };
+
+    // §4.2: "An error in the XPointer is a resource error." When a failure occurs due to an invalid (or unrecognized)
+    // XPointer, it is treated as a resource error, and a fallback is performed.
+    if let Err(error @ Error::XPointer { .. }) = result {
+      let scope = self.inclusions.last_mut().expect("xi:include is opened");
+      scope.error = Some(error);
+      scope.behavior = SeekingFallback;
+      return Ok(());
+    }
 
     self.inclusions.last_mut().expect("xi:include is opened").behavior =
       if result.is_ok() { IgnoreAll } else { SeekingFallback };
@@ -442,6 +464,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     let include = IncludeScope {
       location: event.location.clone(),
       uri,
+      xpointer: get_attribute_value(&event, "xpointer").map(str::to_owned),
       xml_base: base,
       xml_lang: event.xml_lang.clone(),
       included_root_observed: false,
@@ -453,19 +476,29 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     Ok(())
   }
 
-  /// reads the resource as XML and sends it to the downstream as an event at the current position
-  fn include_xml(&mut self, reader: Box<dyn Read>, stream: CharStream) -> Result<()> {
+  /// reads the resource as XML and sends it to the downstream as an event at the current position; with a `pointer`,
+  /// only the part it identifies
+  fn include_xml(&mut self, reader: Box<dyn Read>, stream: CharStream, pointer: Option<&XPointer>) -> Result<()> {
     let config = self.config;
     // *pay attention* to variable scope and evaluation order in this block
     let resolver = self.resolver;
     let mut strict = self.strict.then_some(StrictXmlConstraints::lexical_only());
     let mut validators = ValidatorSet::default().add_schema(&XIncludeSchema).with_max_errors(Some(0));
+    // The whole resource is checked, and only the selected part reaches this process.
+    let mut filter;
+    let consumer: &mut dyn EventConsumer = match pointer {
+      Some(pointer) => {
+        filter = XPointerFilter::new(pointer).with_max_pending_chars(self.limits.max_pending_chars).add_consumer(self);
+        &mut filter
+      }
+      None => self,
+    };
     let mut lane = Dispatcher::new();
     if let Some(strict) = strict.as_mut() {
       lane = lane.add_validator(strict);
     }
     lane = lane.add_validator(&mut validators);
-    lane = lane.add_consumer(self);
+    lane = lane.add_consumer(consumer);
 
     let mut source = StreamSource::with_document(reader, Entity::document(stream)).with_config(config);
     source = source.with_resolver(resolver);
@@ -766,6 +799,13 @@ impl XIncludeProcess<'_, '_> {
         EventRef::EndElement(..) if self.scope_depth() == 0 => {
           let error = self.inclusions.pop().and_then(|mut scope| scope.error.take());
           match error {
+            // The resource errors that lack a fallback mechanism are considered fatal. In the case of an XPointer
+            // error, the error is replaced by an error in the inclusion process of the resource containing the
+            // affected resource.
+            Some(error @ Error::XPointer { .. }) => {
+              let at = error.location().clone();
+              Err(Error::xinclude(format!("{} and the xi:include has no xi:fallback", error.message())).at(at))
+            }
             Some(error) => Err(error),
             None => Ok(()),
           }
