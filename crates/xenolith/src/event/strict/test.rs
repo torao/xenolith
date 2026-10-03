@@ -347,14 +347,81 @@ fn a_lexical_only_validator_checks_nothing_the_parser_checks() {
 }
 
 #[test]
-fn each_start_document_starts_the_check_afresh() {
+fn each_run_starts_the_check_afresh() {
   let none = Vec::new();
   let mut strict = StrictXmlConstraints::new();
-  // A run that stopped inside its root element, then a whole document.
+  // A run that stopped inside its root element, which `finish` ends, then a whole document.
   for event in [EventRef::StartDocument, start("a", None, &none)] {
     let _ = strict.consume(&event).unwrap();
   }
+  strict.finish(Outcome::Stopped);
   for event in [EventRef::StartDocument, start("b", None, &none), end("b", None), EventRef::EndDocument] {
     let _ = strict.consume(&event).unwrap();
+  }
+  // A document that reached its end needs no `finish` before the next.
+  for event in [EventRef::StartDocument, start("c", None, &none), end("c", None), EventRef::EndDocument] {
+    let _ = strict.consume(&event).unwrap();
+  }
+}
+
+#[test]
+fn a_start_document_inside_a_document_is_refused() {
+  // As an application that includes a document would bring in, if it passed on the included document's own events.
+  let none = Vec::new();
+  let at = Location { line: 2, column: 3, offset: 9, ..Location::unknown() };
+  let opened = EventRef::StartElement(StartElementEventRef::new(
+    None,
+    "r",
+    None,
+    Attributes::new(&none),
+    XmlSpace::default(),
+    None,
+    None,
+    at,
+  ));
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
+  let _ = strict.consume(&opened).unwrap();
+  let error = strict.consume(&EventRef::StartDocument).expect_err("nested");
+  assert!(matches!(error, Error::WellFormedness { .. }), "{error:?}");
+  assert!(error.message().contains("StartDocument arrived inside a document"), "{error}");
+  assert_eq!((error.location().line, error.location().column), (2, 3), "at the element it arrived in");
+
+  // Before the root element as well.
+  let mut strict = StrictXmlConstraints::new();
+  let _ = strict.consume(&EventRef::StartDocument).unwrap();
+  assert!(strict.consume(&EventRef::StartDocument).is_err());
+}
+
+#[test]
+fn an_end_document_inside_a_document_is_refused() {
+  let none = Vec::new();
+  let mut strict = StrictXmlConstraints::new();
+  for event in [EventRef::StartDocument, start("r", None, &none)] {
+    let _ = strict.consume(&event).unwrap();
+  }
+  let error = strict.consume(&EventRef::EndDocument).expect_err("the root element is open");
+  assert!(error.message().contains("<r> is not closed"), "{error}");
+}
+
+#[test]
+fn a_source_ends_a_stopped_run_so_the_next_document_is_checked_afresh() {
+  use crate::event::{Dispatcher, EventCursor, EventProducer};
+  use crate::io::StreamSource;
+
+  /// Stops at the first start element.
+  struct First;
+  impl EventConsumer for First {
+    fn consume(&mut self, event: &EventRef<'_>) -> Result<Flow> {
+      Ok(if matches!(event, EventRef::StartElement(_)) { Flow::Break(0) } else { Flow::Continue(0) })
+    }
+  }
+
+  let mut strict = StrictXmlConstraints::new();
+  let mut first = First;
+  {
+    let mut lane = Dispatcher::new().add_validator(&mut strict).add_consumer(&mut first);
+    StreamSource::new("<a><b/></a>".as_bytes()).add_consumer(&mut lane).emit().expect("stopped at <a>");
+    StreamSource::new("<c/>".as_bytes()).add_consumer(&mut lane).emit().expect("a new document");
   }
 }

@@ -25,7 +25,7 @@ use crate::error::{Error, Location, Result};
 use crate::event::validate::{Validator, ValidityError};
 use crate::event::{
   CdataEventRef, CharactersEventRef, CommentEventRef, DoctypeEventRef, EndElementEventRef, EventConsumer, EventRef,
-  Flow, ProcessingInstructionEventRef, StartElementEventRef,
+  Flow, Outcome, ProcessingInstructionEventRef, StartElementEventRef,
 };
 use crate::name::{self, XML_NS_URI, XML_PREFIX, XMLNS_NS_URI, XMLNS_PREFIX};
 use std::borrow::Cow;
@@ -36,7 +36,8 @@ use std::borrow::Cow;
 ///
 /// - Document structure:
 ///   - Document events must be placed between [`StartDocument`](EventRef::StartDocument) and
-///     [`EndDocument`](EventRef::EndDocument) (XML 1.0 §2.1).
+///     [`EndDocument`](EventRef::EndDocument) (XML 1.0 §2.1). Even when one document is incorporated into another,
+///     these do not appear nested within a single document.
 ///   - There must be exactly one root element, and every started element must be closed in the correct order by an
 ///     end element with the same name (XML 1.0 §2.1, §3, WFC: Element Type Match).
 ///   - A document type declaration must appear before the root element and occur at most once (XML 1.0 §2.8).
@@ -69,12 +70,9 @@ use std::borrow::Cow;
 /// character position if the event holds text containing the violation (text, CDATA section, comment, processing
 /// instruction data, or attribute value), the attribute position if the issue concerns an attribute, or the event's
 /// start position otherwise. Since [`EndDocument`](EventRef::EndDocument) lacks position information, the error
-/// location for an unclosed element is the position of the corresponding start element. Since each
-/// [`StartDocument`](EventRef::StartDocument) resets the validator, a single validator can sequentially check multiple
-/// documents, even if processing stops midway.
-///
-/// Since each [`StartDocument`](EventRef::StartDocument) resets the internal state of the validator, a single
-/// validator can be used to validate multiple documents, even if processing stops midway.
+/// location for an unclosed element is the position of the corresponding start element. [`StrictXmlConstraints`]
+/// resets upon the [`finish`](EventConsumer::finish) notification at the end of each execution cycle, allowing a
+/// single instance to validate multiple documents even if processing stops midway.
 ///
 /// For applications that need to allow certain rule violations for various reasons, you can implement a custom
 /// [`EventConsumer`] that wraps this and modifies the events being passed. The second example below allows comments
@@ -428,6 +426,14 @@ impl EventConsumer for StrictXmlConstraints {
     // A violation refuses the document, so no error is ever recorded to be counted.
     self.check(event).map(|()| Flow::Continue(0))
   }
+
+  /// To ensure that multiple [`StartDocument`](EventRef::StartDocument) or [`EndDocument`](EventRef::EndDocument)
+  /// events do not appear within a single document, the system transitions to the outside state once the current event
+  /// stream concludes. The subsequent [`StartDocument`](EventRef::StartDocument) signifies the beginning of a new
+  /// document.
+  fn finish(&mut self, _outcome: Outcome<'_>) {
+    self.phase = Phase::Outside;
+  }
 }
 
 impl Validator for StrictXmlConstraints {
@@ -448,6 +454,12 @@ impl StrictXmlConstraints {
       return lexical(event);
     }
     if let EventRef::StartDocument = event {
+      if self.phase != Phase::Outside {
+        // Multiple `StartDocument` were contained within a single document.
+        let message = "a StartDocument arrived inside a document, before its EndDocument";
+        let at = self.open.last().map_or_else(Location::unknown, |open| open.location.clone());
+        return Err(Error::well_formedness(message).at(at));
+      }
       return self.start_document();
     }
     // Checked before the content of the event, so that an event outside a document is refused for being there.
