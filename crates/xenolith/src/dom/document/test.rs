@@ -104,6 +104,10 @@ fn a_cycle_is_refused() {
   let (mut doc, r, b, _) = sample();
   let error = doc.append_child(b, r).unwrap_err();
   assert_eq!(error.code(), ExceptionCode::HIERARCHY_REQUEST_ERR);
+  // A node with no children of its own still cannot be its own child.
+  let leaf = doc.create_element("leaf").unwrap();
+  let error = doc.append_child(leaf, leaf).unwrap_err();
+  assert_eq!(error.code(), ExceptionCode::HIERARCHY_REQUEST_ERR);
 }
 
 #[test]

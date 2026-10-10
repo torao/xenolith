@@ -188,8 +188,9 @@
 //!   CWE-918). See below.
 //! - **Setting Resource Consumption Limits**: By default, there are limits on token length (CWE-770), the depth,
 //!   frequency, and character count of entity expansions (CWE-776), the nesting depth of elements (CWE-674), the
-//!   depth and frequency of XInclude inclusions, and the characters an XPointer keeps pending while it tries its parts
-//!   in order. To remove these limits for trusted imports, explicit configuration is required. See below.
+//!   depth and frequency of XInclude inclusions, the characters an XPointer keeps pending while it tries its parts in
+//!   order, and the nesting depth of XPath expressions (CWE-674). To remove these limits for trusted imports, explicit
+//!   configuration is required. See below.
 //! - **Non-Panic Loading**: Any errors that occur while loading or parsing documents are returned as `Err` rather than
 //!   causing a panic. This has also been verified through fuzzing.
 //! - **Pure Safe Rust**: The xenolith codebase does not use `unsafe`, and the compiler guarantees memory safety.
@@ -205,9 +206,10 @@
 //! `xi:include` resources are only allowed to be loaded through the [`UriResolver`](io::resolve::UriResolver)
 //! configured by the caller.
 //!
-//! There are limits on the expansion of entities and the inclusion of `XInclude` files, regardless of the document
-//! declaration ([`io::Limits`], [`xinclude::Limits`]). To remove these limits, explicitly specify
-//! [`io::Limits::unlimited`] or [`xinclude::Limits::unlimited`].
+//! Regardless of the document declaration, there are restrictions on entity expansion, the inclusion of `XInclude`
+//! files, and the nesting of XPath expressions ([`io::Limits`], [`xinclude::Limits`], [`xpath::Limits`]). To remove
+//! these restrictions, explicitly specify [`io::Limits::unlimited`], [`xinclude::Limits::unlimited`], or
+//! [`xpath::Limits::unlimited`].
 //!
 //! # Modules
 //!
@@ -294,6 +296,7 @@ pub mod io;
 pub mod name;
 pub mod uri;
 pub mod xinclude;
+pub mod xpath;
 pub mod xpointer;
 
 mod facade;

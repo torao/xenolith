@@ -84,8 +84,8 @@ xenolith is designed to read untrusted documents. These are design decisions, no
   resources are loaded only through the `UriResolver` the caller supplies. This is what keeps XXE and SSRF out by
   default.
 - **Resource use is limited by default.** Token length, entity expansion (depth, count and characters), element
-  nesting, XInclude depth and count, and what an XPointer keeps pending while it tries its parts in order all have
-  limits. Removing them takes an explicit `Limits::unlimited`.
+  nesting, XInclude depth and count, what an XPointer keeps pending while it tries its parts in order, and the
+  nesting of XPath expressions all have limits. Removing them takes an explicit `Limits::unlimited`.
 - **No panic on bad input.** An error while reading or parsing is an `Err`. Fuzzing checks this.
 - **No `unsafe`.** The workspace forbids it.
 - **Few dependencies.** By default the library depends on `encoding_rs` and `thiserror` only.

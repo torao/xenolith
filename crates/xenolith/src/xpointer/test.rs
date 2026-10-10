@@ -247,6 +247,7 @@ fn the_pointer_as_written_is_kept() {
   let written = "xmlns(p=urn:p) element(/1/2)";
   let pointer = XPointer::parse(written, Location::new()).unwrap();
   assert_eq!(pointer.as_str(), written);
+  assert_eq!(pointer.to_string(), written);
   assert!(format!("{pointer:?}").contains(&format!("{written:?}")), "{pointer:?}");
 }
 

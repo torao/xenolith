@@ -21,11 +21,9 @@ use crate::dom::walk::{Visit, Walk};
 
 /// An XML document: an [arena](crate::dom#arena) of nodes with a tree over them.
 ///
-/// **Be aware of memory leaks**. The arena does not free storage. Once a node is created, it retains its allocated
-/// space for the document's lifetime, even if it's not attached to the document. Furthermore,
-/// [`remove_child`](Self::remove_child) detaches the node but still does not free the memory. The only way to free
-/// them all is to drop the document. A single document can store a maximum of `u32::MAX` nodes. Attempting to create
-/// more than that will cause a panic.
+/// The arena retains each node's storage for the document's lifetime, even after
+/// [`remove_child`](Self::remove_child) detaches the node. Dropping the document frees all of its node storage. A
+/// document can store at most `u32::MAX` nodes; attempting to create more causes a panic.
 ///
 /// Every method that takes a [`NodeId`] requires this document. A handle from elsewhere is rejected: a method that
 /// returns a [`Result`] reports [`ExceptionCode::WRONG_DOCUMENT_ERR`], and an accessor that returns a value panics
@@ -832,10 +830,8 @@ impl Document {
   ///
   /// # Cost
   ///
-  /// This method traverses the tree on every call. Consequently, it incurs a cost proportional to the document size,
-  /// rather than the constant O(1) time expected of the DOM's `getElementById`. If you need to search for multiple
-  /// identifiers, you should not call this method for each one; instead, use a method like [`walk`](Self::walk) to
-  /// collect the required elements in a single pass over the completed document.
+  /// This method traverses the tree on every call, so each lookup takes time proportional to the document size. To
+  /// look up several identifiers, traverse the document once and collect the matching elements in a map.
   ///
   /// # Examples
   ///
@@ -864,6 +860,11 @@ impl Document {
           })
         })
     })
+  }
+
+  /// Whether `attr` is an attribute of type ID, which [`get_element_by_id`](Self::get_element_by_id) looks at.
+  pub(crate) fn is_id_attribute(&self, attr: NodeId) -> bool {
+    matches!(&self.slot(attr).data, NodeData::Attribute(data) if data.is_id)
   }
 
   fn element_data(&self, id: NodeId) -> Option<&ElementData> {
@@ -1085,7 +1086,10 @@ impl Document {
       let name = self.node_name(child);
       return Err(DomException::new(ExceptionCode::HIERARCHY_REQUEST_ERR, format!("\"{name}\" cannot be a child")));
     }
-    if child == parent || self.is_ancestor(child, parent) {
+    // A node with no children is never positioned above any other node; therefore, only nodes with children need to be
+    // traversed upwards via the `parent` pointer. The time required for this operation is proportional to the tree's
+    // depth, building a deep tree one level at a time results in quadratic computational complexity O(n²).
+    if child == parent || (self.slot(child).first_child.is_some() && self.is_ancestor(child, parent)) {
       return Err(DomException::new(
         ExceptionCode::HIERARCHY_REQUEST_ERR,
         "a node cannot be made a descendant of itself",
