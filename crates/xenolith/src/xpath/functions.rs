@@ -1,8 +1,9 @@
 //! The core function library (XPath 1.0 §4).
 //!
 //! This module dispatches all twenty-seven XPath 1.0 core functions by name. Core functions have no namespace, so a
-//! prefixed name refers to an extension function. This implementation does not support extension functions, so it
-//! reports a bound prefixed call as unavailable and an unbound prefix as an error.
+//! prefixed name refers to an extension function. The extension functions are those the application defines with
+//! [`XPathContext::with_function`]; this module reports a call to any other as unavailable and an unbound prefix as an
+//! error.
 //!
 //! When a core function's optional argument is omitted, the context node supplies the default: node-set functions use
 //! it as a singleton node-set, while string and number functions convert its string-value as required. When a function
@@ -20,9 +21,10 @@ mod test;
 use crate::chars::is_whitespace;
 use crate::error::{Error, Result};
 use crate::name::XML_NS_URI;
-use crate::xpath::context::{Context, namespace_of};
 use crate::xpath::model::{Model, make_node_set};
 use crate::xpath::object::{Object, string_to_number};
+use crate::xpath::state::EvalState;
+use crate::xpath::{Function, FunctionCall, XPathContext, object, result};
 
 /// Each core function by name, with the least and most arguments it takes (`None` for no most).
 pub(crate) const SIGNATURES: &[(&str, usize, Option<usize>)] = &[
@@ -59,67 +61,85 @@ pub(crate) const SIGNATURES: &[(&str, usize, Option<usize>)] = &[
   ("round", 1, Some(1)),
 ];
 
-/// Checks that a call names a function this implementation provides and gives it a number of arguments it takes,
-/// returning the reason when it does not.
+/// Checks that a call names a function this implementation provides, or an application-defined function in `context`,
+/// and gives it a number of arguments it takes, returning the reason when it does not. An application-defined function
+/// is returned as well.
 ///
 /// The parser can validate a function's name and argument count before evaluation. This lets parsing report unknown
 /// functions and invalid argument counts without evaluating arguments that could fail themselves, such as an unbound
-/// variable. [`call`] uses the same signature table as a defensive check, so parsing and evaluation apply the same
-/// rules.
-pub(crate) fn check(prefix: Option<&str>, local: &str, given: usize) -> std::result::Result<(), String> {
+/// variable. [`call`] uses the same check as a defensive check, so parsing and evaluation apply the same rules.
+pub(crate) fn check<'c>(
+  prefix: Option<&str>,
+  local: &str,
+  given: usize,
+  context: &'c XPathContext,
+) -> std::result::Result<Option<&'c Function>, String> {
   // A prefixed name is an extension function; the core library is reached only by an unprefixed one.
   if let Some(prefix) = prefix {
-    return Err(match namespace_of(prefix) {
-      Some(namespace) => format!("no extension function {{{namespace}}}{local} is available"),
-      None => format!("the prefix \"{prefix}\" is not bound"),
-    });
+    let Some(namespace) = context.namespace_of(prefix) else {
+      return Err(format!("the prefix \"{prefix}\" is not bound"));
+    };
+    let Some(function) = context.function(namespace, local) else {
+      return Err(format!("no extension function {{{namespace}}}{local} is available"));
+    };
+    return arity(&format!("{prefix}:{local}"), function.min, function.max, given).map(|()| Some(function));
   }
   let Some(&(_, min, max)) = SIGNATURES.iter().find(|(name, ..)| *name == local) else {
     return Err(format!("no function named \"{local}\" is available"));
   };
+  arity(local, min, max, given).map(|()| None)
+}
+
+/// Checks that `given` arguments are at least `min` and at most `max` for the function `name`, returning the reason
+/// when they are not.
+fn arity(name: &str, min: usize, max: Option<usize>, given: usize) -> std::result::Result<(), String> {
   if given >= min && max.is_none_or(|max| given <= max) {
     return Ok(());
   }
   let expected = match max {
     Some(max) if max == min => format!("{min} argument{}", plural(min)),
-    Some(max) => format!("{min} or {max} arguments"),
+    Some(max) if max == min + 1 => format!("{min} or {max} arguments"),
+    Some(max) => format!("{min} to {max} arguments"),
     None => format!("at least {min} argument{}", plural(min)),
   };
-  Err(format!("the function \"{local}()\" takes {expected}, but was given {given}"))
+  Err(format!("the function \"{name}()\" takes {expected}, but was given {given}"))
 }
 
-/// Calls a core function by its unprefixed name after evaluating its arguments.
+/// Calls a core function by its unprefixed name, or an application-defined function by its prefixed name, after
+/// evaluating its arguments.
 pub(crate) fn call<M: Model>(
   prefix: Option<&str>,
   local: &str,
   arguments: Vec<Object<M::Node>>,
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Object<M::Node>> {
   // The parser has checked the call already; checking again keeps the arguments below from being indexed past their
   // end, whatever tree is evaluated.
-  check(prefix, local, arguments.len()).map_err(Error::xpath)?;
-  let model = context.model;
+  if let Some(function) = check(prefix, local, arguments.len(), state.context).map_err(Error::xpath)? {
+    return extension(function, arguments, state);
+  }
+  let model = state.model;
   match local {
     // --- Node-set functions (§4.1) ----------------------------------------------------------
-    "last" => Ok(Object::Number(context.size as f64)),
-    "position" => Ok(Object::Number(context.position as f64)),
+    "last" => Ok(Object::Number(state.size as f64)),
+    "position" => Ok(Object::Number(state.position as f64)),
     "count" => Ok(Object::Number(nodes_of(local, &arguments[0])?.len() as f64)),
-    "id" => Ok(Object::NodeSet(id(&arguments[0], context))),
+    "id" => Ok(Object::NodeSet(id(&arguments[0], state))),
     "local-name" => {
-      let name = first_node(local, &arguments, context)?.and_then(|node| model.expanded_name(node));
+      let name = first_node(local, &arguments, state)?.and_then(|node| model.expanded_name(node));
       Ok(Object::String(name.map(|name| name.local).unwrap_or_default()))
     }
     "namespace-uri" => {
-      let name = first_node(local, &arguments, context)?.and_then(|node| model.expanded_name(node));
+      let name = first_node(local, &arguments, state)?.and_then(|node| model.expanded_name(node));
       Ok(Object::String(name.and_then(|name| name.namespace).unwrap_or_default()))
     }
     "name" => {
-      let name = first_node(local, &arguments, context)?.and_then(|node| model.qualified_name(node));
+      let name = first_node(local, &arguments, state)?.and_then(|node| model.qualified_name(node));
       Ok(Object::String(name.unwrap_or_default()))
     }
 
     // --- String functions (§4.2) ------------------------------------------------------------
-    "string" => Ok(Object::String(string_argument(&arguments, context))),
+    "string" => Ok(Object::String(string_argument(&arguments, state))),
     "concat" => Ok(Object::String(arguments.iter().map(|argument| argument.string(model)).collect())),
     "starts-with" => {
       let (text, prefix) = (arguments[0].string(model), arguments[1].string(model));
@@ -145,8 +165,8 @@ pub(crate) fn call<M: Model>(
       let length = arguments.get(2).map(|argument| argument.number(model));
       Ok(Object::String(substring(&text, start, length)))
     }
-    "string-length" => Ok(Object::Number(string_argument(&arguments, context).chars().count() as f64)),
-    "normalize-space" => Ok(Object::String(normalize_space(&string_argument(&arguments, context)))),
+    "string-length" => Ok(Object::Number(string_argument(&arguments, state).chars().count() as f64)),
+    "normalize-space" => Ok(Object::String(normalize_space(&string_argument(&arguments, state)))),
     "translate" => {
       let text = arguments[0].string(model);
       let (from, to) = (arguments[1].string(model), arguments[2].string(model));
@@ -158,13 +178,13 @@ pub(crate) fn call<M: Model>(
     "not" => Ok(Object::Boolean(!arguments[0].boolean())),
     "true" => Ok(Object::Boolean(true)),
     "false" => Ok(Object::Boolean(false)),
-    "lang" => Ok(Object::Boolean(lang(&arguments[0].string(model), context))),
+    "lang" => Ok(Object::Boolean(lang(&arguments[0].string(model), state))),
 
     // --- Number functions (§4.4) ------------------------------------------------------------
     "number" => {
       let value = match arguments.first() {
         Some(argument) => argument.number(model),
-        None => string_to_number(&model.string_value(context.node)),
+        None => string_to_number(&model.string_value(state.node)),
       };
       Ok(Object::Number(value))
     }
@@ -180,26 +200,46 @@ pub(crate) fn call<M: Model>(
   }
 }
 
+/// Calls an application-defined function. The arguments are handed over as
+/// [`XPathResult`](crate::xpath::XPathResult)s, and a node-set it returns is put into document order without
+/// duplicates.
+fn extension<M: Model>(
+  function: &Function,
+  arguments: Vec<Object<M::Node>>,
+  state: &EvalState<'_, M>,
+) -> Result<Object<M::Node>> {
+  let model = state.model;
+  let arguments = arguments.into_iter().map(|argument| result(argument, model)).collect();
+  let call = FunctionCall {
+    document: model.document(),
+    node: model.export(state.node),
+    position: state.position,
+    size: state.size,
+  };
+  object(&(function.body)(arguments, &call)?, model)
+    .ok_or_else(|| Error::xpath("the function returned a node that is not in the XPath tree of the document"))
+}
+
 // --- The functions that need more than a line ---------------------------------------------------
 
 /// Returns the elements identified by the IDs in an `id()` argument.
 ///
 /// For a node-set argument, this function reads the string-value of each node. For any other argument, it reads the
 /// argument's string conversion. It splits those strings on whitespace and looks up each resulting ID.
-fn id<M: Model>(argument: &Object<M::Node>, context: &Context<'_, M>) -> Vec<M::Node> {
+fn id<M: Model>(argument: &Object<M::Node>, state: &EvalState<'_, M>) -> Vec<M::Node> {
   let lists = match argument {
-    Object::NodeSet(nodes) => nodes.iter().map(|node| context.model.string_value(*node)).collect(),
-    other => vec![other.string(context.model)],
+    Object::NodeSet(nodes) => nodes.iter().map(|node| state.model.string_value(*node)).collect(),
+    other => vec![other.string(state.model)],
   };
   let mut found = Vec::new();
   for list in &lists {
     for id in list.split(is_whitespace).filter(|id| !id.is_empty()) {
-      if let Some(node) = context.model.element_by_id(id) {
+      if let Some(node) = state.model.element_by_id(id) {
         found.push(node);
       }
     }
   }
-  make_node_set(context.model, &mut found);
+  make_node_set(state.model, &mut found);
   found
 }
 
@@ -263,17 +303,17 @@ fn round(value: f64) -> f64 {
 }
 
 /// Returns whether the nearest `xml:lang` value on the context node or an ancestor matches `wanted` or a sublanguage.
-fn lang<M: Model>(wanted: &str, context: &Context<'_, M>) -> bool {
-  let mut current = Some(context.node);
+fn lang<M: Model>(wanted: &str, state: &EvalState<'_, M>) -> bool {
+  let mut current = Some(state.node);
   while let Some(node) = current {
-    for attribute in context.model.attributes(node) {
-      let Some(name) = context.model.expanded_name(attribute) else { continue };
+    for attribute in state.model.attributes(node) {
+      let Some(name) = state.model.expanded_name(attribute) else { continue };
       if name.namespace.as_deref() == Some(XML_NS_URI) && name.local == "lang" {
         // The nearest xml:lang settles it, whether or not it matches.
-        return sublanguage_of(&context.model.string_value(attribute), wanted);
+        return sublanguage_of(&state.model.string_value(attribute), wanted);
       }
     }
-    current = context.model.parent(node);
+    current = state.model.parent(node);
   }
   false
 }
@@ -288,10 +328,10 @@ fn sublanguage_of(value: &str, wanted: &str) -> bool {
 // --- Arguments ----------------------------------------------------------------------------------
 
 /// Returns a function's string argument, using the context node's string-value when the argument is omitted.
-fn string_argument<M: Model>(arguments: &[Object<M::Node>], context: &Context<'_, M>) -> String {
+fn string_argument<M: Model>(arguments: &[Object<M::Node>], state: &EvalState<'_, M>) -> String {
   match arguments.first() {
-    Some(argument) => argument.string(context.model),
-    None => context.model.string_value(context.node),
+    Some(argument) => argument.string(state.model),
+    None => state.model.string_value(state.node),
   }
 }
 
@@ -300,10 +340,10 @@ fn string_argument<M: Model>(arguments: &[Object<M::Node>], context: &Context<'_
 fn first_node<M: Model>(
   name: &str,
   arguments: &[Object<M::Node>],
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Option<M::Node>> {
   match arguments.first() {
-    None => Ok(Some(context.node)),
+    None => Ok(Some(state.node)),
     // A node-set is kept in document order, so its first node is the first in document order.
     Some(Object::NodeSet(nodes)) => Ok(nodes.first().copied()),
     Some(other) => Err(argument_type(name, other.type_name(), "a node-set")),

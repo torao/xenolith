@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use crate::dom::{Document, NodeId, NodeType};
 use crate::name::{NameId, XML_NS_URI, XMLNS_NS_URI};
+use crate::xpath::Node;
 
 /// One of the seven node kinds defined by the XPath data model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +102,15 @@ pub(crate) trait Model {
   /// Compares two nodes by their position in document order. For nodes in the model, only a node compared with itself
   /// returns `Equal`; [`make_node_set`] relies on this behavior to remove duplicate nodes.
   fn document_order(&self, a: Self::Node, b: Self::Node) -> Ordering;
+
+  /// The document the tree is read from, which an application-defined function receives.
+  fn document(&self) -> &Document;
+
+  /// Returns the public form of a node, which an application-defined function receives.
+  fn export(&self, node: Self::Node) -> Node;
+
+  /// Returns the node a public node stands for, or `None` if it is not a node in the XPath tree of the document.
+  fn import(&self, node: &Node) -> Option<Self::Node>;
 }
 
 /// Sorts `nodes` into document order and removes duplicate nodes to produce a node-set.
@@ -337,6 +347,22 @@ impl<'d> DomModel<'d> {
     None
   }
 
+  /// Whether `id` is in the tree below the document node, an attribute through its element. A node outside it, such as
+  /// one not inserted yet or one in a fragment, has no place in document order.
+  fn is_in_tree(&self, id: NodeId) -> bool {
+    let mut current = match self.doc.node_type(id) {
+      NodeType::ATTRIBUTE_NODE => self.doc.owner_element(id),
+      _ => Some(id),
+    };
+    while let Some(node) = current {
+      if node == self.doc.document_node() {
+        return true;
+      }
+      current = self.doc.parent(node);
+    }
+    false
+  }
+
   /// Where a node sits in document order; a node outside the tree sorts after every node in it.
   fn position(&self, node: DomNode) -> usize {
     self.order.get_or_init(|| self.numbered_nodes()).get(&node).copied().unwrap_or(usize::MAX)
@@ -361,7 +387,7 @@ impl Model for DomModel<'_> {
         NodeType::COMMENT_NODE => NodeKind::Comment,
         NodeType::PROCESSING_INSTRUCTION_NODE => NodeKind::ProcessingInstruction,
         NodeType::TEXT_NODE | NodeType::CDATA_SECTION_NODE => NodeKind::Text,
-        // A document type or fragment is not an XPath node; nothing reaches here in a tree.
+        // A document type or fragment is not an XPath node; `import` refuses them, so nothing reaches here.
         NodeType::DOCUMENT_TYPE_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => NodeKind::Root,
       },
     }
@@ -380,10 +406,7 @@ impl Model for DomModel<'_> {
 
   fn children(&self, node: DomNode) -> Vec<DomNode> {
     let DomNode::Tree(id) = node else { return Vec::new() };
-    if !matches!(
-      self.doc.node_type(id),
-      NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE | NodeType::DOCUMENT_FRAGMENT_NODE
-    ) {
+    if !matches!(self.doc.node_type(id), NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE) {
       return Vec::new();
     }
     let mut children = Vec::new();
@@ -470,9 +493,7 @@ impl Model for DomModel<'_> {
   fn string_value(&self, node: DomNode) -> String {
     match node {
       DomNode::Tree(id) => match self.doc.node_type(id) {
-        NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => {
-          self.doc.text_content(id)
-        }
+        NodeType::DOCUMENT_NODE | NodeType::ELEMENT_NODE => self.doc.text_content(id),
         NodeType::ATTRIBUTE_NODE | NodeType::COMMENT_NODE | NodeType::PROCESSING_INSTRUCTION_NODE => {
           self.doc.node_value(id).unwrap_or_default().to_owned()
         }
@@ -499,5 +520,48 @@ impl Model for DomModel<'_> {
     // Every node in the tree has a position of its own, so a tie is between nodes outside it, which are put in the
     // order of the handles themselves (the order they were created in) to keep the order total.
     self.position(a).cmp(&self.position(b)).then_with(|| a.cmp(&b))
+  }
+
+  fn document(&self) -> &Document {
+    self.doc
+  }
+
+  fn export(&self, node: DomNode) -> Node {
+    match node {
+      DomNode::Tree(id) | DomNode::Text(id) => Node::Dom(id),
+      DomNode::Namespace { element, prefix } => {
+        Node::Namespace { element, prefix: prefix.map(|prefix| self.doc.pool().resolve(prefix).to_owned()) }
+      }
+    }
+  }
+
+  fn import(&self, node: &Node) -> Option<DomNode> {
+    match node {
+      Node::Dom(id) => {
+        let usable = self.doc.owns(*id)
+          && match self.doc.node_type(*id) {
+            // A document type or fragment is not an XPath node, and a namespace declaration is a namespace node.
+            NodeType::DOCUMENT_TYPE_NODE | NodeType::DOCUMENT_FRAGMENT_NODE => false,
+            NodeType::ATTRIBUTE_NODE => self.declared_prefix(*id).is_none(),
+            _ => true,
+          }
+          && self.is_in_tree(*id);
+        usable.then(|| self.node(*id))
+      }
+      Node::Namespace { element, prefix } => {
+        if !self.doc.owns(*element)
+          || self.doc.node_type(*element) != NodeType::ELEMENT_NODE
+          || !self.is_in_tree(*element)
+        {
+          return None;
+        }
+        // A prefix that is not interned in the document is bound nowhere in it.
+        let prefix = match prefix {
+          Some(prefix) => Some(self.doc.pool().get(prefix)?),
+          None => None,
+        };
+        self.in_scope_prefixes(*element).contains(&prefix).then_some(DomNode::Namespace { element: *element, prefix })
+      }
+    }
   }
 }

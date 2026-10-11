@@ -261,21 +261,28 @@ impl EntityStack {
       }
     }
     if entity.kind().is_expansion() {
-      if let Some(max) = self.limits.max_expansions {
-        if self.expansions >= max {
-          return Err(self.limit_exceeded(format!(
-            "the document expands more than {max} entities; \
-             increase ParserConfig.limits.entities.max_expansions if it is correct"
-          )));
-        }
-      }
-      self.expansions += 1;
       // Text already decoded when the entity arrives is counted here: all of an internal entity's, and all of an
       // external entity's that was handed over whole. `feed` counts what is decoded later.
-      self.count_expansion_chars(entity.stream().chars_decoded())?;
+      self.count_expansion(entity.stream().chars_decoded())?;
     }
     self.entities.push(entity);
     Ok(())
+  }
+
+  /// Counts one more entity expansion, whose text so far is `chars` characters, toward
+  /// [`EntityLimits::max_expansions`] and [`EntityLimits::max_expansion_chars`]. Besides [`push`](Self::push), the
+  /// parser counts here an entity it expands inside an attribute value, which is never pushed.
+  pub(crate) fn count_expansion(&mut self, chars: u64) -> Result<()> {
+    if let Some(max) = self.limits.max_expansions {
+      if self.expansions >= max {
+        return Err(self.limit_exceeded(format!(
+          "the document expands more than {max} entities; \
+           increase ParserConfig.limits.entities.max_expansions if it is correct"
+        )));
+      }
+    }
+    self.expansions = self.expansions.saturating_add(1);
+    self.count_expansion_chars(chars)
   }
 
   /// Removes the innermost entity, once it is read, so that reading resumes in the entity that referenced it.

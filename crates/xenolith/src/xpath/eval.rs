@@ -1,37 +1,40 @@
 //! Evaluating an expression tree against a tree of nodes.
 
+use std::ptr;
+use std::sync::Arc;
+
 use crate::error::{Error, Result};
 use crate::xpath::ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
-use crate::xpath::context::{Context, namespace_of};
 use crate::xpath::model::{Model, NodeKind, make_node_set};
 use crate::xpath::object::{Object, string_to_number};
-use crate::xpath::{axis, functions};
+use crate::xpath::state::EvalState;
+use crate::xpath::{XPath, axis, functions, object};
 
 /// Evaluates an expression in a context.
 ///
 /// Each match arm delegates its work to a helper. Recursive evaluation then keeps this function's stack frame small,
 /// especially in debug builds where the compiler may reserve space for locals from every match arm.
-pub(crate) fn eval<M: Model>(expr: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
+pub(crate) fn eval<M: Model>(expr: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
   match expr {
     Expr::Literal(value) => Ok(Object::String(value.clone())),
     Expr::Number(value) => Ok(Object::Number(*value)),
-    Expr::Negate(inner) => negate(inner, context),
-    Expr::Binary { op, left, right, at } => binary(*op, left, right, *at, context),
-    Expr::Path(path) => path_object(path, context),
-    Expr::Filter { expr, predicates, at } => filter_object(expr, predicates, *at, context),
-    Expr::Variable { prefix, local, at } => Err(context.locate(variable(prefix.as_deref(), local), *at)),
-    Expr::Function { prefix, local, arguments, at } => call(prefix.as_deref(), local, arguments, *at, context),
+    Expr::Negate(inner) => negate(inner, state),
+    Expr::Binary { op, left, right, at } => binary(*op, left, right, *at, state),
+    Expr::Path(path) => path_object(path, state),
+    Expr::Filter { expr, predicates, at } => filter_object(expr, predicates, *at, state),
+    Expr::Variable { prefix, local, at } => variable(prefix.as_deref(), local, *at, state),
+    Expr::Function { prefix, local, arguments, at } => call(prefix.as_deref(), local, arguments, *at, state),
   }
 }
 
 /// Evaluates `-inner`.
-fn negate<M: Model>(inner: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  Ok(Object::Number(-eval(inner, context)?.number(context.model)))
+fn negate<M: Model>(inner: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  Ok(Object::Number(-eval(inner, state)?.number(state.model)))
 }
 
 /// Evaluates a path to its node-set.
-fn path_object<M: Model>(path: &Path, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  Ok(Object::NodeSet(eval_path(path, context)?))
+fn path_object<M: Model>(path: &Path, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  Ok(Object::NodeSet(eval_path(path, state)?))
 }
 
 /// Evaluates `expr` as a node-set and applies `predicates` to that set. `at` is the byte offset used to locate a
@@ -40,11 +43,11 @@ fn filter_object<M: Model>(
   expr: &Expr,
   predicates: &[Expr],
   at: usize,
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Object<M::Node>> {
   let nodes =
-    node_set(eval(expr, context)?, "a predicate can only filter a node-set").map_err(|e| context.locate(e, at))?;
-  Ok(Object::NodeSet(apply_predicates(nodes, predicates, context)?))
+    node_set(eval(expr, state)?, "a predicate can only filter a node-set").map_err(|e| state.locate(e, at))?;
+  Ok(Object::NodeSet(apply_predicates(nodes, predicates, state)?))
 }
 
 /// Evaluates the arguments of a function call, whose name is at `at`, then calls it.
@@ -53,20 +56,66 @@ fn call<M: Model>(
   local: &str,
   arguments: &[Expr],
   at: usize,
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Object<M::Node>> {
   let mut values = Vec::with_capacity(arguments.len());
   for argument in arguments {
-    values.push(eval(argument, context)?);
+    values.push(eval(argument, state)?);
   }
-  functions::call(prefix, local, values, context).map_err(|error| context.locate(error, at))
+  functions::call(prefix, local, values, state).map_err(|error| state.locate(error, at))
 }
 
-/// The error of a reference to a variable. No variable can be bound yet, so a reference to one is always an error;
-/// the parser has checked the prefix of its name already.
-fn variable(prefix: Option<&str>, local: &str) -> Error {
-  let name = prefix.map_or_else(|| local.to_owned(), |prefix| format!("{prefix}:{local}"));
-  error(format!("the variable \"${name}\" is not bound in this evaluation"))
+/// Returns the value of a variable, whose reference is at `at`: the value passed to the evaluation, or else the value
+/// of the context's definition, as an XSLT local variable hides a top-level one. The parser has checked the prefix of
+/// its name already.
+fn variable<M: Model>(
+  prefix: Option<&str>,
+  local: &str,
+  at: usize,
+  state: &EvalState<'_, M>,
+) -> Result<Object<M::Node>> {
+  let name = || prefix.map_or_else(|| local.to_owned(), |prefix| format!("{prefix}:{local}"));
+  let namespace = match prefix {
+    Some(prefix) => resolve_prefix(prefix, state).map_err(|e| state.locate(e, at))?,
+    None => "",
+  };
+  if let Some(value) = state.variables.get(namespace, local) {
+    return remembered(ptr::from_ref(value).cast(), state, || {
+      object(value, state.model).ok_or_else(|| {
+        let message =
+          format!("the variable \"${}\" holds a node that is not in the XPath tree of the document", name());
+        state.locate(error(message), at)
+      })
+    });
+  }
+  if let Some(definition) = state.context.variable(namespace, local) {
+    return remembered(Arc::as_ptr(definition).cast(), state, || defined(&definition.xpath, state));
+  }
+  Err(state.locate(error(format!("the variable \"${}\" is not bound in this evaluation", name())), at))
+}
+
+/// Evaluates the definition of a variable, with the document node as the context node, as XSLT evaluates a top-level
+/// variable. An error is located in the definition, at its start if nowhere else.
+fn defined<M: Model>(definition: &XPath, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  let root = state.model.root(state.node);
+  let inner = EvalState::new(state.model, root, definition, state.variables, state.values);
+  eval(&definition.expr, &inner)
+    .map_err(|error| if error.location().is_unknown() { error.at(definition.location.clone()) } else { error })
+}
+
+/// Returns the value remembered for `key` in this evaluation, or computes and remembers it.
+fn remembered<M: Model>(
+  key: *const (),
+  state: &EvalState<'_, M>,
+  compute: impl FnOnce() -> Result<Object<M::Node>>,
+) -> Result<Object<M::Node>> {
+  if let Some(value) = state.values.borrow().get(&key) {
+    return Ok(value.clone());
+  }
+  // Not borrowed while computing: a definition may refer to the variables defined before it.
+  let value = compute()?;
+  state.values.borrow_mut().insert(key, value.clone());
+  Ok(value)
 }
 
 // --- Operators --------------------------------------------------------------------------------
@@ -78,60 +127,60 @@ fn binary<M: Model>(
   left: &Expr,
   right: &Expr,
   at: usize,
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Object<M::Node>> {
   match op {
-    BinaryOp::Or => or(left, right, context),
-    BinaryOp::And => and(left, right, context),
-    BinaryOp::Union => union(left, right, at, context),
+    BinaryOp::Or => or(left, right, state),
+    BinaryOp::And => and(left, right, state),
+    BinaryOp::Union => union(left, right, at, state),
     BinaryOp::Equal
     | BinaryOp::NotEqual
     | BinaryOp::Less
     | BinaryOp::LessEqual
     | BinaryOp::Greater
-    | BinaryOp::GreaterEqual => comparison(op, left, right, context),
+    | BinaryOp::GreaterEqual => comparison(op, left, right, state),
     BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo => {
-      arithmetic(op, left, right, context)
+      arithmetic(op, left, right, state)
     }
   }
 }
 
 /// Evaluates `left or right`, which stops as soon as the answer is settled.
-fn or<M: Model>(left: &Expr, right: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  if eval(left, context)?.boolean() {
+fn or<M: Model>(left: &Expr, right: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  if eval(left, state)?.boolean() {
     return Ok(Object::Boolean(true));
   }
-  Ok(Object::Boolean(eval(right, context)?.boolean()))
+  Ok(Object::Boolean(eval(right, state)?.boolean()))
 }
 
 /// Evaluates `left and right`, which stops as soon as the answer is settled.
-fn and<M: Model>(left: &Expr, right: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  if !eval(left, context)?.boolean() {
+fn and<M: Model>(left: &Expr, right: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  if !eval(left, state)?.boolean() {
     return Ok(Object::Boolean(false));
   }
-  Ok(Object::Boolean(eval(right, context)?.boolean()))
+  Ok(Object::Boolean(eval(right, state)?.boolean()))
 }
 
 /// Evaluates `left | right`, whose `|` is at `at`.
-fn union<M: Model>(left: &Expr, right: &Expr, at: usize, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  let locate = |error| context.locate(error, at);
-  let mut nodes = node_set(eval(left, context)?, "a union joins node-sets").map_err(locate)?;
-  nodes.extend(node_set(eval(right, context)?, "a union joins node-sets").map_err(locate)?);
-  make_node_set(context.model, &mut nodes);
+fn union<M: Model>(left: &Expr, right: &Expr, at: usize, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  let locate = |error| state.locate(error, at);
+  let mut nodes = node_set(eval(left, state)?, "a union joins node-sets").map_err(locate)?;
+  nodes.extend(node_set(eval(right, state)?, "a union joins node-sets").map_err(locate)?);
+  make_node_set(state.model, &mut nodes);
   Ok(Object::NodeSet(nodes))
 }
 
 /// Evaluates a comparison.
-fn comparison<M: Model>(op: BinaryOp, left: &Expr, right: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  let left = eval(left, context)?;
-  let right = eval(right, context)?;
-  Ok(Object::Boolean(compare(op, &left, &right, context.model)))
+fn comparison<M: Model>(op: BinaryOp, left: &Expr, right: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  let left = eval(left, state)?;
+  let right = eval(right, state)?;
+  Ok(Object::Boolean(compare(op, &left, &right, state.model)))
 }
 
 /// Evaluates an arithmetic operator.
-fn arithmetic<M: Model>(op: BinaryOp, left: &Expr, right: &Expr, context: &Context<'_, M>) -> Result<Object<M::Node>> {
-  let a = eval(left, context)?.number(context.model);
-  let b = eval(right, context)?.number(context.model);
+fn arithmetic<M: Model>(op: BinaryOp, left: &Expr, right: &Expr, state: &EvalState<'_, M>) -> Result<Object<M::Node>> {
+  let a = eval(left, state)?.number(state.model);
+  let b = eval(right, state)?.number(state.model);
   Ok(Object::Number(match op {
     BinaryOp::Add => a + b,
     BinaryOp::Subtract => a - b,
@@ -239,38 +288,38 @@ const fn flip(op: BinaryOp) -> BinaryOp {
 // --- Paths ------------------------------------------------------------------------------------
 
 /// Walks a path, returning its node-set in document order.
-fn eval_path<M: Model>(path: &Path, context: &Context<'_, M>) -> Result<Vec<M::Node>> {
+fn eval_path<M: Model>(path: &Path, state: &EvalState<'_, M>) -> Result<Vec<M::Node>> {
   let mut nodes = match &path.start {
-    PathStart::Root => vec![context.model.root(context.node)],
-    PathStart::Context => vec![context.node],
-    PathStart::Expr(expr) => node_set(eval(expr, context)?, "a path can only continue from a node-set")
-      .map_err(|error| context.locate(error, path.at))?,
+    PathStart::Root => vec![state.model.root(state.node)],
+    PathStart::Context => vec![state.node],
+    PathStart::Expr(expr) => node_set(eval(expr, state)?, "a path can only continue from a node-set")
+      .map_err(|error| state.locate(error, path.at))?,
   };
   for step in &path.steps {
-    nodes = eval_step(step, &nodes, context)?;
+    nodes = eval_step(step, &nodes, state)?;
   }
   Ok(nodes)
 }
 
 /// Applies one step to every node a path has reached so far.
-fn eval_step<M: Model>(step: &Step, from: &[M::Node], context: &Context<'_, M>) -> Result<Vec<M::Node>> {
+fn eval_step<M: Model>(step: &Step, from: &[M::Node], state: &EvalState<'_, M>) -> Result<Vec<M::Node>> {
   let mut result = Vec::new();
   for node in from {
     // The axis is walked in its own order, since that is the order predicates count in.
     let mut selected = Vec::new();
-    axis::walk(context.model, *node, step.axis, &mut |candidate| {
-      if matches(context, candidate, step.axis, &step.node_test)? {
+    axis::walk(state.model, *node, step.axis, &mut |candidate| {
+      if matches(state, candidate, step.axis, &step.node_test)? {
         selected.push(candidate);
       }
       Ok(())
     })?;
     for predicate in &step.predicates {
-      selected = filter(selected, predicate, context)?;
+      selected = filter(selected, predicate, state)?;
     }
     result.extend(selected);
   }
   // The step's result is a node-set, however the axis reached it.
-  make_node_set(context.model, &mut result);
+  make_node_set(state.model, &mut result);
   Ok(result)
 }
 
@@ -278,11 +327,11 @@ fn eval_step<M: Model>(step: &Step, from: &[M::Node], context: &Context<'_, M>) 
 fn apply_predicates<M: Model>(
   mut nodes: Vec<M::Node>,
   predicates: &[Expr],
-  context: &Context<'_, M>,
+  state: &EvalState<'_, M>,
 ) -> Result<Vec<M::Node>> {
-  make_node_set(context.model, &mut nodes);
+  make_node_set(state.model, &mut nodes);
   for predicate in predicates {
-    nodes = filter(nodes, predicate, context)?;
+    nodes = filter(nodes, predicate, state)?;
   }
   Ok(nodes)
 }
@@ -291,12 +340,12 @@ fn apply_predicates<M: Model>(
 ///
 /// A predicate that yields a number is a test on the position (XPath 1.0 §3.3): `[2]` keeps the second node. Anything
 /// else is taken as a boolean.
-fn filter<M: Model>(nodes: Vec<M::Node>, predicate: &Expr, context: &Context<'_, M>) -> Result<Vec<M::Node>> {
+fn filter<M: Model>(nodes: Vec<M::Node>, predicate: &Expr, state: &EvalState<'_, M>) -> Result<Vec<M::Node>> {
   let size = nodes.len();
   let mut kept = Vec::new();
   for (index, node) in nodes.into_iter().enumerate() {
     let position = index + 1;
-    let inner = context.at(node, position, size);
+    let inner = state.at(node, position, size);
     let keep = match eval(predicate, &inner)? {
       Object::Number(value) => value == position as f64,
       other => other.boolean(),
@@ -309,9 +358,9 @@ fn filter<M: Model>(nodes: Vec<M::Node>, predicate: &Expr, context: &Context<'_,
 }
 
 /// Whether a node passes a step's node test.
-fn matches<M: Model>(context: &Context<'_, M>, node: M::Node, axis: Axis, test: &NodeTest) -> Result<bool> {
-  let kind = context.model.kind(node);
-  let name_of = || context.model.expanded_name(node);
+fn matches<M: Model>(state: &EvalState<'_, M>, node: M::Node, axis: Axis, test: &NodeTest) -> Result<bool> {
+  let kind = state.model.kind(node);
+  let name_of = || state.model.expanded_name(node);
   Ok(match test {
     NodeTest::Node => true,
     NodeTest::Text => kind == NodeKind::Text,
@@ -325,12 +374,12 @@ fn matches<M: Model>(context: &Context<'_, M>, node: M::Node, axis: Axis, test: 
     NodeTest::Name(_) if kind != principal_kind(axis) => false,
     NodeTest::Name(NameTest::Any) => true,
     NodeTest::Name(NameTest::AnyLocal(prefix)) => {
-      let namespace = resolve_prefix(prefix)?;
+      let namespace = resolve_prefix(prefix, state)?;
       name_of().is_some_and(|name| name.namespace.as_deref() == Some(namespace))
     }
     NodeTest::Name(NameTest::Exact { prefix, local }) => {
       let namespace = match prefix {
-        Some(prefix) => Some(resolve_prefix(prefix)?),
+        Some(prefix) => Some(resolve_prefix(prefix, state)?),
         None => None,
       };
       name_of().is_some_and(|name| name.namespace.as_deref() == namespace && name.local == *local)
@@ -349,8 +398,8 @@ const fn principal_kind(axis: Axis) -> NodeKind {
 }
 
 /// The namespace a prefix in the expression stands for.
-fn resolve_prefix(prefix: &str) -> Result<&'static str> {
-  namespace_of(prefix).ok_or_else(|| error(format!("the prefix \"{prefix}\" is not bound")))
+fn resolve_prefix<'a, M: Model>(prefix: &str, state: &EvalState<'a, M>) -> Result<&'a str> {
+  state.context.namespace_of(prefix).ok_or_else(|| error(format!("the prefix \"{prefix}\" is not bound")))
 }
 
 /// Takes the nodes out of an object, or says what was found instead.

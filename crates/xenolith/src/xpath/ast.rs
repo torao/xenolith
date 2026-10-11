@@ -37,7 +37,7 @@ pub(crate) enum Axis {
   Descendant,
   /// `descendant-or-self`: The node itself and its descendants.
   DescendantOrSelf,
-  /// `following`: Everything that follows the node in document order (excluding descendants).
+  /// `following`: Nodes after the context node in document order, excluding descendants, attributes, and namespaces.
   Following,
   /// `following-sibling`: Sibling nodes that follow the node.
   FollowingSibling,
@@ -45,7 +45,7 @@ pub(crate) enum Axis {
   Namespace,
   /// `parent`: The parent (if it exists).
   Parent,
-  /// `preceding`: Everything that precedes the node in document order (excluding ancestors).
+  /// `preceding`: Nodes before the context node in document order, excluding ancestors, attributes, and namespaces.
   Preceding,
   /// `preceding-sibling`: Sibling nodes that precede the node.
   PrecedingSibling,
@@ -127,7 +127,7 @@ impl fmt::Display for NameTest {
   }
 }
 
-/// The name or node type selected by the step from the nodes reached by the axis.
+/// A test that selects nodes reached by an axis, based on their name or node type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NodeTest {
   /// A name test. This also restricts the selection to the axis's principal node type: attributes for the `attribute`
@@ -173,9 +173,9 @@ pub(crate) struct Step {
 /// The starting position of the path.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PathStart {
-  /// An absolute path: The root of the tree containing the context node.
+  /// An absolute path starting at the root of the context node's tree.
   Root,
-  /// A relative path: The context node.
+  /// A relative path starting at the context node.
   Context,
   /// Continue from each node in the node-set returned by the expression. Examples: `$x/a`, `f()/a`.
   Expr(Box<Expr>),
@@ -188,7 +188,7 @@ pub(crate) struct Path {
   pub start: PathStart,
   /// The steps applied sequentially, starting from the initial position.
   pub steps: Vec<Step>,
-  /// The byte offset in the expression where the path begins, which an evaluation error of the path is located at.
+  /// The byte offset where the path begins, used to locate a type error when a path continues from a non-node-set.
   pub at: usize,
 }
 
@@ -264,7 +264,7 @@ pub(crate) enum Expr {
     left: Box<Expr>,
     /// The right operand.
     right: Box<Expr>,
-    /// The byte offset of the operator in the expression, which an evaluation error of the operator is located at.
+    /// The operator's byte offset, used to locate a type error for a union that receives a non-node-set operand.
     at: usize,
   },
   /// Unary minus applied to an expression.

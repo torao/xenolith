@@ -3,7 +3,7 @@ use crate::dom::build::DomBuilder;
 use crate::event::{EventCursor, EventProducer};
 use crate::io::StreamSource;
 use crate::xpath::ast::{BinaryOp, Path, PathStart, Step};
-use crate::xpath::model::{Model, NodeKind};
+use crate::xpath::model::{DomNode, Model, NodeKind};
 
 // --- Parsing ------------------------------------------------------------------------------------
 //
@@ -12,22 +12,22 @@ use crate::xpath::model::{Model, NodeKind};
 
 /// The parsed expression, written back out in full.
 fn tree(expression: &str) -> String {
-  format!("{:#}", XPath::parse(expression, Location::new(), Limits::default()).expect("parses").expr)
+  format!("{:#}", XPath::parse(expression, Location::new()).expect("parses").expr)
 }
 
 /// The parsed expression, written back out with the abbreviations.
 fn abbreviated(expression: &str) -> String {
-  XPath::parse(expression, Location::new(), Limits::default()).expect("parses").to_string()
+  XPath::parse(expression, Location::new()).expect("parses").to_string()
 }
 
-/// The error `expression` fails to parse with.
+/// The error returned when `expression` fails to parse.
 fn parse_error(expression: &str) -> Error {
-  let error = XPath::parse(expression, Location::new(), Limits::default()).expect_err("fails");
+  let error = XPath::parse(expression, Location::new()).expect_err("fails");
   assert!(matches!(error, Error::XPath { .. }), "{error:?}");
   error
 }
 
-/// The message of the error `expression` fails to parse with.
+/// The message returned when `expression` fails to parse.
 fn parse_message(expression: &str) -> String {
   parse_error(expression).message().to_owned()
 }
@@ -189,11 +189,11 @@ fn printing_gives_back_the_same_tree_and_not_merely_the_same_text() {
 /// Every expression prints, in full and abbreviated, to text that parses back to the very same tree.
 fn round_trips(shapes: &[String]) {
   for shape in shapes {
-    let expression = XPath::parse(shape, Location::new(), Limits::default())
+    let expression = XPath::parse(shape, Location::new())
       .unwrap_or_else(|error| panic!("{shape:?} does not parse: {}", error.message()))
       .expr;
     for printed in [format!("{expression:#}"), format!("{expression}")] {
-      let again = XPath::parse(&printed, Location::new(), Limits::default())
+      let again = XPath::parse(&printed, Location::new())
         .unwrap_or_else(|error| panic!("{shape:?} printed as {printed:?}, which will not parse: {}", error.message()))
         .expr;
       assert_eq!(
@@ -272,7 +272,7 @@ fn a_parse_error_is_located_from_where_the_expression_starts() {
   assert_eq!((error.location().line, error.location().column), (1, 7));
   // Counted from the location given, as an expression in an attribute value is.
   let start = Location { line: 3, column: 10, offset: 40, ..Location::new() };
-  let error = XPath::parse("a/\u{65e5}/(", start, Limits::default()).expect_err("fails");
+  let error = XPath::parse("a/\u{65e5}/(", start).expect_err("fails");
   assert_eq!((error.location().line, error.location().column), (3, 14), "characters are counted, not bytes");
 }
 
@@ -286,12 +286,8 @@ fn from_str_parses_as_parse_does() {
 
 #[test]
 fn display_writes_the_abbreviations_and_alternate_display_writes_in_full() {
-  let xpath = XPath::parse(
-    "/descendant-or-self::node()/child::a[attribute::x = 1] | parent::node()",
-    Location::new(),
-    Limits::default(),
-  )
-  .expect("parses");
+  let xpath = XPath::parse("/descendant-or-self::node()/child::a[attribute::x = 1] | parent::node()", Location::new())
+    .expect("parses");
   assert_eq!(xpath.to_string(), "//a[@x = 1] | ..");
   assert_eq!(format!("{xpath:#}"), "(/descendant-or-self::node()/child::a[(attribute::x = 1)] | parent::node())");
 }
@@ -349,7 +345,7 @@ fn a_string_with_both_quotes_is_written_as_a_concat_of_the_same_value() {
     assert_eq!(literal.to_string(), written);
     assert_eq!(format!("{literal:#}"), written);
     // It parses to a call, not a literal, but to one that yields the same string.
-    let again = XPath::parse(written, Location::new(), Limits::default()).expect("parses");
+    let again = XPath::parse(written, Location::new()).expect("parses");
     assert_eq!(again.evaluate(&doc, doc.document_node()).expect("evaluates"), XPathResult::String(value.to_owned()));
   }
   // A string with one kind of quote is still a literal, in the other kind.
@@ -361,10 +357,7 @@ fn a_string_with_both_quotes_is_written_as_a_concat_of_the_same_value() {
 fn a_number_no_literal_can_write_is_written_as_something_of_the_same_value() {
   // A literal too long for a double reads as infinity, and is written back as digits that read as infinity again.
   let huge = format!("1{}", "0".repeat(400));
-  assert_eq!(
-    XPath::parse(&huge, Location::new(), Limits::default()).expect("parses").expr,
-    Expr::Number(f64::INFINITY)
-  );
+  assert_eq!(XPath::parse(&huge, Location::new()).expect("parses").expr, Expr::Number(f64::INFINITY));
   round_trips(&[huge, format!("2 * 1{}", "0".repeat(400))]);
   assert_eq!(Expr::Number(f64::INFINITY).to_string(), format!("18{}", "0".repeat(307)));
 
@@ -413,12 +406,12 @@ fn parse_document(xml: &str) -> Document {
 /// Evaluates `expression` over `xml` from the document node.
 fn evaluate(xml: &str, expression: &str) -> (Document, Result<XPathResult>) {
   let doc = parse_document(xml);
-  let xpath = XPath::parse(expression, Location::new(), Limits::default()).expect("parses");
+  let xpath = XPath::parse(expression, Location::new()).expect("parses");
   let value = xpath.evaluate(&doc, doc.document_node());
   (doc, value)
 }
 
-/// The node of the data model a node of a node-set is.
+/// The data-model node represented by a node in a node-set.
 fn model_node(model: &DomModel<'_>, doc: &Document, node: &Node) -> DomNode {
   match node {
     Node::Dom(id) => model.node(*id),
@@ -428,7 +421,7 @@ fn model_node(model: &DomModel<'_>, doc: &Document, node: &Node) -> DomNode {
   }
 }
 
-/// The nodes of a node-set, rendered by `render`, joined with commas.
+/// The nodes in a node-set, rendered with `render` and joined by commas.
 fn nodes(xml: &str, expression: &str, render: impl Fn(&DomModel<'_>, DomNode) -> String) -> String {
   let (doc, value) = evaluate(xml, expression);
   let model = DomModel::new(&doc);
@@ -461,20 +454,20 @@ fn text(xml: &str, expression: &str) -> String {
   nodes(xml, expression, |model, node| model.string_value(node))
 }
 
-/// An expression's result, converted to a string the way XPath would.
+/// An expression result converted to a string using XPath rules.
 fn value(xml: &str, expression: &str) -> String {
   let (doc, result) = evaluate(xml, expression);
   result.expect("evaluates").string(&doc).expect("a node of the document")
 }
 
-/// The message of the error an expression fails to evaluate with.
+/// The message returned when an expression fails to evaluate.
 fn error(xml: &str, expression: &str) -> String {
   let error = evaluate(xml, expression).1.expect_err("fails");
   assert!(matches!(error, Error::XPath { .. }), "{error:?}");
   error.message().to_owned()
 }
 
-/// `<a>` sits between a sibling before and after it, and has two children of its own.
+/// `<a>` has a preceding sibling, a following sibling, and two children.
 const TREE: &str = "<r><x><x1/></x><a><b/><c/></a><y/></r>";
 
 #[test]
@@ -503,7 +496,7 @@ fn the_reverse_axes_number_positions_from_the_node_outwards() {
   assert_eq!(names(TREE, "/r/a/preceding::*[1]"), "x1", "the nearest preceding node comes first");
 }
 
-/// Two levels of siblings around `e`, each with children, and an attribute and a namespace on `e`.
+/// Two nested sibling levels around `e`, with children at each level and an attribute and namespace on `e`.
 const LEVELS: &str = "<r xmlns:p='urn:p'><x><x1/></x><e k='v'><a><a1/></a><b/></e><y><y1/></y></r>";
 
 #[test]
@@ -666,10 +659,10 @@ fn a_relative_path_starts_at_the_context_node() {
   let doc = parse_document(TREE);
   let r = doc.document_element().expect("the document element");
   let a = doc.children(r).nth(1).expect("<a>");
-  let xpath = XPath::parse("*", Location::new(), Limits::default()).expect("parses");
+  let xpath = XPath::parse("*", Location::new()).expect("parses");
   let XPathResult::NodeSet(children) = xpath.evaluate(&doc, a).expect("evaluates") else { panic!("a node-set") };
   assert_eq!(children, doc.children(a).map(Node::Dom).collect::<Vec<_>>());
-  let xpath = XPath::parse("count(/r/*)", Location::new(), Limits::default()).expect("parses");
+  let xpath = XPath::parse("count(/r/*)", Location::new()).expect("parses");
   assert_eq!(
     xpath.evaluate(&doc, a).expect("evaluates"),
     XPathResult::Number(3.0),
@@ -682,10 +675,56 @@ fn a_context_node_of_another_document_is_refused() {
   let doc = parse_document(TREE);
   let other = parse_document(TREE);
   let start = Location { line: 2, column: 5, ..Location::new() };
-  let xpath = XPath::parse("*", start, Limits::default()).expect("parses");
+  let xpath = XPath::parse("*", start).expect("parses");
   let error = xpath.evaluate(&doc, other.document_node()).expect_err("another document's node");
   assert!(matches!(error, Error::XPath { .. }), "{error:?}");
   assert_eq!((error.location().line, error.location().column), (2, 5));
+}
+
+#[test]
+fn a_context_node_outside_the_xpath_tree_is_refused() {
+  let mut doc = parse_document("<!DOCTYPE r><r xmlns:p='urn:p' a='1'/>");
+  let r = doc.document_element().expect("the document element");
+  let detached = doc.create_element("d").expect("an element");
+  doc.set_attribute(detached, "x", "1").expect("an attribute");
+  let fragment = doc.create_document_fragment();
+  let in_fragment = doc.create_element("f").expect("an element");
+  doc.append_child(fragment, in_fragment).expect("appended");
+  let refused = [
+    ("a document type", doc.doctype().expect("a document type")),
+    ("a namespace declaration", doc.get_attribute_node(r, "xmlns:p").expect("the declaration")),
+    ("a node not inserted", detached),
+    ("an attribute of a node not inserted", doc.get_attribute_node(detached, "x").expect("the attribute")),
+    ("a fragment", fragment),
+    ("a node in a fragment", in_fragment),
+  ];
+  let xpath = XPath::parse("self::node()", Location::new()).expect("parses");
+  for (what, node) in refused {
+    let error = xpath.evaluate(&doc, node).expect_err(what);
+    assert!(error.message().contains("not a node in the XPath tree"), "{what}: {error}");
+  }
+  assert!(xpath.evaluate(&doc, doc.get_attribute_node(r, "a").expect("the attribute")).is_ok());
+  // Once inserted, the node is in the tree.
+  doc.append_child(r, detached).expect("appended");
+  assert!(xpath.evaluate(&doc, detached).is_ok());
+  assert!(xpath.evaluate(&doc, doc.get_attribute_node(detached, "x").expect("the attribute")).is_ok());
+}
+
+#[test]
+fn a_node_a_function_returns_from_outside_the_tree_is_refused() {
+  let mut doc = parse_document(TREE);
+  let detached = doc.create_element("d").expect("an element");
+  let context = XPathContext::new()
+    .with_namespace("ex", "urn:example")
+    .and_then(|context| {
+      context.with_function("urn:example", "detached", 0, Some(0), move |_, _| {
+        Ok(XPathResult::NodeSet(vec![Node::Dom(detached)]))
+      })
+    })
+    .expect("defines");
+  let xpath = context.parse("ex:detached()", Location::new()).expect("parses");
+  let error = xpath.evaluate(&doc, doc.document_node()).expect_err("a node outside the tree");
+  assert!(error.message().contains("not in the XPath tree"), "{error}");
 }
 
 #[test]
@@ -700,10 +739,7 @@ fn evaluation_errors_say_what_the_context_could_not_supply() {
 fn an_evaluation_error_is_located_where_the_expression_starts() {
   let doc = parse_document(TREE);
   let start = Location { line: 4, column: 2, ..Location::new() };
-  let error = XPath::parse("$nosuch", start, Limits::default())
-    .expect("parses")
-    .evaluate(&doc, doc.document_node())
-    .expect_err("fails");
+  let error = XPath::parse("$nosuch", start).expect("parses").evaluate(&doc, doc.document_node()).expect_err("fails");
   assert_eq!((error.location().line, error.location().column), (4, 2));
 }
 
@@ -867,6 +903,147 @@ fn id_finds_the_first_element_with_each_id() {
   assert_eq!(text(xml, "id(//i[2]/@k)/@n"), "2", "a node-set argument gives its string-values");
 }
 
+// --- XPathContext --------------------------------------------------------------------------------
+
+/// An `XPathContext` that binds `ex` to `urn:example`.
+fn example() -> XPathContext {
+  XPathContext::new().with_namespace("ex", "urn:example").expect("binds")
+}
+
+/// Evaluates `expression`, parsed in `context`, over `xml` from the document node.
+fn evaluate_in(context: &XPathContext, xml: &str, expression: &str) -> (Document, Result<XPathResult>) {
+  let doc = parse_document(xml);
+  let xpath = context.parse(expression, Location::new()).expect("parses");
+  let value = xpath.evaluate(&doc, doc.document_node());
+  (doc, value)
+}
+
+#[test]
+fn a_bound_prefix_selects_by_its_namespace_not_by_the_document_s_prefix() {
+  let xml = "<r xmlns:a='urn:example'><a:x/><x/><a:y/></r>";
+  let (doc, result) = evaluate_in(&example(), xml, "count(//ex:x) + 10 * count(/r/ex:*)");
+  assert_eq!(result.expect("evaluates").string(&doc).expect("a string"), "21");
+  let error = example().parse("//a:x", Location::new()).expect_err("the document's prefix is not bound");
+  assert!(error.message().contains("prefix \"a\" is not bound"), "{error}");
+}
+
+#[test]
+fn an_application_defined_function_is_called_with_its_arguments_and_the_context() {
+  let context = example()
+    .with_function("urn:example", "upper", 1, Some(1), |arguments, call| {
+      Ok(XPathResult::String(arguments[0].string(call.document())?.to_uppercase()))
+    })
+    .expect("defines")
+    .with_function("urn:example", "where", 0, Some(0), |_, call| {
+      Ok(XPathResult::String(format!("{} of {}", call.position(), call.size())))
+    })
+    .expect("defines")
+    .with_function("urn:example", "here", 0, Some(0), |_, call| Ok(XPathResult::NodeSet(vec![call.node().clone()])))
+    .expect("defines");
+  let xml = "<r><a>one</a><b>two</b></r>";
+  let (doc, result) = evaluate_in(&context, xml, "ex:upper(/r/b)");
+  assert_eq!(result.expect("evaluates").string(&doc).expect("a string"), "TWO");
+  let (doc, result) = evaluate_in(&context, xml, "/r/*[ex:where() = '2 of 2']");
+  assert_eq!(result.expect("evaluates").string(&doc).expect("a string"), "two");
+  let (doc, result) = evaluate_in(&context, xml, "/r/*[name(ex:here()) = 'b']");
+  assert_eq!(result.expect("evaluates").string(&doc).expect("a string"), "two");
+  let (doc, result) = evaluate_in(&context, xml, "count(ex:here()/r/*)");
+  assert_eq!(result.expect("evaluates").string(&doc).expect("a string"), "2", "a node-set it returns is walked on");
+}
+
+#[test]
+fn a_node_set_a_function_returns_is_put_in_document_order_without_duplicates() {
+  let context = example()
+    .with_function("urn:example", "shuffled", 0, Some(0), |_, call| {
+      let doc = call.document();
+      let r = doc.first_child(doc.document_node()).expect("the document element");
+      let mut children: Vec<_> = doc.children(r).map(Node::Dom).collect();
+      children.reverse();
+      children.extend(children.clone());
+      Ok(XPathResult::NodeSet(children))
+    })
+    .expect("defines");
+  let (doc, result) = evaluate_in(&context, "<r><a/><b/><c/></r>", "ex:shuffled()");
+  let r = doc.first_child(doc.document_node()).expect("the document element");
+  assert_eq!(result.expect("evaluates"), XPathResult::NodeSet(doc.children(r).map(Node::Dom).collect()));
+}
+
+#[test]
+fn a_node_a_function_returns_from_another_document_is_refused_at_the_call() {
+  let other = parse_document("<o/>");
+  let stranger = Node::Dom(other.document_node());
+  let context = example()
+    .with_function("urn:example", "stranger", 0, Some(0), move |_, _| Ok(XPathResult::NodeSet(vec![stranger.clone()])))
+    .expect("defines");
+  let (_, result) = evaluate_in(&context, TREE, "1 + count(ex:stranger())");
+  let error = result.expect_err("another document's node");
+  assert!(matches!(error, Error::XPath { .. }), "{error:?}");
+  assert!(error.message().contains("not in the XPath tree"), "{error}");
+  assert_eq!((error.location().line, error.location().column), (1, 11), "at the function's name");
+}
+
+#[test]
+fn an_error_a_function_returns_is_located_at_the_call() {
+  let context =
+    example().with_function("urn:example", "fail", 0, None, |_, _| Err(Error::xpath("refused"))).expect("defines");
+  let (_, result) = evaluate_in(&context, TREE, "1 + ex:fail(1, 2, 3)");
+  let error = result.expect_err("fails");
+  assert_eq!(error.message(), "refused");
+  assert_eq!((error.location().line, error.location().column), (1, 5));
+}
+
+#[test]
+fn a_call_to_an_application_defined_function_is_checked_when_it_is_parsed() {
+  let context =
+    example().with_function("urn:example", "f", 1, Some(3), |_, _| Ok(XPathResult::Boolean(true))).expect("defines");
+  let message = |expression| context.parse(expression, Location::new()).expect_err(expression).message().to_owned();
+  assert!(message("ex:f()").contains("\"ex:f()\" takes 1 to 3 arguments"), "{}", message("ex:f()"));
+  assert!(message("ex:f(1, 2, 3, 4)").contains("1 to 3 arguments"), "{}", message("ex:f(1, 2, 3, 4)"));
+  assert!(message("ex:g()").contains("no extension function {urn:example}g"), "{}", message("ex:g()"));
+  assert!(context.parse("ex:f(1, 2, 3)", Location::new()).is_ok());
+}
+
+#[test]
+fn a_parsed_expression_keeps_the_context_it_was_parsed_in() {
+  let first = example().with_function("urn:example", "f", 0, Some(0), |_, _| Ok(XPathResult::Number(1.0))).expect("1");
+  let xpath = first.parse("ex:f()", Location::new()).expect("parses");
+  // Redefining the function in a copy changes neither the original context nor what was parsed in it.
+  let second = first.clone().with_function("urn:example", "f", 0, Some(0), |_, _| Ok(XPathResult::Number(2.0)));
+  let second = second.expect("2").parse("ex:f()", Location::new()).expect("parses");
+  let doc = parse_document(TREE);
+  assert_eq!(xpath.evaluate(&doc, doc.document_node()).expect("evaluates"), XPathResult::Number(1.0));
+  assert_eq!(second.evaluate(&doc, doc.document_node()).expect("evaluates"), XPathResult::Number(2.0));
+  let third = first.parse("ex:f()", Location::new()).expect("parses");
+  assert_eq!(third.evaluate(&doc, doc.document_node()).expect("evaluates"), XPathResult::Number(1.0));
+}
+
+#[test]
+fn a_binding_or_a_definition_that_cannot_be_used_is_refused() {
+  let bind = |prefix, uri| XPathContext::new().with_namespace(prefix, uri).map(|_| ());
+  assert!(matches!(bind("1p", "urn:a"), Err(Error::Name { .. })));
+  assert!(matches!(bind("p:q", "urn:a"), Err(Error::Name { .. })));
+  assert!(matches!(bind("xmlns", "urn:a"), Err(Error::Namespace { .. })));
+  assert!(matches!(bind("xml", "urn:a"), Err(Error::Namespace { .. })));
+  assert!(matches!(bind("p", ""), Err(Error::Namespace { .. })));
+  assert!(matches!(bind("p", XML_NS_URI), Err(Error::Namespace { .. })));
+  assert!(matches!(bind("p", XMLNS_NS_URI), Err(Error::Namespace { .. })));
+  assert!(bind("xml", XML_NS_URI).is_ok());
+  let define = |namespace, local, min, max| {
+    XPathContext::new().with_function(namespace, local, min, max, |_, _| Ok(XPathResult::Boolean(true))).map(|_| ())
+  };
+  assert!(matches!(define("urn:a", "a:b", 0, None), Err(Error::Name { .. })));
+  assert!(matches!(define("", "f", 0, None), Err(Error::Namespace { .. })));
+  assert!(matches!(define("urn:a", "f", 2, Some(1)), Err(Error::Internal { .. })));
+  assert!(define("urn:a", "f", 2, Some(2)).is_ok());
+}
+
+#[test]
+fn a_parsed_expression_can_be_shared_between_threads() {
+  const fn shareable<T: Send + Sync>() {}
+  shareable::<XPath>();
+  shareable::<XPathContext>();
+}
+
 // --- Reading a result ---------------------------------------------------------------------------
 
 #[test]
@@ -905,8 +1082,6 @@ fn string_converts_as_the_string_function_does() {
   // A namespace node is the namespace it binds.
   let namespace = Node::Namespace { element: r, prefix: Some("p".to_owned()) };
   assert_eq!(XPathResult::NodeSet(vec![namespace]).string(&doc).expect("a string"), "urn:p");
-  let unbound = Node::Namespace { element: r, prefix: Some("nosuch".to_owned()) };
-  assert_eq!(XPathResult::NodeSet(vec![unbound]).string(&doc).expect("a string"), "");
 }
 
 #[test]
@@ -916,6 +1091,159 @@ fn string_refuses_a_node_of_another_document() {
   let result = XPathResult::NodeSet(vec![Node::Dom(other.document_node())]);
   let error = result.string(&doc).expect_err("another document's node");
   assert!(matches!(error, Error::XPath { .. }), "{error:?}");
+}
+
+#[test]
+fn string_refuses_a_node_outside_the_xpath_tree_as_evaluate_does() {
+  let mut doc = parse_document("<!DOCTYPE r><r xmlns:p='urn:p'><s xmlns:q='urn:q'/></r>");
+  let r = doc.document_element().expect("the document element");
+  let detached = doc.create_text_node("loose");
+  let refused = [
+    ("a document type", Node::Dom(doc.doctype().expect("a document type"))),
+    ("a namespace declaration", Node::Dom(doc.get_attribute_node(r, "xmlns:p").expect("the declaration"))),
+    ("a node not inserted", Node::Dom(detached)),
+    ("a prefix bound nowhere", Node::Namespace { element: r, prefix: Some("nosuch".to_owned()) }),
+    ("a prefix bound only below", Node::Namespace { element: r, prefix: Some("q".to_owned()) }),
+  ];
+  for (what, node) in refused {
+    let error = XPathResult::NodeSet(vec![node]).string(&doc).expect_err(what);
+    assert!(error.message().contains("not a node in the XPath tree"), "{what}: {error}");
+  }
+}
+
+// --- Variables ----------------------------------------------------------------------------------
+
+/// Evaluates `expression`, parsed in `context`, over `doc` from the document node with `variables`.
+fn evaluate_vars(
+  context: &XPathContext,
+  doc: &Document,
+  expression: &str,
+  variables: &XPathVariables,
+) -> Result<String> {
+  let xpath = context.parse(expression, Location::new()).expect("parses");
+  xpath.evaluate_with(doc, doc.document_node(), variables)?.string(doc)
+}
+
+#[test]
+fn a_variable_passed_to_the_evaluation_is_referred_to_by_its_expanded_name() {
+  let doc = parse_document("<r><a>1</a><b>2</b></r>");
+  let mut variables = XPathVariables::new();
+  variables.set(None, "x", XPathResult::Number(40.0)).expect("set");
+  variables.set(Some("urn:example"), "x", XPathResult::Number(2.0)).expect("set");
+  assert_eq!(evaluate_vars(&example(), &doc, "$x + $ex:x", &variables).expect("evaluates"), "42");
+  // A node-set value is put into document order without duplicates, and can be walked on.
+  let r = doc.document_element().expect("the document element");
+  let mut children: Vec<_> = doc.children(r).map(Node::Dom).collect();
+  children.reverse();
+  children.extend(children.clone());
+  variables.set(None, "n", XPathResult::NodeSet(children)).expect("set");
+  assert_eq!(evaluate_vars(&example(), &doc, "concat(count($n), $n, $n[2])", &variables).expect("evaluates"), "212");
+  assert_eq!(evaluate_vars(&example(), &doc, "count($n/self::b)", &variables).expect("evaluates"), "1");
+  assert_eq!(variables.remove(None, "x"), Some(XPathResult::Number(40.0)));
+  assert_eq!(variables.remove(None, "x"), None);
+}
+
+#[test]
+fn a_variable_that_is_not_bound_is_an_error_only_where_it_is_evaluated() {
+  let doc = parse_document(TREE);
+  let variables = XPathVariables::new();
+  assert_eq!(evaluate_vars(&example(), &doc, "false() and $nosuch", &variables).expect("not evaluated"), "false");
+  let error = evaluate_vars(&example(), &doc, "1 + $nosuch", &variables).expect_err("unbound");
+  assert!(error.message().contains("\"$nosuch\" is not bound"), "{error}");
+  assert_eq!((error.location().line, error.location().column), (1, 5));
+}
+
+#[test]
+fn a_node_a_variable_holds_from_outside_the_tree_is_refused_where_it_is_referred_to() {
+  let mut doc = parse_document(TREE);
+  let detached = doc.create_element("d").expect("an element");
+  let mut variables = XPathVariables::new();
+  variables.set(None, "loose", XPathResult::NodeSet(vec![Node::Dom(detached)])).expect("set");
+  assert_eq!(evaluate_vars(&example(), &doc, "false() and $loose", &variables).expect("not referred to"), "false");
+  let error = evaluate_vars(&example(), &doc, "1 + count($loose)", &variables).expect_err("outside the tree");
+  assert!(error.message().contains("\"$loose\" holds a node that is not in the XPath tree"), "{error}");
+  assert_eq!((error.location().line, error.location().column), (1, 11));
+}
+
+#[test]
+fn a_defined_variable_is_evaluated_from_the_document_node() {
+  let doc = parse_document("<r><a><b/></a></r>");
+  let top = XPath::parse("name(*)", Location::new()).expect("parses");
+  let context = example().with_variable(None, "top", top).expect("defines");
+  let variables = XPathVariables::new();
+  assert_eq!(evaluate_vars(&context, &doc, "count(//b[$top = 'r'])", &variables).expect("evaluates"), "1");
+}
+
+#[test]
+fn a_definition_sees_the_definitions_before_it_and_the_values_passed() {
+  let doc = parse_document(TREE);
+  let context = example();
+  let first = context.parse("10", Location::new()).expect("parses");
+  let context = context.with_variable(Some("urn:example"), "first", first).expect("defines");
+  let second = context.parse("$ex:first + $given", Location::new()).expect("parses");
+  let context = context.with_variable(Some("urn:example"), "second", second).expect("defines");
+  let mut variables = XPathVariables::new();
+  variables.set(None, "given", XPathResult::Number(5.0)).expect("set");
+  assert_eq!(evaluate_vars(&context, &doc, "$ex:second", &variables).expect("evaluates"), "15");
+  // A definition cannot see itself or what is defined after it, so definitions never go round in a circle.
+  let own = context.parse("$ex:own", Location::new()).expect("parses");
+  let context = context.with_variable(Some("urn:example"), "own", own).expect("defines");
+  let error = evaluate_vars(&context, &doc, "$ex:own", &variables).expect_err("not bound in its own definition");
+  assert!(error.message().contains("\"$ex:own\" is not bound"), "{error}");
+}
+
+#[test]
+fn a_value_passed_hides_a_definition_of_the_same_name() {
+  let doc = parse_document(TREE);
+  let defined = XPath::parse("'defined'", Location::new()).expect("parses");
+  let context = example().with_variable(None, "v", defined).expect("defines");
+  let mut variables = XPathVariables::new();
+  assert_eq!(evaluate_vars(&context, &doc, "$v", &variables).expect("evaluates"), "defined");
+  variables.set(None, "v", XPathResult::String("passed".to_owned())).expect("set");
+  assert_eq!(evaluate_vars(&context, &doc, "$v", &variables).expect("evaluates"), "passed");
+}
+
+#[test]
+fn a_definition_is_evaluated_once_in_each_evaluation() {
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  let calls = Arc::new(AtomicUsize::new(0));
+  let counted = Arc::clone(&calls);
+  let context = example()
+    .with_function("urn:example", "tick", 0, Some(0), move |_, _| {
+      Ok(XPathResult::Number(counted.fetch_add(1, Ordering::SeqCst) as f64))
+    })
+    .expect("defines");
+  let tick = context.parse("ex:tick()", Location::new()).expect("parses");
+  let context = context.with_variable(None, "t", tick).expect("defines");
+  let doc = parse_document(TREE);
+  let xpath = context.parse("concat($t, $t, count(//*[$t = 0]))", Location::new()).expect("parses");
+  let variables = XPathVariables::new();
+  let value = xpath.evaluate_with(&doc, doc.document_node(), &variables).expect("evaluates").string(&doc);
+  assert_eq!(value.expect("a string"), "007", "the same value at every reference");
+  assert_eq!(calls.load(Ordering::SeqCst), 1);
+  let value = xpath.evaluate_with(&doc, doc.document_node(), &variables).expect("evaluates").string(&doc);
+  assert_eq!(value.expect("a string"), "110", "evaluated again in the next evaluation");
+  assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn an_error_in_a_definition_is_located_in_the_definition() {
+  let doc = parse_document(TREE);
+  let start = Location { line: 9, column: 3, ..Location::new() };
+  let broken = XPath::parse("1 + $nosuch", start).expect("parses");
+  let context = example().with_variable(None, "broken", broken).expect("defines");
+  let error = evaluate_vars(&context, &doc, "$broken", &XPathVariables::new()).expect_err("fails");
+  assert_eq!((error.location().line, error.location().column), (9, 7));
+}
+
+#[test]
+fn a_variable_name_that_cannot_be_used_is_refused() {
+  let mut variables = XPathVariables::new();
+  assert!(matches!(variables.set(None, "a:b", XPathResult::Boolean(true)), Err(Error::Name { .. })));
+  assert!(matches!(variables.set(Some(""), "a", XPathResult::Boolean(true)), Err(Error::Namespace { .. })));
+  let definition = || XPath::parse("1", Location::new()).expect("parses");
+  assert!(matches!(XPathContext::new().with_variable(None, "1a", definition()), Err(Error::Name { .. })));
+  assert!(matches!(XPathContext::new().with_variable(Some(""), "a", definition()), Err(Error::Namespace { .. })));
 }
 
 // --- Limits -------------------------------------------------------------------------------------
@@ -935,39 +1263,96 @@ fn nested(depth: usize) -> [(&'static str, String); 6] {
 
 #[test]
 fn every_kind_of_nesting_counts_toward_the_depth() {
-  let limits = Limits { max_depth: Some(10) };
+  let context = XPathContext::new().with_limits(Limits { max_depth: Some(10), ..Limits::default() });
   for (kind, expression) in nested(10) {
-    assert!(XPath::parse(&expression, Location::new(), limits).is_ok(), "{kind} 10 levels deep: {expression}");
+    assert!(context.parse(&expression, Location::new()).is_ok(), "{kind} 10 levels deep: {expression}");
   }
   for (kind, expression) in nested(11) {
-    let error = XPath::parse(&expression, Location::new(), limits).expect_err(kind);
+    let error = context.parse(&expression, Location::new()).expect_err(kind);
     assert!(matches!(error, Error::Limit { .. }), "{kind}: {error:?}");
     assert!(error.message().contains("deeper than 10"), "{kind}: {error}");
   }
   // The depth is how deep the expression nests, not how long it is.
-  assert!(XPath::parse(&format!("concat({})", vec!["1"; 100].join(", ")), Location::new(), limits).is_ok());
-  assert!(XPath::parse(&format!("{}a", "a/".repeat(100)), Location::new(), limits).is_ok());
+  assert!(context.parse(&format!("concat({})", vec!["1"; 100].join(", ")), Location::new()).is_ok());
+  assert!(context.parse(&format!("{}a", "a/".repeat(100)), Location::new()).is_ok());
 }
 
 #[test]
 fn unlimited_takes_any_depth() {
+  let context = XPathContext::new().with_limits(Limits::unlimited());
   for (kind, expression) in nested(65) {
-    assert!(XPath::parse(&expression, Location::new(), Limits::default()).is_err(), "{kind} beyond the default");
-    assert!(XPath::parse(&expression, Location::new(), Limits::unlimited()).is_ok(), "{kind}");
+    assert!(XPath::parse(&expression, Location::new()).is_err(), "{kind} beyond the default");
+    assert!(context.parse(&expression, Location::new()).is_ok(), "{kind}");
   }
   assert_eq!(Limits::default().max_depth, Some(64));
 }
 
 #[test]
 fn a_depth_error_is_located_where_the_limit_is_passed() {
-  let limits = Limits { max_depth: Some(3) };
+  let context = XPathContext::new().with_limits(Limits { max_depth: Some(3), ..Limits::default() });
   // The third `(` opens the fourth level, which the error points at: the `1` that begins it.
-  let error = XPath::parse("((( 1 )))", Location::new(), limits).expect_err("too deep");
+  let error = context.parse("((( 1 )))", Location::new()).expect_err("too deep");
   assert_eq!((error.location().line, error.location().column), (1, 5));
   // A chain of operators is measured once it is parsed, and located at the start of the expression.
   let start = Location { line: 5, column: 7, ..Location::new() };
-  let error = XPath::parse("1 + 1 + 1 + 1", start, limits).expect_err("too deep");
+  let error = context.parse("1 + 1 + 1 + 1", start).expect_err("too deep");
   assert_eq!((error.location().line, error.location().column), (5, 7));
+}
+
+/// `context` with `$v0` defined as `1` and each `$vN` after it, up to `$v(length - 1)`, as `step` with `{}` replaced
+/// by a reference to the one before it.
+fn chained(mut context: XPathContext, length: usize, step: &str) -> XPathContext {
+  for n in 0..length {
+    let expression = if n == 0 { "1".to_owned() } else { step.replace("{}", &format!("$v{}", n - 1)) };
+    let definition = context.parse(&expression, Location::new()).expect("parses");
+    context = context.with_variable(None, &format!("v{n}"), definition).expect("defines");
+  }
+  context
+}
+
+#[test]
+fn a_chain_of_definitions_counts_toward_the_depth() {
+  // `$v0` is one level deep and each definition after it one more, so a reference to `$v8` is ten levels deep.
+  let context = chained(XPathContext::new().with_limits(Limits { max_depth: Some(10), ..Limits::default() }), 9, "{}");
+  assert!(context.parse("$v8", Location::new()).is_ok());
+  // So is a definition that would make the chain too deep, which is refused before it can be defined.
+  let error = context.parse("-$v8", Location::new()).expect_err("eleven levels deep");
+  assert!(matches!(error, Error::Limit { .. }), "{error:?}");
+  assert!(error.message().contains("deeper than 10"), "{error}");
+  // A value passed to the evaluation only hides a definition, so the depth counted is the most it can take.
+  let mut variables = XPathVariables::new();
+  variables.set(None, "v8", XPathResult::Number(1.0)).expect("set");
+  let doc = parse_document(TREE);
+  let xpath = context.parse("$v8", Location::new()).expect("parses");
+  assert_eq!(xpath.evaluate_with(&doc, doc.document_node(), &variables).expect("evaluates"), XPathResult::Number(1.0));
+}
+
+#[test]
+fn a_parsed_expression_keeps_only_the_definitions_it_refers_to() {
+  let context = chained(XPathContext::new(), 30, "{}");
+  // Were the whole table kept, every definition would share it, and each later definition would copy it.
+  assert_eq!(Arc::strong_count(&context.variables), 1, "no definition shares the table");
+  let xpath = context.parse("$v10 + $v20", Location::new()).expect("parses");
+  assert_eq!(xpath.context.variable_count(), 2);
+  let doc = parse_document(TREE);
+  assert_eq!(
+    xpath.evaluate(&doc, doc.document_node()).expect("evaluates through the chains"),
+    XPathResult::Number(2.0)
+  );
+}
+
+#[test]
+fn the_number_of_definitions_is_limited() {
+  let context = XPathContext::new().with_limits(Limits { max_variables: Some(2), ..Limits::default() });
+  let one = || XPath::parse("1", Location::new()).expect("parses");
+  let context = context.with_variable(None, "a", one()).expect("one");
+  let context = context.with_variable(Some("urn:example"), "a", one()).expect("two, in another namespace");
+  let context = context.with_variable(None, "a", one()).expect("redefining a name does not count again");
+  let error = context.with_variable(None, "b", one()).expect_err("a third name");
+  assert!(matches!(error, Error::Limit { .. }), "{error:?}");
+  assert!(error.message().contains("more than 2 variables"), "{error}");
+  assert!(XPathContext::new().with_limits(Limits::unlimited()).with_variable(None, "a", one()).is_ok());
+  assert_eq!(Limits::default().max_variables, Some(2048));
 }
 
 #[test]
@@ -986,10 +1371,18 @@ fn expressions_at_the_default_depth_fit_in_a_one_mib_stack() {
         parent = element;
       }
       for (kind, expression) in nested(DEFAULT_MAX_DEPTH) {
-        let xpath = XPath::parse(&expression, Location::new(), Limits::default()).expect(kind);
+        let xpath = XPath::parse(&expression, Location::new()).expect(kind);
         let _ = xpath.evaluate(&doc, doc.document_node());
         let _ = (xpath.to_string(), format!("{xpath:#}"));
         drop(xpath);
+      }
+      // A chain of definitions as deep as the default allows: one level for each, or two with a predicate each.
+      for (kind, step, length) in
+        [("a chain of definitions", "{}", 63), ("predicates through definitions", "e[{}]", 32)]
+      {
+        let context = chained(XPathContext::new(), length, step);
+        let xpath = context.parse(&format!("$v{}", length - 1), Location::new()).expect(kind);
+        xpath.evaluate(&doc, doc.document_node()).expect(kind);
       }
     })
     .expect("a thread");
@@ -1014,7 +1407,7 @@ fn a_document_tree_of_any_depth_is_walked_without_recursion() {
       let text = doc.create_text_node("leaf");
       doc.append_child(parent, text).expect("a child");
       let value = |expression: &str| {
-        let xpath = XPath::parse(expression, Location::new(), Limits::default()).expect("parses");
+        let xpath = XPath::parse(expression, Location::new()).expect("parses");
         xpath.evaluate(&doc, doc.document_node()).expect("evaluates")
       };
       assert_eq!(value("count(//*)"), XPathResult::Number(DEPTH as f64));
@@ -1047,7 +1440,7 @@ fn an_evaluation_error_is_located_at_what_raised_it() {
     ("1 + ('a')/b", 4, "the path"),
     ("1 + ('a')[1]", 4, "the filter"),
   ] {
-    let xpath = XPath::parse(expression, start.clone(), Limits::default()).expect(expression);
+    let xpath = XPath::parse(expression, start.clone()).expect(expression);
     let error = xpath.evaluate(&doc, doc.document_node()).expect_err(expression);
     assert_eq!((error.location().line, error.location().column), (3, 10 + offset), "{expression}: at {raised}");
   }

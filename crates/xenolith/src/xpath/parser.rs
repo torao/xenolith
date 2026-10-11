@@ -4,11 +4,13 @@
 //! grammar's precedence levels, from `or` down to individual location steps. It expands abbreviated syntax while
 //! parsing, producing the normalized AST described in [`ast`](crate::xpath::ast).
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::error::{Error, Location, Result as XResult};
 use crate::xpath::ast::{Axis, BinaryOp, Expr, NameTest, NodeTest, Path, PathStart, Step};
-use crate::xpath::context::namespace_of;
 use crate::xpath::lexer::{NodeTypeName, Spanned, Token};
-use crate::xpath::{Failure, functions, located};
+use crate::xpath::{Definition, Failure, XPathContext, functions, located};
 
 /// Binary operators grouped by precedence, from lowest to highest.
 const LEVELS: &[&[(Token, BinaryOp)]] = &[
@@ -25,18 +27,19 @@ const LEVELS: &[&[(Token, BinaryOp)]] = &[
   &[(Token::Multiply, BinaryOp::Multiply), (Token::Div, BinaryOp::Divide), (Token::Mod, BinaryOp::Modulo)],
 ];
 
-/// Parses all tokens in `expression` as one XPath expression. `location` marks the expression's start, and
-/// `max_depth` limits its nesting depth.
+/// Parses all tokens in `expression` as one XPath expression. `location` marks the expression's start, and `context`
+/// limits its nesting depth and gives the prefixes and functions it may use.
 ///
 /// If recursive parsing reaches the limit, the error points to the current token. If the completed AST exceeds the
-/// limit, the error points to the start of the expression.
+/// limit, counting the definitions of the variables it refers to, the error points to the start of the expression.
 pub(crate) fn parse(
   tokens: &[Spanned],
   expression: &str,
   location: &Location,
-  max_depth: Option<usize>,
+  context: &XPathContext,
 ) -> XResult<Expr> {
-  let mut parser = Parser { tokens, at: 0, length: expression.len(), depth: 0, max_depth, too_deep: false };
+  let max_depth = context.limits.max_depth;
+  let mut parser = Parser { tokens, at: 0, length: expression.len(), depth: 0, max_depth, too_deep: false, context };
   let parsed = parser.expr().and_then(|expr| match parser.peek() {
     None => Ok(expr),
     Some(token) => {
@@ -51,7 +54,7 @@ pub(crate) fn parse(
     }
     Err((message, byte)) => return Err(Error::xpath(message).at(located(location, expression, byte))),
   };
-  if let Some(max) = max_depth.filter(|&max| exceeds(&expr, max)) {
+  if let Some(max) = max_depth.filter(|&max| depth(&expr, context) > max) {
     return Err(Error::limit(too_deep(max)).at(location.clone()));
   }
   Ok(expr)
@@ -62,14 +65,49 @@ fn too_deep(max: usize) -> String {
   format!("the XPath expression nests deeper than {max} levels; raise xpath::Limits::max_depth")
 }
 
-/// Whether `expr` is deeper than `max`, counting `expr` itself as level 1. An explicit stack avoids recursively
-/// walking the deeply nested tree being checked.
-fn exceeds(expr: &Expr, max: usize) -> bool {
-  let mut pending = vec![(expr, 1)];
-  while let Some((expr, depth)) = pending.pop() {
-    if depth > max {
-      return true;
+/// The depth of `expr`, counting `expr` itself as level 1. A reference to a variable that `context` defines reaches as
+/// deep as the reference plus its definition, since the definition is evaluated there.
+pub(crate) fn depth(expr: &Expr, context: &XPathContext) -> usize {
+  let mut deepest = 0;
+  visit(expr, |expr, depth| {
+    deepest = deepest.max(depth);
+    // A value passed to the evaluation can only hide the definition, which makes the reference shallower.
+    if let Some((_, _, definition)) = defined(expr, context) {
+      deepest = deepest.max(depth.saturating_add(definition.depth));
     }
+  });
+  deepest
+}
+
+/// The definitions in `context` of the variables `expr` refers to, by namespace URI (empty for no namespace) and then
+/// local name.
+pub(crate) fn referenced(expr: &Expr, context: &XPathContext) -> HashMap<String, HashMap<String, Arc<Definition>>> {
+  let mut found: HashMap<String, HashMap<String, Arc<Definition>>> = HashMap::new();
+  visit(expr, |expr, _| {
+    if let Some((namespace, local, definition)) = defined(expr, context) {
+      found.entry(namespace.to_owned()).or_default().insert(local.to_owned(), Arc::clone(definition));
+    }
+  });
+  found
+}
+
+/// If `expr` refers to a variable that `context` defines, its namespace URI (empty for no namespace), local name and
+/// definition. The parser has checked the prefix already.
+fn defined<'e, 'c>(expr: &'e Expr, context: &'c XPathContext) -> Option<(&'c str, &'e str, &'c Arc<Definition>)> {
+  let Expr::Variable { prefix, local, .. } = expr else { return None };
+  let namespace = match prefix {
+    Some(prefix) => context.namespace_of(prefix)?,
+    None => "",
+  };
+  Some((namespace, local, context.variable(namespace, local)?))
+}
+
+/// Calls `f` on `expr` and every expression in it, with its depth counting `expr` itself as level 1. An explicit stack
+/// avoids recursively walking the deeply nested tree.
+fn visit<'e>(expr: &'e Expr, mut f: impl FnMut(&'e Expr, usize)) {
+  let mut pending = vec![(expr, 1_usize)];
+  while let Some((expr, depth)) = pending.pop() {
+    f(expr, depth);
     let below = depth + 1;
     match expr {
       Expr::Binary { left, right, .. } => pending.extend([(&**left, below), (&**right, below)]),
@@ -88,7 +126,6 @@ fn exceeds(expr: &Expr, max: usize) -> bool {
       Expr::Literal(_) | Expr::Number(_) | Expr::Variable { .. } => {}
     }
   }
-  false
 }
 
 struct Parser<'a> {
@@ -103,6 +140,8 @@ struct Parser<'a> {
   max_depth: Option<usize>,
   /// Whether parsing stopped because `depth` went past `max_depth`, which is a limit error rather than a syntax error.
   too_deep: bool,
+  /// The prefixes and application-defined functions the expression may use.
+  context: &'a XPathContext,
 }
 
 impl Parser<'_> {
@@ -154,7 +193,7 @@ impl Parser<'_> {
   /// Fails if `prefix` is not bound to a namespace. Which prefixes are bound is settled before the expression is
   /// evaluated, so an unbound one is refused here, where it is written, whatever document the expression is used on.
   fn bound(&self, prefix: &str) -> Result<(), Failure> {
-    if namespace_of(prefix).is_some() {
+    if self.context.namespace_of(prefix).is_some() {
       return Ok(());
     }
     Err(self.error(format!("the prefix \"{prefix}\" is not bound")))
@@ -233,7 +272,8 @@ impl Parser<'_> {
     self.filter_path(filter, at)
   }
 
-  /// Parses the steps that may follow a filter expression, which begins at `at`, and makes the path they walk from it.
+  /// Parses any path steps after the filter expression that begins at `at`, and builds a path starting from that
+  /// expression.
   fn filter_path(&mut self, filter: Expr, at: usize) -> Result<Expr, Failure> {
     // A filter expression may be followed by `/` or `//`; the remaining steps are evaluated from its node-set.
     let steps = if self.eat(&Token::Slash) {
@@ -449,7 +489,7 @@ impl Parser<'_> {
     self.bump();
     self.expect(&Token::LeftParen)?;
     let arguments = self.arguments()?;
-    if let Err(message) = functions::check(prefix.as_deref(), &local, arguments.len()) {
+    if let Err(message) = functions::check(prefix.as_deref(), &local, arguments.len(), self.context) {
       return Err((message, at));
     }
     Ok(Expr::Function { prefix, local, arguments, at })

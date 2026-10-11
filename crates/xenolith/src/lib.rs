@@ -206,10 +206,10 @@
 //! `xi:include` resources are only allowed to be loaded through the [`UriResolver`](io::resolve::UriResolver)
 //! configured by the caller.
 //!
-//! Regardless of the document declaration, there are restrictions on entity expansion, the inclusion of `XInclude`
-//! files, and the nesting of XPath expressions ([`io::Limits`], [`xinclude::Limits`], [`xpath::Limits`]). To remove
-//! these restrictions, explicitly specify [`io::Limits::unlimited`], [`xinclude::Limits::unlimited`], or
-//! [`xpath::Limits::unlimited`].
+//! Regardless of the document declaration, there are restrictions on entity expansion, the attributes of an element,
+//! the inclusion of `XInclude` files, the nesting of XPath expressions, and the number of XPath variables defined
+//! ([`io::Limits`], [`xinclude::Limits`], [`xpath::Limits`]). To remove these restrictions, explicitly specify
+//! [`io::Limits::unlimited`], [`xinclude::Limits::unlimited`], or [`xpath::Limits::unlimited`].
 //!
 //! # Modules
 //!

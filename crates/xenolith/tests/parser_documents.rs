@@ -518,6 +518,20 @@ fn an_expansion_bomb_is_refused_rather_than_expanded() {
   assert!(message.contains("expansion") || message.contains("entities"), "{message}");
 }
 
+#[test]
+fn an_expansion_bomb_in_an_attribute_value_is_refused_too() {
+  // An entity in an attribute value is expanded in place rather than read as an entity, so it has to be counted on
+  // its own; it once was not, and this parsed 10^10 characters into one attribute value.
+  let mut dtd = String::from("<!DOCTYPE a [<!ENTITY l0 \"boom\">");
+  for level in 1..=10 {
+    let child = format!("&l{};", level - 1);
+    dtd += &format!("<!ENTITY l{level} \"{}\">", child.repeat(10));
+  }
+  dtd += "]><a x='&l10;'/>";
+  let message = by_reader(&dtd).expect_err("a bomb must be refused");
+  assert!(message.contains("limits.entities.max_expansions"), "{message}");
+}
+
 /// Cases the W3C suite caught that hand-written tests had missed. Each is named after the
 /// case that found it.
 #[test]

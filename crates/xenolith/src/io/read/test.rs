@@ -319,6 +319,34 @@ fn a_streamed_entity_is_stopped_mid_stream_by_the_expansion_limit() {
   assert!(error.message().contains("limits.entities.max_expansion_chars"), "{}", error.message());
 }
 
+#[test]
+fn an_entity_in_an_attribute_value_counts_toward_the_expansion_limits() {
+  let xml = "<!DOCTYPE a [<!ENTITY e 'twelve chars'>]><a x='&e;&e;'/>";
+  let mut config = ParserConfig::default();
+  config.limits.entities.max_expansion_chars = Some(20);
+  let mut reader = StreamSource::new(xml.as_bytes()).with_config(config);
+  let error = loop {
+    match reader.advance() {
+      Ok(Some(_)) => {}
+      Ok(None) => panic!("24 characters of expansion should pass the limit of 20"),
+      Err(e) => break e,
+    }
+  };
+  assert!(error.message().contains("limits.entities.max_expansion_chars"), "{}", error.message());
+  assert_eq!((error.location().line, error.location().column), (1, 42), "at the start tag");
+  let mut config = ParserConfig::default();
+  config.limits.entities.max_expansions = Some(1);
+  let mut reader = StreamSource::new(xml.as_bytes()).with_config(config);
+  let error = loop {
+    match reader.advance() {
+      Ok(Some(_)) => {}
+      Ok(None) => panic!("two expansions should pass the limit of one"),
+      Err(e) => break e,
+    }
+  };
+  assert!(error.message().contains("limits.entities.max_expansions"), "{}", error.message());
+}
+
 /// Driving consumers with the parser: the events it reports, their order and locations, and how a consumer ends a run.
 ///
 /// These were the tests of the `io::sax` module, which was a guide and a second set of names for

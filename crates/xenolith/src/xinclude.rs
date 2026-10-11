@@ -1,46 +1,41 @@
-//! XInclude 1.0 transformation process.
+//! Processes XInclude 1.0 elements in an XML event stream.
 //!
-//! [`XIncludeTransformer`] is a type of [transformer](crate::event#transformer) that performs XInclude 1.0 processing
-//! while relaying events through a pipeline. By placing it between an event producer and a consumer, it replaces
-//! `xi:include` elements found in the document with the content of the referenced resources and passes the result
-//! downstream in the pipeline.
+//! [`XIncludeTransformer`] is an [event transformer](crate::event#transformer). It replaces each `xi:include` element
+//! with the referenced resource and sends the resulting event stream to the next consumer in the pipeline.
 //!
-//! Resource retrieval is an I/O operation performed using a [`UriResolver`]. As with external entity references,
-//! access destinations should be restricted when dealing with untrusted documents. The URI specified in the `href`
-//! attribute is resolved based on the base URI effective at the location of the `xi:include` element.
+//! A [`UriResolver`] performs resource retrieval. Applications that process untrusted documents should restrict which
+//! destinations the resolver can access. The transformer resolves the `href` URI against the base URI effective at
+//! the `xi:include` element.
 //!
-//! When an external resource is read as XML, it is parsed with XInclude processing enabled. This recursive loading is
-//! subject to loop detection for identical resource URIs, as well as depth and frequency limits defined in [`Limits`].
+//! The transformer parses an included XML resource with XInclude processing enabled. It detects loops when the same
+//! resource URI and XPointer pair appears in the active inclusion chain. The [`Limits`] type also bounds inclusion
+//! depth and the total number of inclusions.
 //!
-//! If resource retrieval fails, the `xi:fallback` mechanism activates, replacing the `xi:include` element with the
-//! content of the `xi:fallback` element. However, fatal errors — such as the resource content not being well-formed
-//! XML — do not trigger the fallback. This behavior is defined in XInclude 1.0 §4.2. Failure to retrieve a resource
-//! for an `xi:include` element that lacks an `xi:fallback` results in an error. Any `xi:include` elements contained
-//! within an `xi:fallback` are processed recursively.
+//! A resource error causes the transformer to replace `xi:include` with the content of its `xi:fallback` child, if one
+//! exists. Fatal errors, including malformed XML in the resource, do not trigger fallback. If no fallback exists, the
+//! transformer returns the resource error. The transformer processes any `xi:include` elements inside a fallback
+//! recursively (XInclude 1.0 §4.2).
 //!
-//! If elements included as XML possess effective base URI or language values, those values remain valid after
-//! inclusion. If these values differ from the effective values at the `xi:include` location, `xml:base` or `xml:lang`
-//! attributes are explicitly added or replaced (§4.5.5, §4.5.6). This behavior can be disabled using
+//! The transformer preserves the effective base URI and language of the first included element. If either value
+//! differs from the effective value at the `xi:include` location, the transformer adds or replaces the corresponding
+//! `xml:base` or `xml:lang` attribute (§4.5.5, §4.5.6). Applications can disable either fixup using
 //! [`with_xml_base`](XIncludeTransformer::with_xml_base) and [`with_xml_lang`](XIncludeTransformer::with_xml_lang).
 //!
-//! [`XIncludeTransformer`] performs its own validation against upstream events using [`XIncludeSchema`]. If the
-//! document structure does not comply with the XInclude 1.0 specification, processing halts at the first violation
-//! with an [`Error::Validity`] error.
+//! [`XIncludeTransformer`] validates upstream events against [`XIncludeSchema`]. If an event violates the XInclude
+//! 1.0 structure rules, the transformer stops processing and returns an [`Error::Validity`] at the first violation.
 //!
-//! The `xpointer` attribute selects a portion of a resource loaded as XML via [`XPointerFilter`]. The
-//! [`xpointer`](crate::xpointer) module enumerates the formats subject to evaluation. Pointers that cannot be parsed,
-//! pointers that identify nothing, and pointers that the filter cannot evaluate result in a resource error (Section
-//! 4.2, "XPointer errors are resource errors"); consequently, `xi:fallback` is used in such cases.
+//! The `xpointer` attribute selects part of an XML resource through [`XPointerFilter`]. The
+//! [`xpointer`](crate::xpointer) module documents the pointer schemes this crate supports. A pointer that is invalid,
+//! selects no content, or uses an unsupported scheme causes a resource error; the transformer uses `xi:fallback` in
+//! these cases (XInclude 1.0 §4.2).
 //!
 //! # Unimplemented Features
 //!
-//! - An `xi:include` element with an omitted `href` attribute is treated as a resource error (§4.1). If an
-//!   `xi:fallback` element is present, it is used as a replacement; otherwise, processing terminates with an error.
-//!   Omitting the `href` attribute implies including the document currently being processed in the event pipeline
-//!   (using an XPointer if `parse="xml"` is specified). However, implementing this behavior within the event pipeline
-//!   requires constructing and saving the document first. In cases requiring self-reference, please expand the
-//!   document as XML into memory or a file so that it can be read via a [`UriResolver`] using the URI specified in the
-//!   `href` attribute.
+//! - An `xi:include` element without `href` should include the document currently being processed, optionally selecting
+//!   content with `xpointer` (§4.1). This transformer treats the missing `href` as a resource error, so it uses
+//!   `xi:fallback` if available and otherwise returns an error. The event pipeline cannot retrieve its own input before
+//!   the pipeline constructs the document. To include a document in itself, first make the document available in
+//!   memory or in a file, then use a [`UriResolver`] to retrieve it through an explicit `href` URI.
 //!
 //! # Specifications
 //!
@@ -74,28 +69,39 @@ use std::io::Read;
 /// The namespace to which the `xi:include` and `xi:fallback` elements belong.
 pub const XINCLUDE_NS: &str = "http://www.w3.org/2001/XInclude";
 
-/// Upper limit of the inclusion.
+/// Resource and nesting limits for XInclude processing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limits {
   /// The maximum number of nested `xi:include` elements that can be open at the same time. This includes both those
   /// currently being included and those serving as fallbacks. The default is 8. `None` means no upper limit.
+  ///
+  /// With a limit of `d`, nested inclusion processing uses call-stack space proportional to `d`. Each open scope may
+  /// also retain a parser and other resource state, so memory grows with the nesting depth. The transformer compares
+  /// each new inclusion with the active inclusion chain to detect loops, taking time proportional to `d`.
   pub max_depth: Option<usize>,
   /// The maximum number of `xi:include` elements that can be processed in a single document processing operation. This
   /// includes those from imported documents and those that occur during fallback. The default is 1,000. `None` means
   /// no upper limit.
+  ///
+  /// With a limit of `n`, the transformer processes at most `n` resources, so processing time and forwarded events can
+  /// grow with the total size of those resources. A document can include the same large resource repeatedly. The
+  /// transformer releases each resource parser when that inclusion ends, so this limit does not retain all parsers
+  /// until processing finishes.
   pub max_includes: Option<usize>,
-  /// The maximum number of characters an `xpointer` can buffer. For an `xpointer` composed of multiple PointerParts,
-  /// parts further to the right may need to buffer their selected events until the part to their left begins
-  /// transmitting events. This value represents the maximum total number of characters (in terms of character count)
-  /// buffered across all parts (specified via [`XPointerFilter::with_max_pending_chars`]). The default is 16 Mi
-  /// characters; `None` indicates no upper limit.
+  /// The maximum number of characters that [`XPointerFilter`] may buffer. When an XPointer has multiple PointerParts,
+  /// a later part may need to buffer selected events until an earlier part starts emitting events. This limit applies
+  /// to the total character count buffered across all parts and is passed to
+  /// [`XPointerFilter::with_max_pending_chars`]. The default is 16 Mi characters; `None` removes the limit.
+  ///
+  /// Buffering `p` characters uses memory proportional to `p`, and replaying those events takes time proportional to
+  /// `p`.
   pub max_pending_chars: Option<usize>,
 }
 
 impl Default for Limits {
-  /// Create a default [`Limits`] with a `max_depth` of 8, a `max_includes` of 1,000, and a `max_pending_chars` of 16 Mi
-  /// characters.
+  /// Creates the default [`Limits`]: a `max_depth` of 8, a `max_includes` of 1,000, and a `max_pending_chars` of 16 Mi
+  /// characters. Each field documents how its limit affects time and memory.
   fn default() -> Self {
     Self {
       max_depth: Some(8),
@@ -113,18 +119,18 @@ impl Limits {
   }
 }
 
-/// Enumeration values that defines the behavior for events within a given [`IncludeScope`].
+/// How the transformer handles events within an [`IncludeScope`].
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ScopeBehavior {
-  /// It is sending the event stream from the resource being ingested downstream.
+  /// The transformer forwards events from the resource being included.
   InclusionInProcessing,
-  /// Either `xi:include` succeeded or `xi:fallback` has been processed. Ignore any remaining events up to the closing
-  /// tag of `xi:include`.
+  /// The inclusion succeeded or its fallback finished. The transformer ignores the remaining events up to the
+  /// closing `xi:include` tag.
   IgnoreAll,
-  /// Failed to retrieve the resource. The transformer is searching for an `xi:fallback` element among the direct child
-  /// elements of `xi:include` and ignores all other nodes.
+  /// A resource error occurred. The transformer searches the direct children of `xi:include` for `xi:fallback` and
+  /// ignores all other nodes.
   SeekingFallback,
-  /// It is sending the event stream within `xi:fallback` downstream.
+  /// The transformer forwards events from `xi:fallback`.
   FallbackInProgress,
 }
 
@@ -137,19 +143,20 @@ struct IncludeScope {
   uri: String,
   /// The value of the `xpointer` attribute, which is compared together with `uri` during loop detection (§4.2.7).
   xpointer: Option<String>,
-  /// A base URI at the `xi:include` location. It is compared to the value of the root element of the retrieved
-  /// document. If no actual value exists, it is `None`.
+  /// The effective base URI at the `xi:include` location. The transformer compares it with the effective base URI of
+  /// the first included element. This value is `None` when no base URI is available.
   xml_base: Option<String>,
-  /// A language at the `xi:include` location. It is compared to the value of the root element of the retrieved
-  /// document. If no actual value is present, it is `None`.
+  /// The effective language at the `xi:include` location. The transformer compares it with the effective language of
+  /// the first included element. This value is `None` when no language is available.
   xml_lang: Option<String>,
-  /// Whether the root element of the document retrieved by this `xi:include` has been observed. This determines
-  /// whether to add `xml:base` and `xml:lang` attributes to the element.
+  /// Whether the first element emitted for this inclusion has been observed. This determines whether the transformer
+  /// adds `xml:base` and `xml:lang` attributes to that element.
   included_root_observed: bool,
-  /// The depth of each node, with the node directly under `xi:include` set to 0.
+  /// The number of open element levels inside this inclusion scope. The value is zero before the first child element
+  /// is processed.
   depth: usize,
-  /// A resource retrieval error that occurred within this scope. If a `xi:fallback` is found, the error is canceled;
-  /// if not, it is returned as an error at the end of the `xi:include`.
+  /// A resource error that occurred within this scope. If the transformer finds `xi:fallback`, it discards the error;
+  /// otherwise, it returns the error when `xi:include` ends.
   error: Option<Error>,
   /// A control value that determines how to respond to events that occur within this scope.
   behavior: ScopeBehavior,
@@ -157,9 +164,9 @@ struct IncludeScope {
 
 /// An XInclude 1.0 transformation that can be installed on the event pipeline.
 ///
-/// This transformer replaces the `xi:include` elements in the event sequence received by the [`EventConsumer`] with the
-/// resources referenced by those elements, and sends the transformed result to the subsequent [`EventConsumer`]. The
-/// received events are validated against the [`XIncludeSchema`], and processing is terminated upon the first violation.
+/// This transformer replaces each `xi:include` element in the upstream event sequence with its referenced resource and
+/// sends the resulting events to the downstream [`EventConsumer`]. It validates upstream events against
+/// [`XIncludeSchema`] and stops at the first violation.
 ///
 /// # Example
 ///
@@ -197,10 +204,9 @@ struct IncludeScope {
 /// # Ok::<(), xenolith::Error>(())
 /// ```
 pub struct XIncludeTransformer<'h, 'r> {
-  /// 1st stage. Detects XInclude violations during validation of events coming from upstream.
+  /// Validates upstream events against the XInclude schema before processing them.
   constraints: ValidatorSet,
-  /// 2nd stage. The main body of the `xi:include` processing. The output is sent to the subsequent consumer via the
-  /// [`RootElementConstraints`] in 3rd stage.
+  /// Processes `xi:include` elements and sends output through [`RootElementConstraints`] before it reaches consumers.
   process: XIncludeProcess<'h, 'r>,
 }
 
@@ -211,8 +217,8 @@ impl Default for XIncludeTransformer<'_, '_> {
 }
 
 impl<'h, 'r> XIncludeTransformer<'h, 'r> {
-  /// Create a transformation that does not have a resolver (therefore, if it has `xi:fallback`, it will fall back;
-  /// otherwise, it will be rejected).
+  /// Creates a transformer with no resource resolver. Each resource retrieval then fails, so the transformer uses
+  /// `xi:fallback` when available and otherwise returns an error.
   #[must_use]
   pub fn new() -> Self {
     Self {
@@ -221,53 +227,54 @@ impl<'h, 'r> XIncludeTransformer<'h, 'r> {
     }
   }
 
-  /// Specify the resolver to be used for all resource retrieval operations.
+  /// Sets the resolver used for every resource retrieval operation.
   #[must_use]
   pub fn with_resolver(mut self, resolver: &'r dyn UriResolver) -> Self {
     self.process.resolver = resolver;
     self
   }
 
-  /// Set the limits for the inclusion process.
+  /// Sets the limits for XInclude processing.
   #[must_use]
   pub fn with_limits(mut self, limits: Limits) -> Self {
     self.process.limits = limits;
     self
   }
 
-  /// Specify the parser settings to use when loading a document via `xi:include`.
+  /// Sets the parser configuration used to load XML resources referenced by `xi:include`.
   #[must_use]
   pub fn with_config(mut self, config: ParserConfig) -> Self {
     self.process.config = config;
     self
   }
 
-  /// Specifies whether to validate the imported document using [`StrictXmlConstraints`]. By default, validation is
-  /// enabled. If you are certain that the document being read is well-formed XML, you can specify `false` to skip
-  /// some validation steps.
+  /// Sets whether the transformer applies [`StrictXmlConstraints::lexical_only`] to events from included XML
+  /// resources. The transformer applies these additional checks by default. Set `strict` to `false` if another
+  /// component has already enforced those constraints.
   #[must_use]
   pub fn with_strict(mut self, strict: bool) -> Self {
     self.process.strict = strict;
     self
   }
 
-  /// Whether to preserve the effective base URI of the embedded element after embedding. The default is `true`.
+  /// Sets whether the transformer preserves the effective base URI of the first included element. The default is
+  /// `true`.
   ///
-  /// The effective base URI of the included element is determined by the element's own `xml:base` attribute,
-  /// inheritance from a parent element, or the URI of the document being included. If this differs from the base URI
-  /// at the location of the `xi:include`, the `xml:base` attribute is added or replaced (§4.5.5).
+  /// The first included element's effective base URI comes from its `xml:base` attribute, inheritance from an ancestor,
+  /// or the included document's URI. If that URI differs from the base URI at the `xi:include` location, the
+  /// transformer adds or replaces `xml:base` (§4.5.5).
   #[must_use]
   pub fn with_xml_base(mut self, xml_base: bool) -> Self {
     self.process.xml_base = xml_base;
     self
   }
 
-  /// Whether to preserve the effective language of the element being incorporated after it is incorporated. The
-  /// default is `true`.
+  /// Sets whether the transformer preserves the effective language of the first included element. The default is
+  /// `true`.
   ///
-  /// The effective language of the included element is determined by the element's own `xml:lang` attribute or by
-  /// inheritance from a parent element. If this differs from the string at the location of the `xi:include`, the
-  /// `xml:lang` attribute is added or replaced (§4.5.6).
+  /// The first included element's effective language comes from its `xml:lang` attribute or inheritance from an
+  /// ancestor. If it differs from the effective language at the `xi:include` location, the transformer adds or
+  /// replaces `xml:lang` (§4.5.6).
   #[must_use]
   pub fn with_xml_lang(mut self, xml_lang: bool) -> Self {
     self.process.xml_lang = xml_lang;
@@ -275,34 +282,33 @@ impl<'h, 'r> XIncludeTransformer<'h, 'r> {
   }
 }
 
-/// The main body of the `xi:include` processing. In the 2nd stage of [`XIncludeTransformer`], it receives events that
-/// have passed validation against the XInclude specification. Events for each document included from `xi:include`
-/// elements detected within the document are passed directly to this instance from nested lanes.
+/// Processes XInclude events in the second stage of [`XIncludeTransformer`]. Nested event lanes send events from each
+/// included document directly to this instance.
 struct XIncludeProcess<'h, 'r> {
   /// Subsequent consumers. They receive both events originating from the document itself and events originating from
   /// the document being incorporated.
   dispatch: Dispatcher<'h>,
-  /// Constraints that are validated before an event is sent downstream: If the root element of the top-level document
-  /// is `xi:include`, the result after substitution may contain only comments, processing instructions, whitespace, or
-  /// a single element (§4.5). If the included text contains anything other than whitespace, if the content of
-  /// `xi:fallback` contains multiple elements, or if it contains no elements at all, a fatal error occurs. This
-  /// constraint ensures that such invalid events are detected before they are sent downstream.
+  /// Ensures that replacing a document-level `xi:include` leaves valid document content: comments, processing
+  /// instructions, and whitespace may surround exactly one root element (§4.5). The transformer rejects included text
+  /// containing non-whitespace characters, multiple replacement elements, or no replacement element before sending
+  /// those events downstream.
   outcome_constraints: RootElementConstraints,
   /// A resolver provided by the application that is used to retrieve all resources.
   resolver: &'r dyn UriResolver,
-  /// Maximum number of reads.
+  /// The limits on inclusion depth, total inclusions, and XPointer buffering.
   limits: Limits,
   /// Parser settings used when loading a document with `xi:include`.
   config: ParserConfig,
-  /// Whether to apply [`StrictXmlConstraints`] to the document being included.
+  /// Whether to apply additional strict XML checks to included resource events.
   strict: bool,
-  /// Whether to assign `xml:base` to the top-level element of the retrieved document (§4.5.5).
+  /// Whether to assign `xml:base` to the first element emitted for an inclusion (§4.5.5).
   xml_base: bool,
-  /// Whether to apply `xml:lang` to the top-level element of the retrieved document (§4.5.6).
+  /// Whether to assign `xml:lang` to the first element emitted for an inclusion (§4.5.6).
   xml_lang: bool,
-  /// The number of includes performed in this document. Compare this to [`Limits::max_includes`].
+  /// The number of `xi:include` elements processed during this document operation. The transformer compares this with
+  /// [`Limits::max_includes`].
   inclusion_occurrence: usize,
-  /// Open capture scopes. The last one is the innermost.
+  /// Open inclusion scopes, ordered from the outermost to the innermost.
   inclusions: Vec<IncludeScope>,
   /// The count of validation errors reported by downstream consumers that have not yet been returned upstream. Events
   /// from included documents reach downstream components via nested lanes, but those lanes cannot return this count;
@@ -458,8 +464,8 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     result
   }
 
-  /// Start the scope by logging an `error` that indicates a resource error. If `xi:fallback` is present, the error is
-  /// canceled and replaced with its contents; otherwise, `error` is returned when `xi:include` ends.
+  /// Opens a scope for a failed inclusion and stores its resource `error`. If `xi:fallback` is present, the transformer
+  /// discards the error and emits the fallback content; otherwise, it returns the error when `xi:include` ends.
   fn fallback(&mut self, event: StartElementEvent, uri: String, base: Option<String>, error: Error) -> Result<()> {
     let include = IncludeScope {
       location: event.location.clone(),
@@ -476,8 +482,8 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     Ok(())
   }
 
-  /// reads the resource as XML and sends it to the downstream as an event at the current position; with a `pointer`,
-  /// only the part it identifies
+  /// Reads an XML resource and sends its events downstream at the current position. If `pointer` is present, the
+  /// transformer sends only the selected portion.
   fn include_xml(&mut self, reader: Box<dyn Read>, stream: CharStream, pointer: Option<&XPointer>) -> Result<()> {
     let config = self.config;
     // *pay attention* to variable scope and evaluation order in this block
@@ -507,9 +513,8 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
 
   /// Reads the resource as text and sends it to subsequent elements as a text event at the current position.
   ///
-  /// Text reading can fail in two cases, and §4.3 classifies both as fatal errors.: "Byte sequences outside the range
-  /// allowed by the encoding are a fatal error" and "Characters that are not permitted in XML documents also are a
-  /// fatal error." Both sides report via the lower-level stream.
+  /// The character stream reports invalid byte sequences for the selected encoding and characters forbidden in XML
+  /// documents as fatal errors, as required by XInclude 1.0 §4.3.
   fn include_text(&mut self, mut reader: Box<dyn Read>, mut stream: CharStream) -> Result<()> {
     // Specifying a fragment length of 0 will cause the process to stall, so a minimum read of 1 byte is guaranteed.
     let buffer_size = self.config.text_fragment_len.max(1);
@@ -584,8 +589,8 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     Ok(())
   }
 
-  /// If the deepest scope has not yet observed the top-level element of the document, it returns the base URI and
-  /// language of the entry point as if it had been observed. If it has already been observed, it returns `None`.
+  /// Returns the base URI and language captured at the inclusion point the first time the transformer sees an element
+  /// emitted for the innermost scope. It returns `None` after that element has been observed.
   fn docroot_element_for_current_scope(&mut self) -> Option<(Option<String>, Option<String>)> {
     if let Some(include) = self.inclusions.last_mut() {
       if !include.included_root_observed {
@@ -596,8 +601,8 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     None
   }
 
-  /// Returns an attribute list with the `xml:base` and `xml:lang` attributes arranged so that the base URI and
-  /// language of the top-level element in the document being incorporated are preserved after incorporation.
+  /// Returns an attribute list with any needed `xml:base` and `xml:lang` fixups for the first element emitted by an
+  /// inclusion.
   ///
   /// `xml_base` and `xml_lang` represent the base URI and language at the import location. If no correction is needed,
   /// return `None` (§4.5.5, §4.5.6).
@@ -669,7 +674,7 @@ impl<'h, 'r> XIncludeProcess<'h, 'r> {
     }
   }
 
-  /// The maximum depth of the scope.
+  /// The current element depth within the innermost inclusion scope.
   fn scope_depth(&self) -> usize {
     self.inclusions.last().expect("xi:include is opened").depth
   }
@@ -834,13 +839,13 @@ impl EventConsumer for XIncludeProcess<'_, '_> {
   fn finish(&mut self, _outcome: Outcome<'_>) {}
 }
 
-/// Return the opening tag if the event is it of the `name` element in the XInclude namespace.
+/// Returns the start-element event if it is for `name` in the XInclude namespace.
 #[inline]
 fn start_element_of<'a, 'b>(event: &'b EventRef<'a>, name: &str) -> Option<&'b StartElementEventRef<'a>> {
   event.start_element_named(Some(XINCLUDE_NS), name)
 }
 
-/// True if the event is the opening tag of the `name` element in the XInclude namespace.
+/// Returns whether the event starts an element named `name` in the XInclude namespace.
 #[inline]
 fn start_of(event: &EventRef<'_>, name: &str) -> bool {
   event.start_element_named(Some(XINCLUDE_NS), name).is_some()
@@ -867,8 +872,8 @@ fn fragmentation_length(text: &str, limit: usize) -> usize {
   }
 }
 
-/// Create an attribute in the `xml` namespace. Since the `xml` namespace is bound without a declaration, any processor
-/// can read it.
+/// Creates an attribute in the `xml` namespace. The `xml` prefix is predefined, so the attribute needs no namespace
+/// declaration.
 fn xml_attribute(local: &str, value: &str) -> Attribute {
   Attribute {
     prefix: Some(XML_PREFIX.to_owned()),
@@ -882,8 +887,7 @@ fn xml_attribute(local: &str, value: &str) -> Attribute {
   }
 }
 
-/// True if two language tags refer to the same language. RFC 3066 tags are case-insensitive. This value is also true
-/// if neither tag specifies a language.
+/// Returns whether two language tags are equal, ignoring case. It also returns `true` when both tags are absent.
 fn same_language(one: Option<&str>, other: Option<&str>) -> bool {
   match (one, other) {
     (Some(one), Some(other)) => one.eq_ignore_ascii_case(other),

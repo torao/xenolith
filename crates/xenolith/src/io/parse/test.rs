@@ -391,6 +391,38 @@ fn event_ref_gives_the_current_event_as_a_borrowed_enum() {
   assert!(parser.token_ref().is_none());
 }
 
+/// Parses `xml` with `max_attributes` set to `limit`, returning the error it fails with, if any.
+fn with_max_attributes(xml: &str, limit: usize) -> Option<Error> {
+  let document = Entity::document(CharStream::with_encoding("UTF-8").unwrap());
+  let mut parser = Parser::with_document(document);
+  let mut config = ParserConfig::default();
+  config.limits.document.max_attributes = Some(limit);
+  parser.set_config(config);
+  parser.feed(xml.as_bytes(), true).unwrap();
+  loop {
+    match parser.advance() {
+      Ok(Progress::Eof) => return None,
+      Ok(_) => {}
+      Err(error) => return Some(error),
+    }
+  }
+}
+
+#[test]
+fn the_attributes_of_an_element_are_limited_with_those_the_dtd_supplies() {
+  assert!(with_max_attributes("<a x='1' y='2'/>", 2).is_none(), "up to the limit");
+  let error = with_max_attributes("<a x='1' y='2' z='3'/>", 2).expect("one too many");
+  assert!(matches!(error, Error::Limit { .. }), "{error:?}");
+  assert!(error.message().contains("limits.document.max_attributes"), "{error}");
+  assert!(with_max_attributes("<a xmlns='urn:a' xmlns:p='urn:p' x='1'/>", 2).is_some(), "declarations count");
+  let defaulted = "<!DOCTYPE a [<!ATTLIST a y CDATA 'y' z CDATA 'z'>]><a x='1'/>";
+  assert!(with_max_attributes(defaulted, 3).is_none(), "with the defaults, three");
+  let error = with_max_attributes(defaulted, 2).expect("the defaults count");
+  assert!(matches!(error, Error::Limit { .. }), "{error:?}");
+  assert_eq!(DocumentLimits::default().max_attributes, Some(1024));
+  assert_eq!(DocumentLimits::unlimited().max_attributes, None);
+}
+
 #[test]
 fn a_too_deep_entity_chain_in_an_attribute_names_the_path() {
   let xml = "<!DOCTYPE a [<!ENTITY e0 'x'><!ENTITY e1 '&e0;'><!ENTITY e2 '&e1;'><!ENTITY e3 '&e2;'>]><a v='&e3;'/>";
