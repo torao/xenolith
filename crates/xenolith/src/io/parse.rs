@@ -1418,6 +1418,7 @@ impl Parser {
         let message = "attributes must be separated by whitespace";
         return Err(self.error_at(Error::well_formedness, message, token, base + at));
       }
+      self.room_for_attribute()?;
 
       let name_at = self.location_in(token, base + at);
       let name_len = rest[at..].find(|c: char| c == '=' || chars::is_whitespace(c)).unwrap_or(rest.len() - at);
@@ -1454,6 +1455,22 @@ impl Parser {
       let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
       self.attributes.push(Attribute { name, value: start..values.len(), declares_namespace, at: name_at, value_at });
     }
+  }
+
+  /// Fails if the start tag already has as many attributes as [`DocumentLimits::max_attributes`] permits, counting
+  /// those the DTD supplies, so that another cannot be added. Checking for repeated attributes compares each with the
+  /// ones before it, which takes time quadratic in their number.
+  fn room_for_attribute(&self) -> Result<()> {
+    if let Some(limit) = self.config.limits.document.max_attributes {
+      if self.attributes.len() >= limit {
+        let message = format!(
+          "a start tag has more than {limit} attributes, counting those the DTD supplies; \
+           raise ParserConfig.limits.document.max_attributes if the document is trusted"
+        );
+        return Err(self.error(Error::limit, message));
+      }
+    }
+    Ok(())
   }
 
   /// Applies what the DTD says about this element's attributes: it collapses the whitespace
@@ -1518,6 +1535,7 @@ impl Parser {
       } else {
         self.attribute_text.push_str(value);
       }
+      self.room_for_attribute()?;
       let range = start..self.attribute_text.len();
       let lexical = self.pool.resolve(def.name).to_owned();
       let Some((prefix, local)) = chars::split_qname(&lexical) else {
@@ -1789,6 +1807,10 @@ impl Parser {
             return Err(Error::limit(message).at(self.token_at.clone()));
           }
         }
+        // Counted as an expansion in content is, or nested references here would multiply unchecked (the "Billion
+        // Laughs" attack inside an attribute value).
+        let chars = value.chars().count() as u64;
+        self.stack.count_expansion(chars).map_err(|error| error.at(self.token_at.clone()))?;
         self.expanding.push(id);
         // The replacement stands where a literal value would, so it normalizes the same way.
         let outcome = self.expand_at(&value, out, true, &value, 0);

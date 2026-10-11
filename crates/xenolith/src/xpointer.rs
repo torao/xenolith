@@ -294,6 +294,13 @@ impl fmt::Debug for XPointer {
   }
 }
 
+impl fmt::Display for XPointer {
+  /// Writes the pointer as it was written.
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(&self.source)
+  }
+}
+
 impl PartialEq for XPointer {
   /// Two pointers are equal when they were written the same and at the same location.
   fn eq(&self, other: &Self) -> bool {
