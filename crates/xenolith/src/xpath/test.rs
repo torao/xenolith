@@ -633,12 +633,81 @@ fn comparisons_convert_by_the_types_they_are_given() {
   // Against a boolean, an equality test asks only whether the node-set is empty.
   assert_eq!(value(xml, "/r/n = true()"), "true");
   assert_eq!(value(xml, "/r/nosuch = false()"), "true");
+  // So does a relational test, which then compares the two booleans as numbers, 1 or 0, on either side.
+  assert_eq!(value(xml, "/r/n > false()"), "true");
+  assert_eq!(value(xml, "/r/n < true()"), "false");
+  assert_eq!(value(xml, "/r/nosuch < true()"), "true");
+  assert_eq!(value(xml, "false() < /r/n"), "true");
+  assert_eq!(value(xml, "true() >= /r/n"), "true");
+  // Against a number, each node's value is a number, and an infinity is one too.
+  assert_eq!(value(xml, "/r/n < 1 div 0"), "true");
+  assert_eq!(value(xml, "/r/n > -1 div 0"), "true");
+  assert_eq!(value(xml, "/r/n != 1 div 0"), "true");
+  assert_eq!(value(xml, "/r/n = 1 div 0"), "false");
+  assert_eq!(value(xml, "1 div 0 > /r/n"), "true");
+  assert_eq!(value("<r><n>Infinity</n></r>", "/r/n = 1 div 0"), "false", "the string Infinity is not a number");
   // Without a node-set, a boolean operand makes it a boolean comparison.
   assert_eq!(value(xml, "1 = true()"), "true");
   assert_eq!(value(xml, "'a' = 'a'"), "true");
   // A relational comparison converts to numbers, so 10 > 9 — though "10" sorts before "9".
   assert_eq!(value(xml, "'10' > '9'"), "true");
   assert_eq!(value(xml, "'10' = '9'"), "false", "an equality comparison of two strings compares strings");
+}
+
+#[test]
+fn two_node_sets_compare_as_if_every_pair_were_tried() {
+  // Strings, numbers, a value that is NaN as a number, the two zeros, an infinity, and padding a number reads past.
+  let values = ["1", "2", "a", "", "-0", "0", "Infinity", " 2 "];
+  let mut sets: Vec<Vec<&str>> = vec![Vec::new()];
+  sets.extend(values.iter().map(|&value| vec![value]));
+  for (i, &first) in values.iter().enumerate() {
+    sets.extend(values[i + 1..].iter().map(|&second| vec![first, second]));
+  }
+  // What §3.4 says, pair by pair.
+  let every_pair = |op: &str, a: &[&str], b: &[&str]| {
+    a.iter().any(|x| {
+      b.iter().any(|y| {
+        let (p, q) = (object::string_to_number(x), object::string_to_number(y));
+        match op {
+          "=" => x == y,
+          "!=" => x != y,
+          "<" => p < q,
+          "<=" => p <= q,
+          ">" => p > q,
+          ">=" => p >= q,
+          _ => unreachable!("one of the six"),
+        }
+      })
+    })
+  };
+  for a in &sets {
+    for b in &sets {
+      let elements =
+        |name: &str, set: &[&str]| set.iter().map(|value| format!("<{name}>{value}</{name}>")).collect::<String>();
+      let doc = parse_document(&format!("<r>{}{}</r>", elements("a", a), elements("b", b)));
+      for op in ["=", "!=", "<", "<=", ">", ">="] {
+        let xpath = XPath::parse(&format!("/r/a {op} /r/b"), Location::new()).expect("parses");
+        let got = xpath.evaluate(&doc, doc.document_node()).expect("evaluates");
+        assert_eq!(got, XPathResult::Boolean(every_pair(op, a, b)), "{a:?} {op} {b:?}");
+      }
+    }
+  }
+}
+
+#[test]
+fn large_node_sets_compare_without_trying_every_pair() {
+  // Ten thousand nodes a side: every pair would be a hundred million string-values.
+  let side =
+    |name: &str, from: usize| (from..from + 10_000).map(|n| format!("<{name}>{n}</{name}>")).collect::<String>();
+  let doc = parse_document(&format!("<r>{}{}</r>", side("a", 0), side("b", 10_000)));
+  let compare = |expression: &str| {
+    let xpath = XPath::parse(expression, Location::new()).expect("parses");
+    xpath.evaluate(&doc, doc.document_node()).expect("evaluates")
+  };
+  assert_eq!(compare("/r/a = /r/b"), XPathResult::Boolean(false));
+  assert_eq!(compare("/r/a != /r/b"), XPathResult::Boolean(true));
+  assert_eq!(compare("/r/a < /r/b"), XPathResult::Boolean(true));
+  assert_eq!(compare("/r/a > /r/b"), XPathResult::Boolean(false));
 }
 
 #[test]

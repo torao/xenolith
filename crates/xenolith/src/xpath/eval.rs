@@ -1,5 +1,6 @@
 //! Evaluating an expression tree against a tree of nodes.
 
+use std::collections::HashSet;
 use std::ptr;
 use std::sync::Arc;
 
@@ -199,40 +200,69 @@ fn arithmetic<M: Model>(op: BinaryOp, left: &Expr, right: &Expr, state: &EvalSta
 /// to the operand types.
 fn compare<M: Model>(op: BinaryOp, left: &Object<M::Node>, right: &Object<M::Node>, model: &M) -> bool {
   match (left, right) {
-    (Object::NodeSet(a), Object::NodeSet(b)) => {
-      let equality = is_equality(op);
-      a.iter().any(|left| {
-        let left = model.string_value(*left);
-        b.iter().any(|right| {
-          let right = model.string_value(*right);
-          if equality { compare_strings(op, &left, &right) } else { compare_numbers(op, &left, &right) }
-        })
-      })
-    }
+    (Object::NodeSet(a), Object::NodeSet(b)) => node_sets_compare(op, a, b, model),
     (Object::NodeSet(nodes), other) => node_set_compare(op, nodes, other, model),
     (other, Object::NodeSet(nodes)) => node_set_compare(flip(op), nodes, other, model),
     _ => scalar_compare(op, left, right, model),
   }
 }
 
-/// Compares a node-set against an object that is not one.
-fn node_set_compare<M: Model>(op: BinaryOp, nodes: &[M::Node], other: &Object<M::Node>, model: &M) -> bool {
-  // For `=` and `!=` a boolean makes the node-set a boolean too; every other case looks at the nodes one at a time.
-  if is_equality(op) {
-    if let Object::Boolean(other) = other {
-      let present = !nodes.is_empty();
-      return if op == BinaryOp::Equal { present == *other } else { present != *other };
+/// Compares two node-sets: true if a node of each makes the comparison of their string-values true.
+///
+/// Trying every pair would take time proportional to the product of the sizes, and compute each string-value again
+/// for every pair. Each string-value is computed once instead. `=` looks the left values up among the right ones;
+/// `!=` holds unless a side is empty or every value on both sides is one and the same; and a relational operator needs
+/// only the least and greatest number of each side, since some pair satisfies `<` exactly when the least on the left
+/// is below the greatest on the right. NaN satisfies no comparison, so it is left out of the least and greatest.
+fn node_sets_compare<M: Model>(op: BinaryOp, a: &[M::Node], b: &[M::Node], model: &M) -> bool {
+  let values = |nodes: &[M::Node]| nodes.iter().map(|&node| model.string_value(node)).collect::<Vec<_>>();
+  match op {
+    BinaryOp::Equal => {
+      let right: HashSet<String> = values(b).into_iter().collect();
+      !right.is_empty() && a.iter().any(|&node| right.contains(&model.string_value(node)))
+    }
+    BinaryOp::NotEqual => {
+      let (left, right) = (values(a), values(b));
+      // With a value on each side, some pair differs unless every value is the first one.
+      let (Some(first), false) = (left.first(), right.is_empty()) else { return false };
+      left.iter().chain(&right).any(|value| value != first)
+    }
+    _ => {
+      let range = |nodes: &[M::Node]| {
+        let numbers = nodes.iter().map(|&node| string_to_number(&model.string_value(node))).filter(|n| !n.is_nan());
+        numbers.fold(None, |range: Option<(f64, f64)>, n| {
+          Some(range.map_or((n, n), |(least, greatest)| (least.min(n), greatest.max(n))))
+        })
+      };
+      let (Some((a_least, a_greatest)), Some((b_least, b_greatest))) = (range(a), range(b)) else { return false };
+      match op {
+        BinaryOp::Less => a_least < b_greatest,
+        BinaryOp::LessEqual => a_least <= b_greatest,
+        BinaryOp::Greater => a_greatest > b_least,
+        BinaryOp::GreaterEqual => a_greatest >= b_least,
+        _ => unreachable!("only the comparison operators reach here"),
+      }
     }
   }
-  let other_string = other.string(model);
-  nodes.iter().any(|node| {
-    let value = model.string_value(*node);
-    match (is_equality(op), other) {
-      (true, Object::String(text)) => compare_strings(op, &value, text),
-      // A number, or any relational comparison, is settled as numbers.
-      _ => compare_numbers(op, &value, &other_string),
+}
+
+/// Compares a node-set against an object that is not one.
+fn node_set_compare<M: Model>(op: BinaryOp, nodes: &[M::Node], other: &Object<M::Node>, model: &M) -> bool {
+  match other {
+    // A boolean makes the node-set a boolean too, whatever the operator, so `/r/n > false()` compares 1 with 0.
+    Object::Boolean(_) => scalar_compare(op, &Object::Boolean(!nodes.is_empty()), other, model),
+    // A number is compared with each node's value as a number. Not through its string form: "Infinity" reads back as
+    // NaN, so a comparison with an infinity would always be false.
+    Object::Number(number) => {
+      nodes.iter().any(|node| numbers(op, string_to_number(&model.string_value(*node)), *number))
     }
-  })
+    // A string is compared as a string by `=` and `!=`, and as a number by the relational operators.
+    Object::String(text) => nodes.iter().any(|node| {
+      let value = model.string_value(*node);
+      if is_equality(op) { compare_strings(op, &value, text) } else { compare_numbers(op, &value, text) }
+    }),
+    Object::NodeSet(_) => unreachable!("two node-sets are compared by `compare`"),
+  }
 }
 
 /// Compares two objects, neither of which is a node-set.
