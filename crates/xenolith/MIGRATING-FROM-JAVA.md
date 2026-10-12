@@ -55,7 +55,7 @@ let mut builder = DomBuilder::new();
 StreamSource::new("<book><title>Dune</title></book>".as_bytes()).add_consumer(&mut builder).emit()?;
 let doc = builder.into_document().map_err(xenolith::Error::internal)?;
 let root = doc.document_element().unwrap();
-let title = doc.node(root).first_child().unwrap();
+let title = doc.node(root)?.first_child().unwrap();
 
 assert_eq!(title.node_name(), "title");
 assert_eq!(title.text_content(), "Dune");
@@ -66,9 +66,10 @@ There is no factory and no `setNamespaceAware`: parsing is namespace-aware alway
 parser that is not is a source of bugs rather than a configuration choice.
 
 A node is a `Copy` index into the document's arena rather than an object holding a pointer back
-to its parent, so it needs the document to be read: `doc.node_name(id)`, or
-`doc.node(id).node_name()` for a chained walk. Mutating the tree needs `&mut Document` — unique
-access — which is what rules out the aliasing bugs `Node` objects invite.
+to its parent, so it needs the document to be read: `doc.node(id)?.node_name()`. `node` checks
+once that the index is of that document, and the `NodeRef` it returns reads, and walks to other
+nodes, without failing again. Mutating the tree needs `&mut Document` — unique access — which is
+what rules out the aliasing bugs `Node` objects invite.
 
 ## Reading a document as a stream
 

@@ -3,13 +3,23 @@
 use std::io::Read;
 
 use xenolith::dom::build::DomBuilder;
-use xenolith::dom::{Document, NodeType};
+use xenolith::dom::{Document, NodeId, NodeRef, NodeType};
 use xenolith::event::{EventConsumer, EventCursor, EventProducer};
 use xenolith::io::StreamSource;
 
 /// Reads `xml` into a tree through the builder.
 fn parse(xml: &str) -> Document {
   parse_reader(StreamSource::new(xml.as_bytes()))
+}
+
+/// The node `id` of `doc`, which made it.
+fn node(doc: &Document, id: NodeId) -> NodeRef<'_> {
+  doc.node(id).expect("a node of the document")
+}
+
+/// The root element of `doc`.
+fn root(doc: &Document) -> NodeRef<'_> {
+  node(doc, doc.document_element().expect("a root element"))
 }
 
 /// Reads a prepared reader into a tree, so a system identifier or a resolver can be set first.
@@ -26,13 +36,13 @@ fn parse_reader<R: Read>(mut source: StreamSource<'_, R>) -> Document {
 #[test]
 fn builds_elements_text_and_nesting() {
   let doc = parse("<doc><p>Hello</p><p>World</p></doc>");
-  let root = doc.document_element().unwrap();
-  assert_eq!(doc.node_name(root), "doc");
-  let ps: Vec<_> = doc.children(root).collect();
+  let root = root(&doc);
+  assert_eq!(root.node_name(), "doc");
+  let ps: Vec<_> = root.children().collect();
   assert_eq!(ps.len(), 2);
-  assert_eq!(doc.node_name(ps[0]), "p");
-  assert_eq!(doc.text_content(ps[0]), "Hello");
-  assert_eq!(doc.text_content(root), "HelloWorld");
+  assert_eq!(ps[0].node_name(), "p");
+  assert_eq!(ps[0].text_content(), "Hello");
+  assert_eq!(root.text_content(), "HelloWorld");
 }
 
 #[test]
@@ -41,64 +51,64 @@ fn a_long_text_run_coalesces_into_one_text_node() {
   // builder must join adjacent character data into a single text node, as the data model requires.
   let body = "x".repeat(30_000);
   let doc = parse(&format!("<a>{body}</a>"));
-  let a = doc.document_element().unwrap();
-  assert_eq!(doc.children(a).count(), 1, "adjacent text fragments must coalesce into one node");
-  assert_eq!(doc.text_content(a), body);
+  let a = root(&doc);
+  assert_eq!(a.children().count(), 1, "adjacent text fragments must coalesce into one node");
+  assert_eq!(a.text_content(), body);
 }
 
 #[test]
 fn carries_attributes_and_their_values() {
   let doc = parse("<a x='1' y='two'/>");
-  let a = doc.document_element().unwrap();
-  assert_eq!(doc.attribute(a, "x"), Some("1"));
-  assert_eq!(doc.attribute(a, "y"), Some("two"));
+  let a = root(&doc);
+  assert_eq!(a.attribute("x"), Some("1"));
+  assert_eq!(a.attribute("y"), Some("two"));
 }
 
 #[test]
 fn resolves_namespaces_onto_names() {
   let doc = parse("<a xmlns='urn:d' xmlns:p='urn:p'><p:b/></a>");
-  let a = doc.document_element().unwrap();
-  assert_eq!(doc.namespace_uri(a), Some("urn:d"));
-  let b = doc.first_child(a).unwrap();
-  assert_eq!(doc.namespace_uri(b), Some("urn:p"));
-  assert_eq!(doc.prefix(b), Some("p"));
-  assert_eq!(doc.local_name(b), Some("b"));
+  let a = root(&doc);
+  assert_eq!(a.namespace_uri(), Some("urn:d"));
+  let b = a.first_child().unwrap();
+  assert_eq!(b.namespace_uri(), Some("urn:p"));
+  assert_eq!(b.prefix(), Some("p"));
+  assert_eq!(b.local_name(), Some("b"));
   // The namespace declaration is kept as an attribute in the XMLNS namespace.
-  assert_eq!(doc.attribute(a, "xmlns"), Some("urn:d"));
+  assert_eq!(a.attribute("xmlns"), Some("urn:d"));
 }
 
 #[test]
 fn builds_comments_pis_and_cdata() {
   let doc = parse("<doc><!--c--><?pi data?><![CDATA[<raw>]]></doc>");
-  let root = doc.document_element().unwrap();
-  let kids: Vec<_> = doc.children(root).map(|n| doc.node_type(n)).collect();
+  let root = root(&doc);
+  let kids: Vec<_> = root.children().map(NodeRef::node_type).collect();
   assert_eq!(kids, [NodeType::COMMENT_NODE, NodeType::PROCESSING_INSTRUCTION_NODE, NodeType::CDATA_SECTION_NODE]);
-  let cdata = doc.last_child(root).unwrap();
-  assert_eq!(doc.node_value(cdata), Some("<raw>"));
+  let cdata = root.last_child().unwrap();
+  assert_eq!(cdata.node_value(), Some("<raw>"));
 }
 
 #[test]
 fn a_prolog_comment_becomes_a_child_of_the_document() {
   let doc = parse("<!--intro--><doc/>");
-  let first = doc.first_child(doc.document_node()).unwrap();
-  assert_eq!(doc.node_type(first), NodeType::COMMENT_NODE);
-  assert_eq!(doc.node_value(first), Some("intro"));
+  let first = node(&doc, doc.document_node()).first_child().unwrap();
+  assert_eq!(first.node_type(), NodeType::COMMENT_NODE);
+  assert_eq!(first.node_value(), Some("intro"));
 }
 
 #[test]
 fn builds_the_document_type_node() {
   let doc = parse("<!DOCTYPE greeting [<!ELEMENT greeting (#PCDATA)>]><greeting>hi</greeting>");
-  let doctype = doc.doctype().unwrap();
-  assert_eq!(doc.node_type(doctype), NodeType::DOCUMENT_TYPE_NODE);
-  assert_eq!(doc.node_name(doctype), "greeting");
+  let doctype = node(&doc, doc.doctype().unwrap());
+  assert_eq!(doctype.node_type(), NodeType::DOCUMENT_TYPE_NODE);
+  assert_eq!(doctype.node_name(), "greeting");
 }
 
 #[test]
 fn xml_id_is_marked_so_get_element_by_id_finds_it() {
   let doc = parse("<r><a xml:id='x1'/><b xml:id='x2'/></r>");
-  let a = doc.get_element_by_id("x1").unwrap();
-  assert_eq!(doc.node_name(a), "a");
-  assert_eq!(doc.get_element_by_id("x2").map(|n| doc.node_name(n)).as_deref(), Some("b"));
+  let a = node(&doc, doc.get_element_by_id("x1").unwrap());
+  assert_eq!(a.node_name(), "a");
+  assert_eq!(doc.get_element_by_id("x2").map(|n| node(&doc, n).node_name()).as_deref(), Some("b"));
   assert_eq!(doc.get_element_by_id("nope"), None);
 }
 
@@ -112,8 +122,8 @@ fn xml_id_turned_off_leaves_an_ordinary_attribute_unless_the_dtd_declares_it() {
 
   let doc = build("<r><a xml:id='x1'/></r>");
   assert_eq!(doc.get_element_by_id("x1"), None, "an ordinary attribute");
-  let a = doc.document_element().and_then(|r| doc.first_child(r)).unwrap();
-  assert!(doc.has_attribute(a, "xml:id"), "still present");
+  let a = root(&doc).first_child().unwrap();
+  assert!(a.has_attribute("xml:id"), "still present");
 
   let doc = build("<!DOCTYPE r [<!ATTLIST a xml:id ID #IMPLIED>]><r><a xml:id='x1'/></r>");
   assert!(doc.get_element_by_id("x1").is_some(), "an ID because the DTD declares it one");
@@ -124,18 +134,18 @@ fn records_base_uris_from_the_system_id_and_xml_base() {
   use xenolith::io::StreamSource;
   let xml = "<a><b xml:base='../c/'><d/></b></a>";
   let doc = parse_reader(StreamSource::with_system_id(xml.as_bytes(), "file:///a/b/doc.xml"));
-  let a = doc.document_element().unwrap();
-  assert_eq!(doc.base_uri(a).as_deref(), Some("file:///a/b/doc.xml"));
-  let b = doc.first_child(a).unwrap();
-  assert_eq!(doc.base_uri(b).as_deref(), Some("file:///a/c/"), "xml:base is resolved against the document URI");
-  let d = doc.first_child(b).unwrap();
-  assert_eq!(doc.base_uri(d).as_deref(), Some("file:///a/c/"), "a child with no xml:base inherits");
+  let a = root(&doc);
+  assert_eq!(a.base_uri().as_deref(), Some("file:///a/b/doc.xml"));
+  let b = a.first_child().unwrap();
+  assert_eq!(b.base_uri().as_deref(), Some("file:///a/c/"), "xml:base is resolved against the document URI");
+  let d = b.first_child().unwrap();
+  assert_eq!(d.base_uri().as_deref(), Some("file:///a/c/"), "a child with no xml:base inherits");
 }
 
 #[test]
 fn base_uri_is_none_without_a_system_id_or_xml_base() {
   let doc = parse("<a><b/></a>");
-  assert_eq!(doc.base_uri(doc.document_element().unwrap()), None);
+  assert_eq!(root(&doc).base_uri(), None);
 }
 
 #[test]
@@ -154,10 +164,10 @@ fn captures_the_doctype_public_and_system_ids() {
   let xml = "<!DOCTYPE a PUBLIC \"pub-id\" \"a.dtd\"><a/>";
   let empty = Empty;
   let doc = parse_reader(StreamSource::new(xml.as_bytes()).with_resolver(&empty));
-  let doctype = doc.doctype().unwrap();
-  assert_eq!(doc.node_name(doctype), "a");
-  assert_eq!(doc.public_id(doctype), Some("pub-id"));
-  assert_eq!(doc.system_id(doctype), Some("a.dtd"));
+  let doctype = node(&doc, doc.doctype().unwrap());
+  assert_eq!(doctype.node_name(), "a");
+  assert_eq!(doctype.public_id(), Some("pub-id"));
+  assert_eq!(doctype.system_id(), Some("a.dtd"));
 }
 
 #[test]
@@ -190,8 +200,8 @@ fn the_builder_runs_beside_another_consumer_in_one_pass() {
 
   assert_eq!(counter.0, 3, "the counter saw every element in the same pass");
   let doc = builder.into_document();
-  assert_eq!(doc.node_name(doc.document_element().unwrap()), "doc");
-  assert_eq!(doc.children(doc.document_element().unwrap()).count(), 2);
+  assert_eq!(root(&doc).node_name(), "doc");
+  assert_eq!(root(&doc).children().count(), 2);
 }
 
 #[test]
@@ -199,8 +209,8 @@ fn a_dtd_id_attribute_is_marked() {
   let xml = "<!DOCTYPE r [<!ELEMENT r (item)><!ELEMENT item EMPTY><!ATTLIST item key ID #IMPLIED>]>\
              <r><item key='k1'/></r>";
   let doc = parse(xml);
-  let item = doc.get_element_by_id("k1").unwrap();
-  assert_eq!(doc.node_name(item), "item");
+  let item = node(&doc, doc.get_element_by_id("k1").unwrap());
+  assert_eq!(item.node_name(), "item");
   // A non-ID attribute of the same value is not found.
   assert_eq!(doc.get_element_by_id("r"), None);
 }
@@ -264,8 +274,8 @@ fn a_second_document_through_one_builder_is_the_one_that_comes_out() {
     source.emit().expect("the second document is built, not refused as a second root");
   }
   let doc = builder.into_document();
-  assert_eq!(doc.node_name(doc.document_element().unwrap()), "b");
-  assert_eq!(doc.children(doc.document_element().unwrap()).count(), 1);
+  assert_eq!(root(&doc).node_name(), "b");
+  assert_eq!(root(&doc).children().count(), 1);
 }
 
 #[test]
@@ -283,7 +293,7 @@ fn the_first_document_is_built_in_the_one_the_builder_was_made_with() {
     let _ = builder.consume(&event).expect("well-formed");
   }
   let doc = builder.into_document();
-  assert_eq!(doc.node_name(doc.document_element().unwrap()), "a");
+  assert_eq!(root(&doc).node_name(), "a");
 }
 
 #[test]
@@ -319,7 +329,7 @@ fn a_dom_exception_reaches_the_caller_as_the_error_that_stopped_the_run() {
   assert!(error.to_string().contains("HIERARCHY_REQUEST_ERR"), "{error}");
   // The tree comes back as it stands: the run is what reported the exception, and it holds the root it did place.
   let doc = builder.into_document();
-  assert_eq!(doc.node_name(doc.document_element().unwrap()), "a");
+  assert_eq!(root(&doc).node_name(), "a");
 }
 
 #[test]

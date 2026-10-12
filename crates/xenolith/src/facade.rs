@@ -30,14 +30,14 @@ use crate::xinclude::XIncludeTransformer;
 /// use xenolith::Reader;
 ///
 /// let doc = Reader::new().document("<a><b>text</b></a>".as_bytes())?;
-/// assert_eq!(doc.text_content(doc.document_element().unwrap()), "text");
+/// assert_eq!(doc.node(doc.document_element().unwrap())?.text_content(), "text");
 ///
 /// // A comment holding `--` is not XML: a strict read refuses it, and a read that is not strict keeps it as written.
 /// let loose = "<a><!-- one -- two --></a>";
 /// assert!(Reader::new().document(loose.as_bytes()).is_err());
 /// let doc = Reader::new().with_strict(false).document(loose.as_bytes())?;
-/// let comment = doc.first_child(doc.document_element().unwrap()).unwrap();
-/// assert_eq!(doc.node_value(comment), Some(" one -- two "));
+/// let comment = doc.node(doc.document_element().unwrap())?.first_child().unwrap();
+/// assert_eq!(comment.node_value(), Some(" one -- two "));
 /// # Ok::<(), xenolith::Error>(())
 /// ```
 pub struct Reader<'r> {
@@ -241,9 +241,9 @@ impl<'r> Reader<'r> {
   ///   Reader::new().events("<a>one<!-- note -->two</a>".as_bytes(), &mut transformer)?;
   /// }
   /// let doc = builder.into_document();
-  /// let root = doc.document_element().unwrap();
-  /// assert_eq!(doc.text_content(root), "onetwo");
-  /// assert_eq!(doc.children(root).count(), 1, "the comment is gone, and the text around it is one node");
+  /// let root = doc.node(doc.document_element().unwrap())?;
+  /// assert_eq!(root.text_content(), "onetwo");
+  /// assert_eq!(root.children().count(), 1, "the comment is gone, and the text around it is one node");
   /// # Ok::<(), xenolith::Error>(())
   /// ```
   pub fn events<R: io::Read>(&self, input: R, handler: &mut dyn EventConsumer) -> Result<()> {

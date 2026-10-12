@@ -426,7 +426,7 @@ fn current_event<'a>(parser: &'a Parser, base: Option<&'a str>) -> Option<crate:
     }
     // The DTD is keyed by interned names, so this is the one event that still carries the pool they belong to.
     TokenRef::Doctype(_) => EventRef::Doctype(DoctypeEventRef::new(
-      parser.doctype_name().map(|name| parser.pool().resolve(name)),
+      parser.doctype_name().map(|name| parser.pool().resolve_own(name)),
       parser.doctype_public_id(),
       parser.doctype_system_id(),
       parser.dtd().expect("the DTD is fully parsed by the doctype event"),

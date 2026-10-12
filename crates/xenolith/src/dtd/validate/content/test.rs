@@ -4,13 +4,14 @@ use crate::name::NamePool;
 use super::*;
 
 fn names(pool: &mut NamePool, list: &[&str]) -> Vec<NameId> {
-  list.iter().map(|n| pool.intern(n)).collect()
+  list.iter().map(|n| pool.intern(n).expect("interned")).collect()
 }
 
 #[test]
 fn matches_a_sequence() {
   let mut pool = NamePool::new();
-  let (a, b, c) = (pool.intern("a"), pool.intern("b"), pool.intern("c"));
+  let (a, b, c) =
+    (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"), pool.intern("c").expect("interned"));
   // (a, b, c)
   let model = ContentModel::compile(&P::Seq(vec![P::Name(a, Once), P::Name(b, Once), P::Name(c, Once)], Once));
   assert!(model.matches(&names(&mut pool, &["a", "b", "c"])).is_ok());
@@ -22,7 +23,7 @@ fn matches_a_sequence() {
 #[test]
 fn honours_occurrences() {
   let mut pool = NamePool::new();
-  let (a, b) = (pool.intern("a"), pool.intern("b"));
+  let (a, b) = (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"));
   // (a?, b*)
   let model = ContentModel::compile(&P::Seq(vec![P::Name(a, Optional), P::Name(b, ZeroOrMore)], Once));
   for seq in [&[][..], &["a"], &["b"], &["a", "b"], &["b", "b", "b"], &["a", "b", "b"]] {
@@ -34,7 +35,8 @@ fn honours_occurrences() {
 #[test]
 fn matches_a_choice_with_repetition() {
   let mut pool = NamePool::new();
-  let (a, b, c) = (pool.intern("a"), pool.intern("b"), pool.intern("c"));
+  let (a, b, c) =
+    (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"), pool.intern("c").expect("interned"));
   // (a | b)+ , c
   let model = ContentModel::compile(&P::Seq(
     vec![P::Choice(vec![P::Name(a, Once), P::Name(b, Once)], OneOrMore), P::Name(c, Once)],
@@ -48,7 +50,8 @@ fn matches_a_choice_with_repetition() {
 #[test]
 fn reports_what_was_allowed() {
   let mut pool = NamePool::new();
-  let (a, b, c) = (pool.intern("a"), pool.intern("b"), pool.intern("c"));
+  let (a, b, c) =
+    (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"), pool.intern("c").expect("interned"));
   let model = ContentModel::compile(&P::Seq(vec![P::Name(a, Once), P::Name(b, Once)], Once));
   let failure = model.matches(&names(&mut pool, &["a", "c"])).unwrap_err();
   assert_eq!(failure.at, Some(c));
@@ -58,7 +61,7 @@ fn reports_what_was_allowed() {
 #[test]
 fn reports_what_a_short_sequence_still_needed() {
   let mut pool = NamePool::new();
-  let (a, b) = (pool.intern("a"), pool.intern("b"));
+  let (a, b) = (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"));
   let model = ContentModel::compile(&P::Seq(vec![P::Name(a, Once), P::Name(b, Once)], Once));
 
   let stopped_short = model.matches(&names(&mut pool, &["a"])).unwrap_err();
@@ -73,9 +76,9 @@ fn reports_what_a_short_sequence_still_needed() {
 #[test]
 fn detects_nondeterminism() {
   let mut pool = NamePool::new();
-  let (a, b) = (pool.intern("a"), pool.intern("b"));
+  let (a, b) = (pool.intern("a").expect("interned"), pool.intern("b").expect("interned"));
   // (a, b) | (a, c): ambiguous on the leading `a`, which Appendix E forbids.
-  let c = pool.intern("c");
+  let c = pool.intern("c").expect("interned");
   let ambiguous = ContentModel::compile(&P::Choice(
     vec![
       P::Seq(vec![P::Name(a, Once), P::Name(b, Once)], Once),

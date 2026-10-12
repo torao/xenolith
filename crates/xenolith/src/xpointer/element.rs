@@ -90,14 +90,16 @@ struct ElementSelector<'s> {
 impl ElementSelector<'_> {
   /// Records attributes declared as `ID` in the DTD.
   fn read_doctype(&mut self, event: &DoctypeEventRef<'_>) {
+    // The DTD and its pool come together in the event; a name missing from the pool declares nothing.
     for (element, definitions) in event.dtd.attlists() {
+      let Some(element) = event.pool.resolve(element) else { continue };
       let names: HashSet<String> = definitions
         .iter()
         .filter(|definition| matches!(definition.att_type, AttType::Id))
-        .map(|definition| event.pool.resolve(definition.name).to_owned())
+        .filter_map(|definition| event.pool.resolve(definition.name).map(ToOwned::to_owned))
         .collect();
       if !names.is_empty() {
-        self.ids.insert(event.pool.resolve(element).to_owned(), names);
+        self.ids.insert(element.to_owned(), names);
       }
     }
   }

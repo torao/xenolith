@@ -416,7 +416,7 @@ impl<'a> EventRef<'a> {
 ///   builder.consume(&event.as_event_ref())?;
 /// }
 /// let doc = builder.into_document();
-/// assert_eq!(doc.text_content(doc.document_element().unwrap()), "hi");
+/// assert_eq!(doc.node(doc.document_element().unwrap())?.text_content(), "hi");
 /// # Ok::<(), xenolith::Error>(())
 /// ```
 #[derive(Clone, Debug)]

@@ -687,7 +687,7 @@ fn a_context_node_outside_the_xpath_tree_is_refused() {
   let r = doc.document_element().expect("the document element");
   let detached = doc.create_element("d").expect("an element");
   doc.set_attribute(detached, "x", "1").expect("an attribute");
-  let fragment = doc.create_document_fragment();
+  let fragment = doc.create_document_fragment().expect("created");
   let in_fragment = doc.create_element("f").expect("an element");
   doc.append_child(fragment, in_fragment).expect("appended");
   let refused = [
@@ -1097,7 +1097,7 @@ fn string_refuses_a_node_of_another_document() {
 fn string_refuses_a_node_outside_the_xpath_tree_as_evaluate_does() {
   let mut doc = parse_document("<!DOCTYPE r><r xmlns:p='urn:p'><s xmlns:q='urn:q'/></r>");
   let r = doc.document_element().expect("the document element");
-  let detached = doc.create_text_node("loose");
+  let detached = doc.create_text_node("loose").expect("created");
   let refused = [
     ("a document type", Node::Dom(doc.doctype().expect("a document type"))),
     ("a namespace declaration", Node::Dom(doc.get_attribute_node(r, "xmlns:p").expect("the declaration"))),
@@ -1404,7 +1404,7 @@ fn a_document_tree_of_any_depth_is_walked_without_recursion() {
         doc.append_child(parent, element).expect("a child");
         parent = element;
       }
-      let text = doc.create_text_node("leaf");
+      let text = doc.create_text_node("leaf").expect("created");
       doc.append_child(parent, text).expect("a child");
       let value = |expression: &str| {
         let xpath = XPath::parse(expression, Location::new()).expect("parses");

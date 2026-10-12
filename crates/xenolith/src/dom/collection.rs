@@ -107,12 +107,12 @@ impl NameFilter {
 /// let mut doc = Document::new();
 /// let root = doc.create_element("ul")?;
 /// doc.append_child(doc.document_node(), root)?;
-/// assert_eq!(doc.get_elements_by_tag_name(doc.document_node(), "li").length(), 0);
+/// assert_eq!(doc.node(doc.document_node())?.get_elements_by_tag_name("li").length(), 0);
 ///
 /// let li = doc.create_element("li")?;
 /// doc.append_child(root, li)?;
 /// // A list obtained now sees the new child.
-/// let items = doc.get_elements_by_tag_name(doc.document_node(), "li");
+/// let items = doc.node(doc.document_node())?.get_elements_by_tag_name("li");
 /// assert_eq!(items.length(), 1);
 /// assert_eq!(items.item(0), Some(li));
 /// # Ok::<(), xenolith::dom::DomException>(())

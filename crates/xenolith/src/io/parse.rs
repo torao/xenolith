@@ -262,9 +262,9 @@ impl AttributeList for Parser {
 
   fn get(&self, index: usize) -> Option<AttributeRef<'_>> {
     self.attributes.get(index).map(|a| AttributeRef {
-      prefix: a.name.prefix.map(|prefix| self.pool.resolve(prefix)),
-      local: self.pool.resolve(a.name.local()),
-      namespace: a.name.namespace().map(|namespace| self.pool.resolve(namespace)),
+      prefix: a.name.prefix.map(|prefix| self.pool.resolve_own(prefix)),
+      local: self.pool.resolve_own(a.name.local()),
+      namespace: a.name.namespace().map(|namespace| self.pool.resolve_own(namespace)),
       value: &self.attribute_text[a.value.clone()],
       location: a.at.clone(),
       value_location: a.value_at.clone(),
@@ -300,9 +300,9 @@ impl<'a> Attributes<'a> {
   pub fn get(&self, index: usize) -> Option<AttributeRef<'a>> {
     let pool = self.pool?;
     self.attributes.get(index).map(|a| AttributeRef {
-      prefix: a.name.prefix.map(|prefix| pool.resolve(prefix)),
-      local: pool.resolve(a.name.local()),
-      namespace: a.name.namespace().map(|namespace| pool.resolve(namespace)),
+      prefix: a.name.prefix.map(|prefix| pool.resolve_own(prefix)),
+      local: pool.resolve_own(a.name.local()),
+      namespace: a.name.namespace().map(|namespace| pool.resolve_own(namespace)),
       value: &self.text[a.value.clone()],
       location: a.at.clone(),
       value_location: a.value_at.clone(),
@@ -316,9 +316,9 @@ impl<'a> Attributes<'a> {
       // A view with an attribute in it carries the pool those names are interned in.
       let pool = pool.expect("the attributes were lent with their pool");
       attributes.get(i).map(|a| AttributeRef {
-        prefix: a.name.prefix.map(|prefix| pool.resolve(prefix)),
-        local: pool.resolve(a.name.local()),
-        namespace: a.name.namespace().map(|namespace| pool.resolve(namespace)),
+        prefix: a.name.prefix.map(|prefix| pool.resolve_own(prefix)),
+        local: pool.resolve_own(a.name.local()),
+        namespace: a.name.namespace().map(|namespace| pool.resolve_own(namespace)),
         value: &text[a.value.clone()],
         location: a.at.clone(),
         value_location: a.value_at.clone(),
@@ -545,10 +545,8 @@ impl Parser {
   pub fn with_document(document: Entity) -> Self {
     let config = ParserConfig::default();
     let mut pool = NamePool::new();
-    let space_name = pool.intern("space");
-    let lang_name = pool.intern("lang");
-    let base_name = pool.intern("base");
-    let id_name = pool.intern("id");
+    let mut intern = |name| pool.intern(name).expect("a few names fit in a new pool");
+    let (space_name, lang_name, base_name, id_name) = (intern("space"), intern("lang"), intern("base"), intern("id"));
     Self {
       stack: EntityStack::new(document, config.limits.entities),
       pool,
@@ -898,7 +896,7 @@ impl Parser {
       return Ok(Some(TokenKind::XmlDeclaration));
     }
     // Whether `target` is a `Name` is a lexical constraint left to `StrictXmlConstraints`.
-    self.name = QName::new(None, None, self.pool.intern(target));
+    self.name = QName::new(None, None, self.pool.intern(target)?);
     let trimmed = data.trim_start_matches(chars::is_whitespace);
     // The source position of the data, so a consumer can map a position inside foreign-language data (a `<?php ... ?>`,
     // say) back to the document. The data begins at `text.len() - "?>".len() - trimmed.len()`; walk the token start
@@ -1019,7 +1017,7 @@ impl Parser {
       let message = format!("{:?} is not a valid document type name", &body[..name_len.min(body.len())]);
       return Err(self.error(Error::well_formedness, message));
     }
-    self.doctype_name = Some(self.pool.intern(&body[..name_len]));
+    self.doctype_name = Some(self.pool.intern(&body[..name_len])?);
     let after_name = &body[name_len..];
 
     let (before_bracket, internal_subset) = match after_name.split_once('[') {
@@ -1193,7 +1191,7 @@ impl Parser {
     // A general entity: begin reading its replacement where the reference stood. The pending text is deliberately not
     // flushed, so character data on either side of an entity whose replacement is itself text coalesces into one node,
     // as the data model wants. Markup in the replacement flushes it normally.
-    let name = self.pool.intern(body);
+    let name = self.pool.intern(body)?;
     self.push_general_entity(name, at)?;
     Ok(None)
   }
@@ -1256,7 +1254,7 @@ impl Parser {
   /// expands entities inline instead (`expand_at`).
   fn push_general_entity(&mut self, name: NameId, at: &Location) -> Result<()> {
     self.token_at = at.clone();
-    let display = self.pool.resolve(name).to_owned();
+    let display = self.pool.resolve_own(name).to_owned();
     // WFC: Entity Declared, standalone form. A standalone document may not reference an entity that only the external
     // subset or an external parameter entity declares.
     if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(name)) {
@@ -1329,7 +1327,7 @@ impl Parser {
     let lexical = &body[..name_len];
 
     self.parse_attributes(&body[name_len..], 1 + name_len, text)?;
-    let element = self.pool.intern(lexical);
+    let element = self.pool.intern(lexical)?;
     self.apply_dtd_attributes(element)?;
 
     let namespace_mark = self.scope.mark();
@@ -1452,7 +1450,8 @@ impl Parser {
       let declares_namespace = prefix == Some(XMLNS_PREFIX) || (prefix.is_none() && local == XMLNS_PREFIX);
       let start = values.len();
       self.expand_at(raw, values, true, token, raw_at)?;
-      let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
+      let prefix = prefix.map(|p| self.pool.intern(p)).transpose()?;
+      let name = QName::new(prefix, None, self.pool.intern(local)?);
       self.attributes.push(Attribute { name, value: start..values.len(), declares_namespace, at: name_at, value_at });
     }
   }
@@ -1484,8 +1483,8 @@ impl Parser {
     // The lexical name of each specified attribute, interned to match the DTD's names.
     let mut present: Vec<NameId> = Vec::with_capacity(self.attributes.len());
     for i in 0..self.attributes.len() {
-      let lexical = self.attributes[i].name.to_lexical(&self.pool);
-      present.push(self.pool.intern(&lexical));
+      let lexical = self.attributes[i].name.lexical_own(&self.pool);
+      present.push(self.pool.intern(&lexical)?);
     }
 
     // Collapse the whitespace of specified values whose type is tokenized.
@@ -1510,7 +1509,7 @@ impl Parser {
       // VC: Standalone Document Declaration, which the parser enforces as an error. A default from the external
       // subset or an external parameter entity may not be applied to a standalone document.
       if self.standalone == Some(true) && external_attlist {
-        let name = self.pool.resolve(def.name).to_owned();
+        let name = self.pool.resolve_own(def.name).to_owned();
         let message = format!(
           "attribute \"{name}\" would take a default from the external subset, \
            which a standalone document may not depend on"
@@ -1537,13 +1536,14 @@ impl Parser {
       }
       self.room_for_attribute()?;
       let range = start..self.attribute_text.len();
-      let lexical = self.pool.resolve(def.name).to_owned();
+      let lexical = self.pool.resolve_own(def.name).to_owned();
       let Some((prefix, local)) = chars::split_qname(&lexical) else {
         let message = format!("the DTD declares an attribute with the invalid name {lexical:?}");
         return Err(self.error(Error::well_formedness, message));
       };
       let declares_namespace = prefix == Some(XMLNS_PREFIX) || (prefix.is_none() && local == XMLNS_PREFIX);
-      let name = QName::new(prefix.map(|p| self.pool.intern(p)), None, self.pool.intern(local));
+      let prefix = prefix.map(|p| self.pool.intern(p)).transpose()?;
+      let name = QName::new(prefix, None, self.pool.intern(local)?);
       // A default was never written in the document, so it is located at the start tag it was supplied to.
       self.attributes.push(Attribute {
         name,
@@ -1568,7 +1568,7 @@ impl Parser {
       let value = self.attribute_text[attribute.value].to_owned();
 
       if let Some(prefix) = prefix {
-        let name = self.pool.resolve(prefix);
+        let name = self.pool.resolve_own(prefix);
         let bad = if name == XMLNS_PREFIX {
           Some("the prefix \"xmlns\" cannot be declared".to_owned())
         } else if value.is_empty() {
@@ -1590,7 +1590,7 @@ impl Parser {
         return Err(self.error(Error::namespace, message));
       }
 
-      let namespace = (!value.is_empty()).then(|| self.pool.intern(&value));
+      let namespace = if value.is_empty() { None } else { Some(self.pool.intern(&value)?) };
       self.scope.bind(prefix, namespace);
     }
     Ok(())
@@ -1598,12 +1598,12 @@ impl Parser {
 
   fn resolve_element_name(&mut self, name: &str) -> Result<QName> {
     let (prefix, local) = split_name(name);
-    let prefix = prefix.map(|p| self.pool.intern(p));
+    let prefix = prefix.map(|p| self.pool.intern(p)).transpose()?;
     let namespace = self.scope.resolve(prefix);
     if let Some(prefix) = prefix.filter(|_| namespace.is_none()) {
       return Err(self.undeclared_prefix(prefix));
     }
-    Ok(QName::new(prefix, namespace, self.pool.intern(local)))
+    Ok(QName::new(prefix, namespace, self.pool.intern(local)?))
   }
 
   /// Binds attribute names to namespaces, once every declaration on the tag is in scope.
@@ -1648,7 +1648,7 @@ impl Parser {
           }
         };
       } else if attribute.name.local() == self.lang_name {
-        lang = (!value.is_empty()).then(|| self.pool.intern(&value));
+        lang = if value.is_empty() { None } else { Some(self.pool.intern(&value)?) };
       }
     }
     Ok((space, lang))
@@ -1782,7 +1782,7 @@ impl Parser {
   /// or unparsed entity, is caught here where XML 1.0 §3.1 and §4.1 forbid it.
   ///
   fn expand_general_in_attribute(&mut self, name: &str, out: &mut String, token: &str, at: usize) -> Result<()> {
-    let id = self.pool.intern(name);
+    let id = self.pool.intern(name)?;
     if self.standalone == Some(true) && self.dtd.as_ref().is_some_and(|d| d.general_entity_is_external(id)) {
       let message =
         format!("entity \"{name}\" is declared in the external subset, which a standalone document may not depend on");
@@ -1833,7 +1833,7 @@ impl Parser {
   /// it is long.
   ///
   fn entity_chain(&self, ids: &[NameId], last: &str) -> String {
-    let mut chain: Vec<&str> = ids.iter().map(|&id| self.pool.resolve(id)).collect();
+    let mut chain: Vec<&str> = ids.iter().map(|&id| self.pool.resolve_own(id)).collect();
     chain.push(last);
     if chain.len() > 12 {
       format!("{} -> ... -> {}", chain[..6].join(" -> "), chain[chain.len() - 6..].join(" -> "))
@@ -1859,7 +1859,7 @@ impl Parser {
         name: self.name,
         attributes: Attributes { attributes: &self.attributes, text: &self.attribute_text, pool: Some(&self.pool) },
         xml_space: self.xml_space,
-        xml_lang: self.xml_lang.map(|l| self.pool.resolve(l)),
+        xml_lang: self.xml_lang.map(|l| self.pool.resolve_own(l)),
       },
       TokenKind::EndElement => TokenRef::EndElement { name: self.name },
       TokenKind::Text => TokenRef::Text(&self.text),
@@ -1875,21 +1875,21 @@ impl Parser {
   ///
   #[must_use]
   pub fn local_name(&self) -> &str {
-    self.pool.resolve(self.name.local())
+    self.pool.resolve_own(self.name.local())
   }
 
   /// The prefix of the current element name, if it has one.
   ///
   #[must_use]
   pub fn prefix(&self) -> Option<&str> {
-    self.name.prefix.map(|p| self.pool.resolve(p))
+    self.name.prefix.map(|p| self.pool.resolve_own(p))
   }
 
   /// The namespace name of the current element, if it is in one.
   ///
   #[must_use]
   pub fn namespace_uri(&self) -> Option<&str> {
-    self.name.namespace().map(|n| self.pool.resolve(n))
+    self.name.namespace().map(|n| self.pool.resolve_own(n))
   }
 
   /// The value of the attribute with this expanded name, if the current tag has it.
@@ -1917,7 +1917,7 @@ impl Parser {
   ///
   #[must_use]
   pub fn xml_lang(&self) -> Option<&str> {
-    self.xml_lang.map(|l| self.pool.resolve(l))
+    self.xml_lang.map(|l| self.pool.resolve_own(l))
   }
 
   /// The base URI in effect for the current event (XML Base), if one is known.
@@ -2166,7 +2166,7 @@ impl Parser {
 
   /// Builds the namespace error for a prefix with no binding in scope, giving the fix (add an `xmlns:` declaration).
   fn undeclared_prefix(&self, prefix: NameId) -> Error {
-    let name = self.pool.resolve(prefix);
+    let name = self.pool.resolve_own(prefix);
     let message =
       format!("prefix \"{name}\" is not bound; add an xmlns:{name} attribute to this element or an ancestor");
     self.error(Error::namespace, message)

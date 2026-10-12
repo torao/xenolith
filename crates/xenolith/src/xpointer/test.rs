@@ -282,7 +282,7 @@ impl SchemeSelector for LastChildSelector {
     let doc = self.doc.as_ref()?;
     let root = doc.document_element()?;
     let last = doc.children(root).filter(|&node| doc.node_type(node) == NodeType::ELEMENT_NODE).last()?;
-    Some(Box::new(DomSource::at(doc, last)))
+    Some(Box::new(DomSource::at(doc.node(last).ok()?)))
   }
 }
 

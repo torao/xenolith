@@ -215,10 +215,11 @@ pub enum ContentSpec {
 ///
 /// let mut pool = NamePool::new();
 /// let mut dtd = Dtd::default();
-/// dtd.declare_element(pool.intern("note"), ContentSpec::Mixed(vec![])); // <!ELEMENT note (#PCDATA)>
+/// dtd.declare_element(pool.intern("note")?, ContentSpec::Mixed(vec![])); // <!ELEMENT note (#PCDATA)>
 ///
-/// let elements: Vec<_> = dtd.elements().map(|(name, _)| pool.resolve(name).to_owned()).collect();
+/// let elements: Vec<_> = dtd.elements().filter_map(|(name, _)| pool.resolve(name)).collect();
 /// assert_eq!(elements, ["note"]);
+/// # Ok::<(), xenolith::Error>(())
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct Dtd {

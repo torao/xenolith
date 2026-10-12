@@ -420,7 +420,7 @@ impl DtdParser<'_> {
         }
         None => {
           // A parameter entity must be declared before it is referenced (WFC: Entity Declared).
-          let name = self.pool.resolve(name).to_owned();
+          let name = self.pool.resolve_own(name).to_owned();
           return Err(self.error(format!("parameter entity \"{name}\" is referenced before it is declared")));
         }
       }
@@ -455,7 +455,7 @@ impl DtdParser<'_> {
   ) -> Break {
     let (public_id, system_id, base) = entity;
     Break::Pause(Box::new(ExternalPe {
-      name: self.pool.resolve(name).to_owned(),
+      name: self.pool.resolve_own(name).to_owned(),
       public_id,
       system_id,
       base,
@@ -681,7 +681,7 @@ impl DtdParser<'_> {
     let spec = self.content_spec()?;
     self.close_declaration()?;
     if !self.dtd.declare_element(name, spec) {
-      let name = self.pool.resolve(name).to_owned();
+      let name = self.pool.resolve_own(name).to_owned();
       return Err(self.error(format!("element \"{name}\" is declared more than once")));
     }
     Ok(())
@@ -926,7 +926,7 @@ impl DtdParser<'_> {
     let id = self.external_id(true)?;
     self.close_declaration()?;
     if !self.dtd.declare_notation(name, id) {
-      let name = self.pool.resolve(name).to_owned();
+      let name = self.pool.resolve_own(name).to_owned();
       return Err(self.error(format!("notation \"{name}\" is declared more than once")));
     }
     Ok(())
@@ -990,7 +990,7 @@ impl DtdParser<'_> {
             return Err(self.pause(name, (public_id, system_id, base), start..end, true));
           }
           None => {
-            let name = self.pool.resolve(name).to_owned();
+            let name = self.pool.resolve_own(name).to_owned();
             return Err(self.error(format!("parameter entity \"{name}\" is referenced before it is declared")));
           }
         }
@@ -1064,11 +1064,11 @@ impl DtdParser<'_> {
     let name = self.name("entity")?;
     self.expect(';')?;
     if require_declared && self.dtd.general_entity(name).is_none() {
-      let display = self.pool.resolve(name).to_owned();
+      let display = self.pool.resolve_own(name).to_owned();
       return Err(self.error(format!("entity \"{display}\" is referenced in a default value before it is declared")));
     }
     out.push('&');
-    out.push_str(self.pool.resolve(name));
+    out.push_str(self.pool.resolve_own(name));
     out.push(';');
     Ok(())
   }
@@ -1131,7 +1131,7 @@ impl DtdParser<'_> {
       return Err(self.error(format!("expected a {role} name, found {:?}", self.clip())));
     }
     self.pos += len;
-    Ok(self.pool.intern(&name))
+    self.intern(&name)
   }
 
   /// Reads a name token, interning it.
@@ -1142,7 +1142,13 @@ impl DtdParser<'_> {
       return Err(self.error(format!("expected a name token, found {:?}", self.clip())));
     }
     self.pos += len;
-    Ok(self.pool.intern(&token))
+    self.intern(&token)
+  }
+
+  /// Interns `name`, failing where reading has reached if the pool is full.
+  fn intern(&mut self, name: &str) -> Broken<NameId> {
+    let at = self.layout.location_at(self.buf, self.pos);
+    self.pool.intern(name).map_err(|error| Break::Fatal(error.at(at)))
   }
 
   /// Reads a quoted `SystemLiteral`. Its content is not checked.

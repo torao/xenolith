@@ -312,7 +312,7 @@ impl<'d> DomModel<'d> {
   fn prefix_key(&self, prefix: Option<NameId>) -> (bool, String) {
     match prefix {
       None => (false, String::new()),
-      Some(name) => (true, self.doc.pool().resolve(name).to_owned()),
+      Some(name) => (true, self.doc.pool().resolve_own(name).to_owned()),
     }
   }
 
@@ -463,7 +463,7 @@ impl Model for DomModel<'_> {
       },
       DomNode::Namespace { prefix, .. } => Some(ExpandedName {
         namespace: None,
-        local: prefix.map(|name| self.doc.pool().resolve(name).to_owned()).unwrap_or_default(),
+        local: prefix.map(|name| self.doc.pool().resolve_own(name).to_owned()).unwrap_or_default(),
       }),
       DomNode::Text(_) => None,
     }
@@ -480,7 +480,7 @@ impl Model for DomModel<'_> {
       },
       // A namespace node's name is the prefix it binds, and nothing for the default namespace.
       DomNode::Namespace { prefix, .. } => {
-        Some(prefix.map_or_else(String::new, |name| self.doc.pool().resolve(name).to_owned()))
+        Some(prefix.map_or_else(String::new, |name| self.doc.pool().resolve_own(name).to_owned()))
       }
       DomNode::Text(_) => None,
     }
@@ -530,7 +530,7 @@ impl Model for DomModel<'_> {
     match node {
       DomNode::Tree(id) | DomNode::Text(id) => Node::Dom(id),
       DomNode::Namespace { element, prefix } => {
-        Node::Namespace { element, prefix: prefix.map(|prefix| self.doc.pool().resolve(prefix).to_owned()) }
+        Node::Namespace { element, prefix: prefix.map(|prefix| self.doc.pool().resolve_own(prefix).to_owned()) }
       }
     }
   }

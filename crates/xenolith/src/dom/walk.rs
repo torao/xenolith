@@ -18,8 +18,9 @@ pub enum Visit {
 
 /// An iterator to walk over a subtree in document order, reporting every node twice: once entering it, once leaving it.
 ///
-/// This is created by [`Document::walk`]. It yields `(`[`Visit`]`, `[`NodeId`]`)`, and the two sides of a node always
-/// pair up and nest properly, so a walk of `<a><b/></a>` reports `<a>`, `<b>`, `</b>`, `</a>`. Keeping the
+/// [`NodeRef::walk`](crate::dom::NodeRef::walk) walks this way, yielding
+/// `(`[`Visit`]`, `[`NodeRef`](crate::dom::NodeRef)`)`; the crate walks with [`NodeId`]s directly. The two sides of a
+/// node always pair up and nest properly, so a walk of `<a><b/></a>` reports `<a>`, `<b>`, `</b>`, `</a>`. Keeping the
 /// [`Enter`](Visit::Enter) items alone gives preorder, the order the nodes appear in the document. The walk stays
 /// inside the subtree it started in and ends once it leaves that node, so it never reports a following sibling of the
 /// start.
@@ -46,14 +47,14 @@ pub enum Visit {
 /// let root = doc.create_element("ul")?;
 /// for word in ["one", "two"] {
 ///   let item = doc.create_element("li")?;
-///   let text = doc.create_text_node(word);
+///   let text = doc.create_text_node(word)?;
 ///   doc.append_child(item, text)?;
 ///   doc.append_child(root, item)?;
 /// }
 /// doc.append_child(doc.document_node(), root)?;
 ///
 /// let names: Vec<String> =
-///     doc.walk(root).filter(|(visit, _)| *visit == Visit::Enter).map(|(_, node)| doc.node_name(node)).collect();
+///   doc.node(root)?.walk().filter(|(visit, _)| *visit == Visit::Enter).map(|(_, node)| node.node_name()).collect();
 /// assert_eq!(names, ["ul", "li", "#text", "li", "#text"]);
 /// # Ok::<(), xenolith::dom::DomException>(())
 /// ```

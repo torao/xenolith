@@ -153,10 +153,10 @@ enum Step {
 ///   doc.end_document()?;
 /// }
 /// let doc = builder.into_document();
-/// let root = doc.document_element().unwrap();
-/// assert_eq!(doc.node_name(root), "e:note");
-/// assert_eq!(doc.namespace_uri(root), Some("urn:example"));
-/// assert_eq!(doc.text_content(root), "hi");
+/// let root = doc.node(doc.document_element().unwrap())?;
+/// assert_eq!(root.node_name(), "e:note");
+/// assert_eq!(root.namespace_uri(), Some("urn:example"));
+/// assert_eq!(root.text_content(), "hi");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug)]

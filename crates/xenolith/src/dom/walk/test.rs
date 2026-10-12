@@ -18,7 +18,7 @@ fn trace(doc: &Document, start: NodeId) -> String {
 fn reports_both_sides_of_every_node_in_order() {
   let mut doc = Document::new();
   let r = doc.create_element("r").unwrap();
-  let a = doc.create_text_node("a");
+  let a = doc.create_text_node("a").expect("created");
   let b = doc.create_element("b").unwrap();
   let c = doc.create_element("c").unwrap();
   doc.append_child(r, a).unwrap();

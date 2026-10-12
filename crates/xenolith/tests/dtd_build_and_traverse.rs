@@ -11,9 +11,9 @@ use xenolith::name::NamePool;
 #[test]
 fn a_dtd_assembled_by_hand_reads_back_the_way_a_parsed_one_does() {
   let mut pool = NamePool::new();
-  let note = pool.intern("note");
-  let body = pool.intern("body");
-  let id = pool.intern("id");
+  let note = pool.intern("note").expect("room in the pool");
+  let body = pool.intern("body").expect("room in the pool");
+  let id = pool.intern("id").expect("room in the pool");
 
   let mut dtd = Dtd::default();
   assert!(dtd.declare_element(note, ContentSpec::Children(ContentParticle::Name(body, Occurs::Once))));
@@ -32,8 +32,8 @@ fn a_second_declaration_of_a_name_leaves_the_first_standing() {
   // XML makes a repeated <!ELEMENT> or <!NOTATION> an error. The first declaration is the one that counts, and the
   // return says the second was refused.
   let mut pool = NamePool::new();
-  let a = pool.intern("a");
-  let gif = pool.intern("gif");
+  let a = pool.intern("a").expect("room in the pool");
+  let gif = pool.intern("gif").expect("room in the pool");
 
   let mut dtd = Dtd::default();
   assert!(dtd.declare_element(a, ContentSpec::Empty));
@@ -51,8 +51,8 @@ fn a_second_declaration_of_a_name_leaves_the_first_standing() {
 fn attribute_declarations_accumulate() {
   // XML allows several <!ATTLIST> for one element; they add up rather than replace.
   let mut pool = NamePool::new();
-  let e = pool.intern("e");
-  let (one, two) = (pool.intern("one"), pool.intern("two"));
+  let e = pool.intern("e").expect("room in the pool");
+  let (one, two) = (pool.intern("one").expect("room in the pool"), pool.intern("two").expect("room in the pool"));
 
   let mut dtd = Dtd::default();
   dtd.declare_attributes(e, [AttDef { name: one, att_type: AttType::Cdata, default: DefaultDecl::Implied }]);
@@ -73,7 +73,7 @@ fn every_kind_of_declaration_can_be_walked() {
   let dtd = parse_subset(subset, &mut pool, Location::unknown()).expect("a well-formed subset");
 
   let names = |ids: Vec<xenolith::name::NameId>| {
-    let mut out: Vec<String> = ids.iter().map(|&id| pool.resolve(id).to_owned()).collect();
+    let mut out: Vec<String> = ids.iter().map(|&id| pool.resolve(id).expect("a name of the pool").to_owned()).collect();
     out.sort();
     out
   };
@@ -93,7 +93,7 @@ fn every_kind_of_declaration_can_be_walked() {
 fn a_parsed_dtd_can_be_extended_by_hand() {
   let mut pool = NamePool::new();
   let mut dtd = parse_subset("<!ELEMENT a EMPTY>", &mut pool, Location::unknown()).expect("well-formed");
-  let b = pool.intern("b");
+  let b = pool.intern("b").expect("room in the pool");
 
   assert!(dtd.declare_element(b, ContentSpec::Any));
   assert!(dtd.has_element(pool.get("a").expect("interned while parsing")));

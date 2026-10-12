@@ -234,7 +234,7 @@ impl Report {
 /// }
 /// assert!(validators.report().is_valid());
 /// let doc = builder.into_document();
-/// assert_eq!(doc.node_name(doc.document_element().unwrap()), "r");
+/// assert_eq!(doc.node(doc.document_element().unwrap())?.node_name(), "r");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///

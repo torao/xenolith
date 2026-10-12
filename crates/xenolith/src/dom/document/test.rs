@@ -6,7 +6,7 @@ fn sample() -> (Document, NodeId, NodeId, NodeId) {
   let r = doc.create_element("r").unwrap();
   doc.set_attribute(r, "a", "1").unwrap();
   let b = doc.create_element("b").unwrap();
-  let text = doc.create_text_node("text");
+  let text = doc.create_text_node("text").expect("created");
   let c = doc.create_element("c").unwrap();
   doc.append_child(r, b).unwrap();
   doc.append_child(r, text).unwrap();
@@ -113,7 +113,7 @@ fn a_cycle_is_refused() {
 #[test]
 fn a_leaf_cannot_take_children() {
   let mut doc = Document::new();
-  let text = doc.create_text_node("t");
+  let text = doc.create_text_node("t").expect("created");
   let child = doc.create_element("c").unwrap();
   let error = doc.append_child(text, child).unwrap_err();
   assert_eq!(error.code(), ExceptionCode::HIERARCHY_REQUEST_ERR);
@@ -289,7 +289,7 @@ fn a_document_fragment_inserts_its_children() {
   let mut doc = Document::new();
   let root = doc.create_element("root").unwrap();
   doc.append_child(doc.document_node(), root).unwrap();
-  let fragment = doc.create_document_fragment();
+  let fragment = doc.create_document_fragment().expect("created");
   let (a, b) = (doc.create_element("a").unwrap(), doc.create_element("b").unwrap());
   doc.append_child(fragment, a).unwrap();
   doc.append_child(fragment, b).unwrap();
@@ -312,14 +312,14 @@ fn a_document_takes_only_one_root_element() {
 #[test]
 fn a_document_refuses_bare_text() {
   let mut doc = Document::new();
-  let text = doc.create_text_node("x");
+  let text = doc.create_text_node("x").expect("created");
   assert_eq!(doc.append_child(doc.document_node(), text).unwrap_err().code(), ExceptionCode::HIERARCHY_REQUEST_ERR);
 }
 
 #[test]
 fn a_fragment_of_two_elements_is_refused_by_the_document_whole() {
   let mut doc = Document::new();
-  let fragment = doc.create_document_fragment();
+  let fragment = doc.create_document_fragment().expect("created");
   let (a, b) = (doc.create_element("a").unwrap(), doc.create_element("b").unwrap());
   doc.append_child(fragment, a).unwrap();
   doc.append_child(fragment, b).unwrap();
@@ -343,13 +343,13 @@ fn namespace_rules_are_enforced() {
 #[test]
 fn base_uri_walks_to_the_nearest_recorded_base() {
   let mut doc = Document::new();
-  doc.set_document_base(Some("file:///doc.xml"));
+  doc.set_document_base(Some("file:///doc.xml")).unwrap();
   let a = doc.create_element("a").unwrap();
   doc.append_child(doc.document_node(), a).unwrap();
   let b = doc.create_element("b").unwrap();
   doc.append_child(a, b).unwrap();
-  doc.set_element_base(b, Some("file:///sub/"));
-  let text = doc.create_text_node("x");
+  doc.set_element_base(b, Some("file:///sub/")).unwrap();
+  let text = doc.create_text_node("x").expect("created");
   doc.append_child(b, text).unwrap();
 
   assert_eq!(doc.base_uri(a).as_deref(), Some("file:///doc.xml"), "falls back to the document base");
@@ -369,6 +369,7 @@ fn get_elements_by_tag_name_searches_under_the_node_it_is_given() {
   assert_eq!(doc.get_elements_by_tag_name(b, "*").length(), 0, "nothing is under `b`");
 
   // The same lists through a `NodeRef`, which reads the way `Element.getElementsByTagName` does.
-  assert_eq!(doc.node(root).get_elements_by_tag_name("*").length(), 2);
-  assert_eq!(doc.node(root).get_elements_by_tag_name_ns(Some("*"), "c").length(), 1);
+  let root = doc.node(root).expect("a node of the document");
+  assert_eq!(root.get_elements_by_tag_name("*").length(), 2);
+  assert_eq!(root.get_elements_by_tag_name_ns(Some("*"), "c").length(), 1);
 }

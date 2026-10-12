@@ -8,7 +8,7 @@ fn parse(subset: &str) -> Result<(Dtd, NamePool)> {
 
 fn general(subset: &str, name: &str) -> GeneralEntity {
   let (dtd, mut pool) = parse(subset).expect("parses");
-  dtd.general_entity(pool.intern(name)).expect("declared").clone()
+  dtd.general_entity(pool.intern(name).expect("interned")).expect("declared").clone()
 }
 
 #[test]
@@ -31,10 +31,10 @@ fn expands_character_references_but_keeps_general_ones_in_entity_values() {
 #[test]
 fn reads_external_and_unparsed_entities() {
   let (dtd, mut pool) = parse("<!ENTITY logo SYSTEM \"logo.png\" NDATA png>").unwrap();
-  let logo = dtd.general_entity(pool.intern("logo")).unwrap().clone();
+  let logo = dtd.general_entity(pool.intern("logo").expect("interned")).unwrap().clone();
   let GeneralEntity::Unparsed { system_id, notation, .. } = logo else { panic!("expected an unparsed entity") };
   assert_eq!(system_id, "logo.png");
-  assert_eq!(pool.resolve(notation), "png");
+  assert_eq!(pool.resolve_own(notation), "png");
 
   assert!(matches!(
     general("<!ENTITY chap SYSTEM \"chap1.xml\">", "chap"),
@@ -57,8 +57,12 @@ fn reads_element_and_attlist_declarations() {
   let subset = "<!ELEMENT note (to, from, body)>\
                 <!ATTLIST note id ID #REQUIRED priority (high|low) \"low\" lang CDATA #IMPLIED>";
   let (dtd, mut pool) = parse(subset).unwrap();
-  let note = pool.intern("note");
-  let (to, from, body) = (pool.intern("to"), pool.intern("from"), pool.intern("body"));
+  let note = pool.intern("note").expect("interned");
+  let (to, from, body) = (
+    pool.intern("to").expect("interned"),
+    pool.intern("from").expect("interned"),
+    pool.intern("body").expect("interned"),
+  );
   assert_eq!(
     dtd.content_spec(note),
     Some(&ContentSpec::Children(ContentParticle::Seq(
@@ -73,10 +77,13 @@ fn reads_element_and_attlist_declarations() {
 
   let attlist = dtd.attlist(note).expect("has an attlist");
   assert_eq!(attlist.len(), 3);
-  assert_eq!(attlist[0].name, pool.intern("id"));
+  assert_eq!(attlist[0].name, pool.intern("id").expect("interned"));
   assert_eq!(attlist[0].att_type, AttType::Id);
   assert_eq!(attlist[0].default, DefaultDecl::Required);
-  assert_eq!(attlist[1].att_type, AttType::Enumeration(vec![pool.intern("high"), pool.intern("low")]));
+  assert_eq!(
+    attlist[1].att_type,
+    AttType::Enumeration(vec![pool.intern("high").expect("interned"), pool.intern("low").expect("interned")])
+  );
   assert_eq!(attlist[1].default, DefaultDecl::Default("low".to_owned()));
   assert_eq!(attlist[2].default, DefaultDecl::Implied);
 }
@@ -84,14 +91,14 @@ fn reads_element_and_attlist_declarations() {
 #[test]
 fn tokenized_defaults_are_whitespace_collapsed() {
   let (dtd, mut pool) = parse("<!ATTLIST e refs IDREFS \"  a   b  \">").unwrap();
-  let attlist = dtd.attlist(pool.intern("e")).unwrap();
+  let attlist = dtd.attlist(pool.intern("e").expect("interned")).unwrap();
   assert_eq!(attlist[0].default, DefaultDecl::Default("a b".to_owned()));
 }
 
 #[test]
 fn a_cdata_default_keeps_its_whitespace() {
   let (dtd, mut pool) = parse("<!ATTLIST e note CDATA \"  spaced  out  \">").unwrap();
-  let attlist = dtd.attlist(pool.intern("e")).unwrap();
+  let attlist = dtd.attlist(pool.intern("e").expect("interned")).unwrap();
   // Literal whitespace still normalizes to spaces, but runs are not collapsed for CDATA.
   assert_eq!(attlist[0].default, DefaultDecl::Default("  spaced  out  ".to_owned()));
 }
@@ -100,8 +107,8 @@ fn a_cdata_default_keeps_its_whitespace() {
 fn reads_notation_types_and_declarations() {
   let subset = "<!NOTATION png SYSTEM \"image/png\"><!ATTLIST img type NOTATION (png) #IMPLIED>";
   let (dtd, mut pool) = parse(subset).unwrap();
-  let attlist = dtd.attlist(pool.intern("img")).unwrap();
-  assert_eq!(attlist[0].att_type, AttType::Notation(vec![pool.intern("png")]));
+  let attlist = dtd.attlist(pool.intern("img").expect("interned")).unwrap();
+  assert_eq!(attlist[0].att_type, AttType::Notation(vec![pool.intern("png").expect("interned")]));
 }
 
 #[test]
@@ -114,7 +121,7 @@ fn comments_and_processing_instructions_are_skipped() {
 fn keyword_scanning_does_not_confuse_prefixes() {
   // ID must not swallow the start of IDREF, nor ENTITY the start of ENTITIES.
   let (dtd, mut pool) = parse("<!ATTLIST e a IDREF #IMPLIED b ENTITIES #IMPLIED>").unwrap();
-  let attlist = dtd.attlist(pool.intern("e")).unwrap();
+  let attlist = dtd.attlist(pool.intern("e").expect("interned")).unwrap();
   assert_eq!(attlist[0].att_type, AttType::IdRef);
   assert_eq!(attlist[1].att_type, AttType::Entities);
 }
@@ -196,10 +203,13 @@ fn declarations_from_an_external_pe_in_the_internal_subset_are_external() {
   let internal = "<!ENTITY before 'b'><!ENTITY % ext SYSTEM 'urn:ext'>%ext;<!ENTITY after 'a'>";
   let (dtd, mut pool) = assemble(internal, &[("urn:ext", "<!ENTITY inside 'i'><!ATTLIST e x CDATA 'd'>")]).unwrap();
 
-  assert!(dtd.general_entity_is_external(pool.intern("inside")), "declared in the external parameter entity");
-  assert!(dtd.attlist_is_external(pool.intern("e")), "declared in the external parameter entity");
-  assert!(!dtd.general_entity_is_external(pool.intern("before")), "declared in the internal subset");
-  assert!(!dtd.general_entity_is_external(pool.intern("after")), "declared in the internal subset");
+  assert!(
+    dtd.general_entity_is_external(pool.intern("inside").expect("interned")),
+    "declared in the external parameter entity"
+  );
+  assert!(dtd.attlist_is_external(pool.intern("e").expect("interned")), "declared in the external parameter entity");
+  assert!(!dtd.general_entity_is_external(pool.intern("before").expect("interned")), "declared in the internal subset");
+  assert!(!dtd.general_entity_is_external(pool.intern("after").expect("interned")), "declared in the internal subset");
 }
 
 #[test]
@@ -210,8 +220,8 @@ fn an_external_pe_in_the_internal_subset_is_read_by_external_subset_rules() {
   let external = "<!ELEMENT a %model;><![INCLUDE[<!ELEMENT b EMPTY>]]>";
   let (dtd, mut pool) = assemble(internal, &[("urn:ext", external)]).unwrap();
 
-  assert_eq!(dtd.content_spec(pool.intern("a")), Some(&ContentSpec::Empty));
-  assert!(dtd.has_element(pool.intern("b")));
+  assert_eq!(dtd.content_spec(pool.intern("a").expect("interned")), Some(&ContentSpec::Empty));
+  assert!(dtd.has_element(pool.intern("b").expect("interned")));
 }
 
 #[test]
@@ -228,9 +238,12 @@ fn nested_external_pes_in_the_internal_subset_are_external() {
   let outer = "<!ENTITY % inner SYSTEM 'urn:inner'>%inner;<!ENTITY middle 'm'>";
   let (dtd, mut pool) = assemble(internal, &[("urn:outer", outer), ("urn:inner", "<!ENTITY deepest 'd'>")]).unwrap();
 
-  assert!(dtd.general_entity_is_external(pool.intern("deepest")));
-  assert!(dtd.general_entity_is_external(pool.intern("middle")), "after the inner entity, still in the outer one");
-  assert!(!dtd.general_entity_is_external(pool.intern("last")));
+  assert!(dtd.general_entity_is_external(pool.intern("deepest").expect("interned")));
+  assert!(
+    dtd.general_entity_is_external(pool.intern("middle").expect("interned")),
+    "after the inner entity, still in the outer one"
+  );
+  assert!(!dtd.general_entity_is_external(pool.intern("last").expect("interned")));
 }
 
 #[test]
@@ -290,7 +303,7 @@ fn a_declaration_in_an_include_section_may_not_straddle_a_pe() {
 fn an_external_pe_inside_a_declaration_is_properly_nested() {
   let (dtd, mut pool) =
     assemble_external("<!ENTITY % m SYSTEM 'urn:m'><!ELEMENT a %m;>", &[("urn:m", "EMPTY")]).unwrap();
-  assert_eq!(dtd.content_spec(pool.intern("a")), Some(&ContentSpec::Empty));
+  assert_eq!(dtd.content_spec(pool.intern("a").expect("interned")), Some(&ContentSpec::Empty));
 }
 
 /// Parses `external` as an external subset that references no external parameter entity.
@@ -303,14 +316,20 @@ fn an_external_pe_in_an_entity_value_is_included_as_literal_data() {
   // No spaces are added around the text, and its quotes do not close the literal (XML 1.0 §4.4.5).
   let external = "<!ENTITY % q SYSTEM 'urn:q'><!ENTITY e \"[%q;]\">";
   let (dtd, mut pool) = assemble_external(external, &[("urn:q", "a\"b'c")]).unwrap();
-  assert_eq!(dtd.general_entity(pool.intern("e")), Some(&GeneralEntity::Internal { value: "[a\"b'c]".to_owned() }));
+  assert_eq!(
+    dtd.general_entity(pool.intern("e").expect("interned")),
+    Some(&GeneralEntity::Internal { value: "[a\"b'c]".to_owned() })
+  );
 }
 
 #[test]
 fn a_pe_reference_in_an_external_pe_included_in_a_literal_is_expanded() {
   let external = "<!ENTITY % i 'I'><!ENTITY % q SYSTEM 'urn:q'><!ENTITY e '[%q;]'>";
   let (dtd, mut pool) = assemble_external(external, &[("urn:q", "x%i;y")]).unwrap();
-  assert_eq!(dtd.general_entity(pool.intern("e")), Some(&GeneralEntity::Internal { value: "[xIy]".to_owned() }));
+  assert_eq!(
+    dtd.general_entity(pool.intern("e").expect("interned")),
+    Some(&GeneralEntity::Internal { value: "[xIy]".to_owned() })
+  );
 }
 
 /// The system identifier, line, and column of the error `result` failed with.
@@ -423,11 +442,11 @@ fn an_external_entity_records_the_resource_it_was_declared_in() {
     Some(GeneralEntity::External { base, .. } | GeneralEntity::Unparsed { base, .. }) => base.clone(),
     other => panic!("not an external entity: {other:?}"),
   };
-  assert_eq!(base_of(dtd.general_entity(pool.intern("here"))).as_deref(), Some("doc"));
-  assert_eq!(base_of(dtd.general_entity(pool.intern("there"))).as_deref(), Some("urn:p"));
-  assert_eq!(base_of(dtd.general_entity(pool.intern("pic"))).as_deref(), Some("urn:p"));
+  assert_eq!(base_of(dtd.general_entity(pool.intern("here").expect("interned"))).as_deref(), Some("doc"));
+  assert_eq!(base_of(dtd.general_entity(pool.intern("there").expect("interned"))).as_deref(), Some("urn:p"));
+  assert_eq!(base_of(dtd.general_entity(pool.intern("pic").expect("interned"))).as_deref(), Some("urn:p"));
   assert!(matches!(
-    dtd.parameter_entity(pool.intern("p")),
+    dtd.parameter_entity(pool.intern("p").expect("interned")),
     Some(ParameterEntity::External { base: Some(base), .. }) if base == "doc"
   ));
 }

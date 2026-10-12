@@ -29,7 +29,7 @@ fn deep_document() -> (Document, NodeId) {
     doc.append_child(deepest, child).expect("a child");
     deepest = child;
   }
-  let text = doc.create_text_node("deep");
+  let text = doc.create_text_node("deep").expect("room in the document");
   doc.append_child(deepest, text).expect("the text at the bottom");
   (doc, root)
 }
@@ -38,7 +38,7 @@ fn deep_document() -> (Document, NodeId) {
 fn text_content_does_not_recurse_on_depth() {
   on_a_small_stack(|| {
     let (doc, root) = deep_document();
-    assert_eq!(doc.text_content(root), "deep");
+    assert_eq!(doc.node(root).expect("a node of the document").text_content(), "deep");
   });
 }
 
@@ -48,7 +48,7 @@ fn a_deep_clone_does_not_recurse_on_depth() {
     let (mut doc, root) = deep_document();
     let copy = doc.clone_node(root, true).expect("a deep copy");
     assert_ne!(copy, root);
-    assert_eq!(doc.text_content(copy), "deep", "the copy carries the whole subtree");
+    assert_eq!(doc.node(copy).expect("a node of the document").text_content(), "deep", "the copy is the whole subtree");
   });
 }
 
@@ -57,8 +57,9 @@ fn descending_does_not_recurse_on_depth() {
   on_a_small_stack(|| {
     let (doc, root) = deep_document();
     // `get_elements_by_tag_name` walks every descendant.
-    assert_eq!(doc.get_elements_by_tag_name(doc.document_node(), "e").length(), DEPTH);
-    assert_eq!(doc.node_name(root), "e");
+    let top = doc.node(doc.document_node()).expect("the document node");
+    assert_eq!(top.get_elements_by_tag_name("e").length(), DEPTH);
+    assert_eq!(doc.node(root).expect("a node of the document").node_name(), "e");
   });
 }
 

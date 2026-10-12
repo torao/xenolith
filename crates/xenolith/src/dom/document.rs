@@ -23,11 +23,12 @@ use crate::dom::walk::{Visit, Walk};
 ///
 /// The arena retains each node's storage for the document's lifetime, even after
 /// [`remove_child`](Self::remove_child) detaches the node. Dropping the document frees all of its node storage. A
-/// document can store at most `u32::MAX` nodes; attempting to create more causes a panic.
+/// document can store at most 2^32 nodes; creating more is refused with [`ExceptionCode::NOT_SUPPORTED_ERR`].
 ///
-/// Every method that takes a [`NodeId`] requires this document. A handle from elsewhere is rejected: a method that
-/// returns a [`Result`] reports [`ExceptionCode::WRONG_DOCUMENT_ERR`], and an accessor that returns a value panics
-/// rather than reporting it. Use [`owns`](Self::owns) to test a handle whose origin is in doubt.
+/// Every method that takes a [`NodeId`] requires this document. A handle from elsewhere is rejected with
+/// [`ExceptionCode::WRONG_DOCUMENT_ERR`]. Nodes are read through [`node`](Self::node), which checks the handle once and
+/// returns a [`NodeRef`]; every node reached from it is of this document. Use [`owns`](Self::owns) to test a handle
+/// whose origin is in doubt.
 ///
 /// # Examples
 ///
@@ -36,13 +37,17 @@ use crate::dom::walk::{Visit, Walk};
 ///
 /// let mut doc = Document::new();
 /// let root = doc.create_element("greeting")?;
-/// let hello = doc.create_text_node("Hello");
+/// let hello = doc.create_text_node("Hello")?;
 /// doc.append_child(root, hello)?;
 /// doc.append_child(doc.document_node(), root)?;
 ///
 /// assert_eq!(doc.document_element(), Some(root));
-/// assert_eq!(doc.node_type(root), NodeType::ELEMENT_NODE);
-/// assert_eq!(doc.text_content(doc.document_node()), "Hello");
+/// assert_eq!(doc.node(root)?.node_type(), NodeType::ELEMENT_NODE);
+/// assert_eq!(doc.node(doc.document_node())?.text_content(), "Hello");
+///
+/// // A handle of another document is refused where it is read, rather than taking the process down.
+/// let other = Document::new();
+/// assert!(other.node(root).is_err());
 /// # Ok::<(), xenolith::dom::DomException>(())
 /// ```
 #[derive(Debug)]
@@ -114,7 +119,7 @@ impl Document {
   /// [`ExceptionCode::INVALID_CHARACTER_ERR`] if `qualified_name` is not a legal name.
   pub fn create_element(&mut self, qualified_name: &str) -> Result<NodeId> {
     let name = self.parse_qname(qualified_name, None)?;
-    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None })))
+    self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None }))
   }
 
   /// Creates an element in a namespace, from a namespace name and a qualified name. The new node is not yet attached.
@@ -126,26 +131,35 @@ impl Document {
   /// the `xml` prefix bound to anything but the XML namespace).
   pub fn create_element_ns(&mut self, namespace: Option<&str>, qualified_name: &str) -> Result<NodeId> {
     check_qname_namespace(namespace, qualified_name, false)?;
-    let namespace = namespace.map(|ns| self.pool.intern(ns));
+    let namespace = namespace.map(|ns| self.intern(ns)).transpose()?;
     let name = self.parse_qname(qualified_name, namespace)?;
-    Ok(self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None })))
+    self.push(NodeData::Element(ElementData { name, attributes: Vec::new(), base: None }))
   }
 
   /// Creates a text node.
-  #[must_use]
-  pub fn create_text_node(&mut self, data: &str) -> NodeId {
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NOT_SUPPORTED_ERR`] if the document already holds as many nodes as it can, `u32::MAX`.
+  pub fn create_text_node(&mut self, data: &str) -> Result<NodeId> {
     self.push(NodeData::Text(data.to_owned()))
   }
 
   /// Creates a comment.
-  #[must_use]
-  pub fn create_comment(&mut self, data: &str) -> NodeId {
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NOT_SUPPORTED_ERR`] if the document already holds as many nodes as it can, `u32::MAX`.
+  pub fn create_comment(&mut self, data: &str) -> Result<NodeId> {
     self.push(NodeData::Comment(data.to_owned()))
   }
 
   /// Creates a CDATA section.
-  #[must_use]
-  pub fn create_cdata_section(&mut self, data: &str) -> NodeId {
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NOT_SUPPORTED_ERR`] if the document already holds as many nodes as it can, `u32::MAX`.
+  pub fn create_cdata_section(&mut self, data: &str) -> Result<NodeId> {
     self.push(NodeData::CdataSection(data.to_owned()))
   }
 
@@ -158,13 +172,16 @@ impl Document {
     if !chars::is_name(target) {
       return Err(DomException::new(ExceptionCode::INVALID_CHARACTER_ERR, invalid_name_message(target, "PI target")));
     }
-    let target = self.pool.intern(target);
-    Ok(self.push(NodeData::ProcessingInstruction { target, data: data.to_owned() }))
+    let target = self.intern(target)?;
+    self.push(NodeData::ProcessingInstruction { target, data: data.to_owned() })
   }
 
   /// Creates a document fragment.
-  #[must_use]
-  pub fn create_document_fragment(&mut self) -> NodeId {
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::NOT_SUPPORTED_ERR`] if the document already holds as many nodes as it can, `u32::MAX`.
+  pub fn create_document_fragment(&mut self) -> Result<NodeId> {
     self.push(NodeData::DocumentFragment)
   }
 
@@ -185,13 +202,13 @@ impl Document {
         invalid_name_message(name, "document type name"),
       ));
     }
-    let name = self.pool.intern(name);
+    let name = self.intern(name)?;
     let data = NodeData::DocumentType {
       name,
       public_id: public_id.map(ToOwned::to_owned),
       system_id: system_id.map(ToOwned::to_owned),
     };
-    Ok(self.push(data))
+    self.push(data)
   }
 
   /// Copies a node from another document into this one, returning a new detached node.
@@ -214,13 +231,13 @@ impl Document {
   ///
   /// let mut source = Document::new();
   /// let s = source.create_element("a")?;
-  /// let text = source.create_text_node("hi");
+  /// let text = source.create_text_node("hi")?;
   /// source.append_child(s, text)?;
   ///
   /// let mut doc = Document::new();
   /// let copy = doc.import_node(&source, s, true)?;
   /// doc.append_child(doc.document_node(), copy)?;
-  /// assert_eq!(doc.text_content(copy), "hi");
+  /// assert_eq!(doc.node(copy)?.text_content(), "hi");
   /// # Ok::<(), xenolith::dom::DomException>(())
   /// ```
   pub fn import_node(&mut self, source: &Document, node: NodeId, deep: bool) -> Result<NodeId> {
@@ -246,14 +263,14 @@ impl Document {
         }
         element
       }
-      NodeData::Text(data) => self.create_text_node(data),
-      NodeData::CdataSection(data) => self.create_cdata_section(data),
-      NodeData::Comment(data) => self.create_comment(data),
+      NodeData::Text(data) => self.create_text_node(data)?,
+      NodeData::CdataSection(data) => self.create_cdata_section(data)?,
+      NodeData::Comment(data) => self.create_comment(data)?,
       NodeData::ProcessingInstruction { .. } => {
         self.create_processing_instruction(&source.node_name(node), source.node_value(node).unwrap_or_default())?
       }
       NodeData::DocumentFragment => {
-        let fragment = self.create_document_fragment();
+        let fragment = self.create_document_fragment()?;
         if deep {
           for child in source.children(node).collect::<Vec<_>>() {
             let child = self.import_node(source, child, true)?;
@@ -317,22 +334,22 @@ impl Document {
       }
       NodeType::TEXT_NODE => {
         let data = self.node_value(node).unwrap_or_default().to_owned();
-        self.create_text_node(&data)
+        self.create_text_node(&data)?
       }
       NodeType::CDATA_SECTION_NODE => {
         let data = self.node_value(node).unwrap_or_default().to_owned();
-        self.create_cdata_section(&data)
+        self.create_cdata_section(&data)?
       }
       NodeType::COMMENT_NODE => {
         let data = self.node_value(node).unwrap_or_default().to_owned();
-        self.create_comment(&data)
+        self.create_comment(&data)?
       }
       NodeType::PROCESSING_INSTRUCTION_NODE => {
         let target = self.node_name(node);
         let data = self.node_value(node).unwrap_or_default().to_owned();
         self.create_processing_instruction(&target, &data)?
       }
-      NodeType::DOCUMENT_FRAGMENT_NODE => self.create_document_fragment(),
+      NodeType::DOCUMENT_FRAGMENT_NODE => self.create_document_fragment()?,
       NodeType::DOCUMENT_NODE | NodeType::DOCUMENT_TYPE_NODE | NodeType::ATTRIBUTE_NODE => {
         return Err(DomException::new(ExceptionCode::NOT_SUPPORTED_ERR, "this kind of node cannot be cloned"));
       }
@@ -368,10 +385,18 @@ impl Document {
   }
 
   /// Interns a node and returns its handle. The node starts detached.
-  fn push(&mut self, data: NodeData) -> NodeId {
-    let index = u32::try_from(self.nodes.len()).expect("a document holds fewer than 4 billion nodes");
+  fn push(&mut self, data: NodeData) -> Result<NodeId> {
+    let Some(index) = next_node_index(self.nodes.len()) else {
+      let message = format!("a document holds at most {} nodes", u64::from(u32::MAX) + 1);
+      return Err(DomException::new(ExceptionCode::NOT_SUPPORTED_ERR, message));
+    };
     self.nodes.push(NodeSlot::new(data));
-    NodeId::new(self.id, index)
+    Ok(NodeId::new(self.id, index))
+  }
+
+  /// Interns `name` in the document's pool, reporting a full pool as the DOM reports a full document.
+  fn intern(&mut self, name: &str) -> Result<NameId> {
+    self.pool.intern(name).map_err(|error| DomException::new(ExceptionCode::NOT_SUPPORTED_ERR, error.message()))
   }
 
   /// Splits a qualified name and interns its parts, forming a [`QName`] in `namespace`.
@@ -379,57 +404,62 @@ impl Document {
     let Some((prefix, local)) = chars::split_qname(qualified_name) else {
       return Err(DomException::new(ExceptionCode::INVALID_CHARACTER_ERR, invalid_qname_message(qualified_name)));
     };
-    let prefix = prefix.map(|p| self.pool.intern(p));
-    let local = self.pool.intern(local);
+    let prefix = prefix.map(|p| self.intern(p)).transpose()?;
+    let local = self.intern(local)?;
     Ok(QName::new(prefix, namespace, local))
   }
 
   // --- Navigation ---------------------------------------------------------------------------
 
-  /// A [`NodeRef`] over a node, for chained reads.
-  #[must_use]
-  pub fn node(&self, id: NodeId) -> NodeRef<'_> {
-    NodeRef::new(self, id)
+  /// A [`NodeRef`] over a node, through which the node and those reached from it are read.
+  ///
+  /// # Errors
+  ///
+  /// [`ExceptionCode::WRONG_DOCUMENT_ERR`] if `id` was made by another document. Every node a [`NodeRef`] leads to is
+  /// of this document, so reading through it cannot fail that way again.
+  pub fn node(&self, id: NodeId) -> Result<NodeRef<'_>> {
+    self.require_own(id)?;
+    Ok(NodeRef::new(self, id))
   }
 
   /// The kind of a node.
   #[must_use]
-  pub fn node_type(&self, id: NodeId) -> NodeType {
+  pub(crate) fn node_type(&self, id: NodeId) -> NodeType {
     self.slot(id).data.node_type()
   }
 
   /// The parent of a node, or `None` for the document node and any detached node.
   #[must_use]
-  pub fn parent(&self, id: NodeId) -> Option<NodeId> {
+  pub(crate) fn parent(&self, id: NodeId) -> Option<NodeId> {
     self.slot(id).parent
   }
 
   /// The first child of a node, if it has one.
   #[must_use]
-  pub fn first_child(&self, id: NodeId) -> Option<NodeId> {
+  pub(crate) fn first_child(&self, id: NodeId) -> Option<NodeId> {
     self.slot(id).first_child
   }
 
   /// The last child of a node, if it has one.
   #[must_use]
-  pub fn last_child(&self, id: NodeId) -> Option<NodeId> {
+  pub(crate) fn last_child(&self, id: NodeId) -> Option<NodeId> {
     self.slot(id).last_child
   }
 
   /// The node before this one under the same parent, if any.
   #[must_use]
-  pub fn previous_sibling(&self, id: NodeId) -> Option<NodeId> {
+  pub(crate) fn previous_sibling(&self, id: NodeId) -> Option<NodeId> {
     self.slot(id).previous_sibling
   }
 
   /// The node after this one under the same parent, if any.
   #[must_use]
-  pub fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
+  pub(crate) fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
     self.slot(id).next_sibling
   }
 
   /// The children of a node, first to last.
-  pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+  pub(crate) fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
     let mut next = self.slot(id).first_child;
     std::iter::from_fn(move || {
       let current = next?;
@@ -459,12 +489,12 @@ impl Document {
   /// The DOM `nodeName`: an element's qualified name, a PI's target, or the `#name` a node kind reports (`#text`,
   /// `#comment`, `#document`, and so on).
   #[must_use]
-  pub fn node_name(&self, id: NodeId) -> String {
+  pub(crate) fn node_name(&self, id: NodeId) -> String {
     match &self.slot(id).data {
-      NodeData::Element(element) => element.name.to_lexical(&self.pool),
-      NodeData::Attribute(attr) => attr.name.to_lexical(&self.pool),
-      NodeData::ProcessingInstruction { target, .. } => self.pool.resolve(*target).to_owned(),
-      NodeData::DocumentType { name, .. } => self.pool.resolve(*name).to_owned(),
+      NodeData::Element(element) => element.name.lexical_own(&self.pool),
+      NodeData::Attribute(attr) => attr.name.lexical_own(&self.pool),
+      NodeData::ProcessingInstruction { target, .. } => self.pool.resolve_own(*target).to_owned(),
+      NodeData::DocumentType { name, .. } => self.pool.resolve_own(*name).to_owned(),
       NodeData::Text(_) => "#text".to_owned(),
       NodeData::CdataSection(_) => "#cdata-section".to_owned(),
       NodeData::Comment(_) => "#comment".to_owned(),
@@ -476,7 +506,7 @@ impl Document {
   /// The DOM `nodeValue`: the value of an attribute, or the character data of a text, CDATA, comment or PI node;
   /// `None` for the kinds that have no value of their own.
   #[must_use]
-  pub fn node_value(&self, id: NodeId) -> Option<&str> {
+  pub(crate) fn node_value(&self, id: NodeId) -> Option<&str> {
     match &self.slot(id).data {
       NodeData::Attribute(attr) => Some(&attr.value),
       NodeData::Text(data) | NodeData::CdataSection(data) | NodeData::Comment(data) => Some(data),
@@ -502,25 +532,25 @@ impl Document {
 
   /// The local part of an element's or attribute's name.
   #[must_use]
-  pub fn local_name(&self, id: NodeId) -> Option<&str> {
-    self.name_of(id).map(|name| self.pool.resolve(name.local()))
+  pub(crate) fn local_name(&self, id: NodeId) -> Option<&str> {
+    self.name_of(id).map(|name| self.pool.resolve_own(name.local()))
   }
 
   /// The namespace prefix of an element's or attribute's name, if it has one.
   #[must_use]
-  pub fn prefix(&self, id: NodeId) -> Option<&str> {
-    self.name_of(id).and_then(|name| name.prefix).map(|p| self.pool.resolve(p))
+  pub(crate) fn prefix(&self, id: NodeId) -> Option<&str> {
+    self.name_of(id).and_then(|name| name.prefix).map(|p| self.pool.resolve_own(p))
   }
 
   /// The namespace name of an element or attribute, if it is in one.
   #[must_use]
-  pub fn namespace_uri(&self, id: NodeId) -> Option<&str> {
-    self.name_of(id).and_then(|name| name.namespace()).map(|ns| self.pool.resolve(ns))
+  pub(crate) fn namespace_uri(&self, id: NodeId) -> Option<&str> {
+    self.name_of(id).and_then(|name| name.namespace()).map(|ns| self.pool.resolve_own(ns))
   }
 
   /// The public identifier of a document type node, if it has one.
   #[must_use]
-  pub fn public_id(&self, id: NodeId) -> Option<&str> {
+  pub(crate) fn public_id(&self, id: NodeId) -> Option<&str> {
     match &self.slot(id).data {
       NodeData::DocumentType { public_id, .. } => public_id.as_deref(),
       _ => None,
@@ -529,7 +559,7 @@ impl Document {
 
   /// The system identifier of a document type node, if it has one.
   #[must_use]
-  pub fn system_id(&self, id: NodeId) -> Option<&str> {
+  pub(crate) fn system_id(&self, id: NodeId) -> Option<&str> {
     match &self.slot(id).data {
       NodeData::DocumentType { system_id, .. } => system_id.as_deref(),
       _ => None,
@@ -540,7 +570,7 @@ impl Document {
   ///
   /// Comments and processing instructions contribute nothing, matching the W3C DOM specification.
   #[must_use]
-  pub fn text_content(&self, id: NodeId) -> String {
+  pub(crate) fn text_content(&self, id: NodeId) -> String {
     let mut out = String::new();
     for (visit, node) in self.walk(id) {
       if visit == Visit::Enter {
@@ -561,7 +591,7 @@ impl Document {
   ///
   /// The base of an attribute is that of its owning element.
   #[must_use]
-  pub fn base_uri(&self, id: NodeId) -> Option<String> {
+  pub(crate) fn base_uri(&self, id: NodeId) -> Option<String> {
     let start = match &self.slot(id).data {
       NodeData::Attribute(attr) => attr.owner,
       _ => Some(id),
@@ -570,25 +600,27 @@ impl Document {
     while let Some(node) = current {
       if let NodeData::Element(element) = &self.slot(node).data {
         if let Some(base) = element.base {
-          return Some(self.pool.resolve(base).to_owned());
+          return Some(self.pool.resolve_own(base).to_owned());
         }
       }
       current = self.slot(node).parent;
     }
-    self.base.map(|base| self.pool.resolve(base).to_owned())
+    self.base.map(|base| self.pool.resolve_own(base).to_owned())
   }
 
   /// Records the document's own base URI (its system identifier). Used by the builder.
-  pub(crate) fn set_document_base(&mut self, base: Option<&str>) {
-    self.base = base.map(|base| self.pool.intern(base));
+  pub(crate) fn set_document_base(&mut self, base: Option<&str>) -> Result<()> {
+    self.base = base.map(|base| self.intern(base)).transpose()?;
+    Ok(())
   }
 
   /// Records the effective base URI of an element. Used by the builder.
-  pub(crate) fn set_element_base(&mut self, element: NodeId, base: Option<&str>) {
-    let base = base.map(|base| self.pool.intern(base));
+  pub(crate) fn set_element_base(&mut self, element: NodeId, base: Option<&str>) -> Result<()> {
+    let base = base.map(|base| self.intern(base)).transpose()?;
     if let NodeData::Element(data) = &mut self.nodes[element.index()].data {
       data.base = base;
     }
+    Ok(())
   }
 
   // --- Attributes ---------------------------------------------------------------------------
@@ -600,7 +632,7 @@ impl Document {
   /// [`ExceptionCode::INVALID_CHARACTER_ERR`] if `qualified_name` is not a legal name.
   pub fn create_attribute(&mut self, qualified_name: &str) -> Result<NodeId> {
     let name = self.parse_qname(qualified_name, None)?;
-    Ok(self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false })))
+    self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false }))
   }
 
   /// Creates a detached attribute node in a namespace.
@@ -611,9 +643,9 @@ impl Document {
   /// [`ExceptionCode::NAMESPACE_ERR`] if the prefix and namespace are inconsistent.
   pub fn create_attribute_ns(&mut self, namespace: Option<&str>, qualified_name: &str) -> Result<NodeId> {
     check_qname_namespace(namespace, qualified_name, true)?;
-    let namespace = namespace.map(|ns| self.pool.intern(ns));
+    let namespace = namespace.map(|ns| self.intern(ns)).transpose()?;
     let name = self.parse_qname(qualified_name, namespace)?;
-    Ok(self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false })))
+    self.push(NodeData::Attribute(AttrData { name, value: String::new(), owner: None, is_id: false }))
   }
 
   /// Sets an attribute by qualified name, adding it or replacing its value.
@@ -627,8 +659,7 @@ impl Document {
     self.require_own(element)?;
     self.require_element(element)?;
     let name = self.parse_qname(qualified_name, None)?;
-    self.put_attribute(element, name, value);
-    Ok(())
+    self.put_attribute(element, name, value)
   }
 
   /// Sets an attribute in a namespace, adding it or replacing the value of the one with the same namespace and local
@@ -648,21 +679,21 @@ impl Document {
     self.require_own(element)?;
     self.require_element(element)?;
     check_qname_namespace(namespace, qualified_name, true)?;
-    let namespace = namespace.map(|ns| self.pool.intern(ns));
+    let namespace = namespace.map(|ns| self.intern(ns)).transpose()?;
     let name = self.parse_qname(qualified_name, namespace)?;
-    self.put_attribute(element, name, value);
-    Ok(())
+    self.put_attribute(element, name, value)
   }
 
   /// Adds or updates the attribute of `element` with `name`, giving it `value`.
-  fn put_attribute(&mut self, element: NodeId, name: QName, value: &str) {
+  fn put_attribute(&mut self, element: NodeId, name: QName, value: &str) -> Result<()> {
     if let Some(attr) = self.find_attribute(element, |a| a.name.expanded == name.expanded) {
       self.attr_data_mut(attr).value = value.to_owned();
-      return;
+      return Ok(());
     }
     let attr =
-      self.push(NodeData::Attribute(AttrData { name, value: value.to_owned(), owner: Some(element), is_id: false }));
+      self.push(NodeData::Attribute(AttrData { name, value: value.to_owned(), owner: Some(element), is_id: false }))?;
     self.element_data_mut(element).attributes.push(attr);
+    Ok(())
   }
 
   /// The attribute node of `element` whose data satisfies `predicate`, if any.
@@ -676,7 +707,7 @@ impl Document {
 
   /// The attribute node of an element by qualified name, if it has one.
   #[must_use]
-  pub fn get_attribute_node(&self, element: NodeId, qualified_name: &str) -> Option<NodeId> {
+  pub(crate) fn get_attribute_node(&self, element: NodeId, qualified_name: &str) -> Option<NodeId> {
     let (prefix, local) = chars::split_qname(qualified_name)?;
     let prefix = match prefix {
       Some(p) => Some(self.pool.get(p)?),
@@ -688,7 +719,7 @@ impl Document {
 
   /// The attribute node of an element by namespace and local name, if it has one.
   #[must_use]
-  pub fn get_attribute_node_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<NodeId> {
+  pub(crate) fn get_attribute_node_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<NodeId> {
     let namespace = match namespace {
       Some(ns) => Some(self.pool.get(ns)?),
       None => None,
@@ -700,7 +731,7 @@ impl Document {
   /// The element an attribute node belongs to (`ownerElement` in the W3C DOM specification), or `None` for a detached
   /// attribute or a node that is not an attribute.
   #[must_use]
-  pub fn owner_element(&self, attr: NodeId) -> Option<NodeId> {
+  pub(crate) fn owner_element(&self, attr: NodeId) -> Option<NodeId> {
     match &self.slot(attr).data {
       NodeData::Attribute(data) => data.owner,
       _ => None,
@@ -709,31 +740,31 @@ impl Document {
 
   /// The value of an element's attribute, by qualified name.
   #[must_use]
-  pub fn attribute(&self, element: NodeId, qualified_name: &str) -> Option<&str> {
+  pub(crate) fn attribute(&self, element: NodeId, qualified_name: &str) -> Option<&str> {
     self.get_attribute_node(element, qualified_name).and_then(|attr| self.node_value(attr))
   }
 
   /// The value of an element's attribute, by namespace name and local name.
   #[must_use]
-  pub fn attribute_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<&str> {
+  pub(crate) fn attribute_ns(&self, element: NodeId, namespace: Option<&str>, local: &str) -> Option<&str> {
     self.get_attribute_node_ns(element, namespace, local).and_then(|attr| self.node_value(attr))
   }
 
   /// Whether an element has an attribute with the given qualified name.
   #[must_use]
-  pub fn has_attribute(&self, element: NodeId, qualified_name: &str) -> bool {
+  pub(crate) fn has_attribute(&self, element: NodeId, qualified_name: &str) -> bool {
     self.get_attribute_node(element, qualified_name).is_some()
   }
 
   /// The attributes of an element, as a live [`NamedNodeMap`] of attribute nodes.
   #[must_use]
-  pub fn attributes(&self, element: NodeId) -> NamedNodeMap<'_> {
+  pub(crate) fn attributes(&self, element: NodeId) -> NamedNodeMap<'_> {
     NamedNodeMap::new(self, element)
   }
 
   /// The qualified names of an element's attributes, in document order.
   #[must_use]
-  pub fn attribute_names(&self, element: NodeId) -> Vec<String> {
+  pub(crate) fn attribute_names(&self, element: NodeId) -> Vec<String> {
     match self.element_data(element) {
       Some(data) => data.attributes.iter().map(|&attr| self.node_name(attr)).collect(),
       None => Vec::new(),
@@ -907,7 +938,7 @@ impl Document {
 
   /// The children of a node as a live [`NodeList`].
   #[must_use]
-  pub fn child_nodes(&self, id: NodeId) -> NodeList<'_> {
+  pub(crate) fn child_nodes(&self, id: NodeId) -> NodeList<'_> {
     NodeList::new(self, Query::Children(id))
   }
 
@@ -921,7 +952,7 @@ impl Document {
   /// [`NodeRef::get_elements_by_tag_name`](crate::dom::NodeRef::get_elements_by_tag_name) behaves similarly to the
   /// method on `Element`.
   #[must_use]
-  pub fn get_elements_by_tag_name(&self, node: NodeId, name: &str) -> NodeList<'_> {
+  pub(crate) fn get_elements_by_tag_name(&self, node: NodeId, name: &str) -> NodeList<'_> {
     NodeList::new(self, Query::by_tag_name(node, name))
   }
 
@@ -931,7 +962,7 @@ impl Document {
   /// As with [`get_elements_by_tag_name`](Self::get_elements_by_tag_name), `node` serves as the starting point for the
   /// search.
   #[must_use]
-  pub fn get_elements_by_tag_name_ns(&self, node: NodeId, namespace: Option<&str>, local: &str) -> NodeList<'_> {
+  pub(crate) fn get_elements_by_tag_name_ns(&self, node: NodeId, namespace: Option<&str>, local: &str) -> NodeList<'_> {
     NodeList::new(self, Query::by_tag_name_ns(node, namespace, local))
   }
 
@@ -939,40 +970,14 @@ impl Document {
   ///
   /// This is the crate's standard way to traverse the tree and is preferred over recursive traversal. Refer to [`Walk`]
   /// for details on the reported events and their order, and [traversal depth](crate#traversal) for why recursion does
-  /// not occur.
+  /// not occur. [`NodeRef::walk`] is the public way in.
   ///
   /// # Panics
   ///
-  /// If `id` was created by another document.
-  ///
-  /// # Examples
-  ///
-  /// ```
-  /// use xenolith::dom::{Document, Visit};
-  ///
-  /// // <a><b>hi</b></a>
-  /// let mut doc = Document::new();
-  /// let root = doc.create_element("a")?;
-  /// let child = doc.create_element("b")?;
-  /// let text = doc.create_text_node("hi");
-  /// doc.append_child(child, text)?;
-  /// doc.append_child(root, child)?;
-  /// doc.append_child(doc.document_node(), root)?;
-  ///
-  /// // Both sides of every node, so the shape of the subtree comes back out. A text node has no end tag in XML, but
-  /// // the walk still enters and leaves it, as it does any other node.
-  /// let shape: String = doc
-  ///     .walk(root)
-  ///     .map(|(visit, node)| match visit {
-  ///       Visit::Enter => format!("<{}>", doc.node_name(node)),
-  ///       Visit::Leave => format!("</{}>", doc.node_name(node)),
-  ///     })
-  ///     .collect();
-  /// assert_eq!(shape, "<a><b><#text></#text></b></a>");
-  /// # Ok::<(), xenolith::dom::DomException>(())
-  /// ```
+  /// If `id` was created by another document, which would be a bug in xenolith: a handle from outside is checked by
+  /// [`node`](Self::node) first.
   #[must_use]
-  pub fn walk(&self, id: NodeId) -> Walk<'_> {
+  pub(crate) fn walk(&self, id: NodeId) -> Walk<'_> {
     // Check here rather than leaving it to the first step, so a stray handle is caught at the call that made it.
     assert!(self.owns(id), "the node was made by another document, and a node id is only valid with its own");
     Walk::new(self, id)
@@ -1016,7 +1021,7 @@ impl Document {
         return Ok(last);
       }
     }
-    let node = self.create_text_node(data);
+    let node = self.create_text_node(data)?;
     self.append_child(parent, node)
   }
 
@@ -1256,6 +1261,12 @@ fn document_child_error(node_type: NodeType, has_element: bool, has_doctype: boo
     }
     None => Ok(()),
   }
+}
+
+/// The index a new node takes in a document that holds `held` nodes, or `None` if the document is full: a [`NodeId`]
+/// tells nodes apart by a `u32` index.
+fn next_node_index(held: usize) -> Option<u32> {
+  u32::try_from(held).ok()
 }
 
 /// Generates the identity of a new document, which its [`NodeId`]s then carry.

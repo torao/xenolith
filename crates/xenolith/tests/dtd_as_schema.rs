@@ -24,7 +24,7 @@ const SCHEMA: &str = "<!ELEMENT note (body)>\
 
 fn schema() -> DtdSchema {
   let (dtd, pool) = DtdReader::new(SCHEMA.as_bytes()).read().expect("a well-formed DTD");
-  DtdSchema::new(dtd, pool).with_root("note")
+  DtdSchema::new(dtd, pool).with_root("note").expect("room for the root's name")
 }
 
 /// Checks the events of a walk over `doc` against `schema`.

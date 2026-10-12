@@ -15,7 +15,7 @@ use crate::name::NamePool;
 
 use crate::dom::node::NodeData;
 use crate::dom::walk::{Visit, Walk};
-use crate::dom::{Document, NodeId};
+use crate::dom::{Document, NodeId, NodeRef};
 
 /// An [`EventCursor`] that traverses a built [`Document`], or a subtree thereof, and emits events. It corresponds to
 /// Java's `DOMSource`.
@@ -111,18 +111,18 @@ impl<'a> DomSource<'a, '_> {
   /// Creates a source over the whole document.
   #[must_use]
   pub fn new(doc: &'a Document) -> Self {
-    Self::at(doc, doc.document_node())
+    Self::over(doc, doc.document_node())
   }
 
-  /// Creates a source over the subtree rooted at `node`.
-  ///
-  /// # Panics
-  ///
-  /// If `node` was made by another document.
-  ///
+  /// Creates a source over the subtree rooted at `node`. A [`NodeRef`] is always of its document, so
+  /// [`Document::node`] is where a node of another document is refused.
   #[must_use]
-  pub fn at(doc: &'a Document, node: NodeId) -> Self {
-    assert!(doc.owns(node), "the node was made by another document, and a node id is only valid with its own");
+  pub fn at(node: NodeRef<'a>) -> Self {
+    Self::over(node.document(), node.id())
+  }
+
+  /// A source over the subtree of `node`, a node of `doc`.
+  fn over(doc: &'a Document, node: NodeId) -> Self {
     Self {
       doc,
       node,
@@ -227,9 +227,9 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
     }
     let event = match (visit, doc.node_data(node)) {
       (Visit::Enter, NodeData::Element(element)) => EventRef::StartElement(StartElementEventRef::new(
-        element.name.prefix.map(|prefix| doc.pool().resolve(prefix)),
-        doc.pool().resolve(element.name.local()),
-        element.name.namespace().map(|namespace| doc.pool().resolve(namespace)),
+        element.name.prefix.map(|prefix| doc.pool().resolve_own(prefix)),
+        doc.pool().resolve_own(element.name.local()),
+        element.name.namespace().map(|namespace| doc.pool().resolve_own(namespace)),
         Attributes::new(self.attributes.as_ref().expect("just recorded")),
         XmlSpace::default(),
         None,
@@ -237,21 +237,26 @@ impl<'a, 'h> EventCursor<'h> for DomSource<'a, 'h> {
         Location::unknown(),
       )),
       (Visit::Leave, NodeData::Element(element)) => EventRef::EndElement(EndElementEventRef::new(
-        element.name.prefix.map(|prefix| doc.pool().resolve(prefix)),
-        doc.pool().resolve(element.name.local()),
-        element.name.namespace().map(|namespace| doc.pool().resolve(namespace)),
+        element.name.prefix.map(|prefix| doc.pool().resolve_own(prefix)),
+        doc.pool().resolve_own(element.name.local()),
+        element.name.namespace().map(|namespace| doc.pool().resolve_own(namespace)),
         Location::unknown(),
       )),
       (_, NodeData::Text(text)) => EventRef::Characters(CharactersEventRef::new(text, Location::unknown())),
       (_, NodeData::CdataSection(text)) => EventRef::Cdata(CdataEventRef::new(text, Location::unknown())),
       (_, NodeData::Comment(text)) => EventRef::Comment(CommentEventRef::new(text, Location::unknown())),
-      (_, NodeData::ProcessingInstruction { target, data }) => EventRef::ProcessingInstruction(
-        ProcessingInstructionEventRef::new(doc.pool().resolve(*target), data, Location::unknown(), Location::unknown()),
-      ),
+      (_, NodeData::ProcessingInstruction { target, data }) => {
+        EventRef::ProcessingInstruction(ProcessingInstructionEventRef::new(
+          doc.pool().resolve_own(*target),
+          data,
+          Location::unknown(),
+          Location::unknown(),
+        ))
+      }
       (_, NodeData::DocumentType { name, public_id, system_id }) => {
         let (dtd, pool) = self.dtd.as_ref().expect("the node is reported only when a DTD was given");
         EventRef::Doctype(DoctypeEventRef::new(
-          Some(doc.pool().resolve(*name)),
+          Some(doc.pool().resolve_own(*name)),
           public_id.as_deref(),
           system_id.as_deref(),
           dtd,
@@ -291,9 +296,9 @@ impl AttributeList for DomAttributes<'_> {
     let NodeData::Attribute(attr) = self.doc.node_data(id) else { return None };
     let pool = self.doc.pool();
     Some(AttributeRef {
-      prefix: attr.name.prefix.map(|prefix| pool.resolve(prefix)),
-      local: pool.resolve(attr.name.local()),
-      namespace: attr.name.namespace().map(|namespace| pool.resolve(namespace)),
+      prefix: attr.name.prefix.map(|prefix| pool.resolve_own(prefix)),
+      local: pool.resolve_own(attr.name.local()),
+      namespace: attr.name.namespace().map(|namespace| pool.resolve_own(namespace)),
       value: &attr.value,
       // A tree keeps no positions, as the events of this source carry none either.
       location: Location::unknown(),

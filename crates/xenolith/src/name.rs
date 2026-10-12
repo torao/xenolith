@@ -112,16 +112,17 @@ impl fmt::Display for NameId {
 /// use xenolith::{NameId, NamePool, XML_NS_URI};
 ///
 /// let mut pool = NamePool::new();
-/// let item = pool.intern("item");
-/// assert_eq!(pool.intern("item"), item); // interning is idempotent
-/// assert_eq!(pool.resolve(item), "item");
+/// let item = pool.intern("item")?;
+/// assert_eq!(pool.intern("item")?, item); // interning is idempotent
+/// assert_eq!(pool.resolve(item), Some("item"));
 ///
 /// // Names not yet seen are absent rather than created.
 /// assert_eq!(pool.get("other"), None);
 ///
 /// // The names fixed by the specifications are always present.
-/// assert_eq!(pool.resolve(NameId::XML), "xml");
-/// assert_eq!(pool.resolve(NameId::XML_NS), XML_NS_URI);
+/// assert_eq!(pool.resolve(NameId::XML), Some("xml"));
+/// assert_eq!(pool.resolve(NameId::XML_NS), Some(XML_NS_URI));
+/// # Ok::<(), xenolith::Error>(())
 /// ```
 ///
 #[derive(Debug)]
@@ -149,7 +150,7 @@ impl NamePool {
   pub fn new() -> Self {
     let mut pool = Self { id: next_pool_id(), lineage: Vec::new(), names: Vec::new(), index: HashMap::new() };
     for reserved in RESERVED_NAMES {
-      pool.intern(reserved);
+      pool.intern(reserved).expect("the reserved names fit in an empty pool");
     }
     // The reserved names will be interned into a root pool that is virtually shared with all other pools.
     pool.lineage.push((ROOT, RESERVED_LEN));
@@ -170,21 +171,22 @@ impl NamePool {
   /// use xenolith::NamePool;
   ///
   /// let mut parent = NamePool::new();
-  /// let item = parent.intern("item");
+  /// let item = parent.intern("item")?;
   ///
   /// let mut child = parent.fork();
   /// assert_eq!(child.get("item"), Some(item)); // the parent's handle, from the child
-  /// assert_eq!(child.resolve(item), "item");
+  /// assert_eq!(child.resolve(item), Some("item"));
   ///
   /// // After the fork, each pool's new names are its own.
-  /// let left = parent.intern("left");
-  /// let right = child.intern("right");
+  /// let left = parent.intern("left")?;
+  /// let right = child.intern("right")?;
   /// assert!(!child.owns(left) && !parent.owns(right));
+  /// # Ok::<(), xenolith::Error>(())
   /// ```
   ///
   #[must_use]
   pub fn fork(&self) -> Self {
-    let held = u32::try_from(self.names.len()).expect("name pool overflow");
+    let held = u32::try_from(self.names.len()).expect("intern keeps the number of names below u32::MAX");
     let mut lineage = self.lineage.clone();
     // A pool that does not hold its own names is omitted.
     if lineage.last().is_none_or(|&(_, end)| end < held) {
@@ -195,20 +197,22 @@ impl NamePool {
 
   /// Interns the `name`. If it already exists, return the existing ID.
   ///
-  /// # Panics
+  /// # Errors
   ///
-  /// If the number of pooled strings exceeds the maximum value of a u32.
+  /// [`Error::Limit`] if the pool already holds `u32::MAX - 1` names, the most a [`NameId`] can tell apart.
   ///
-  pub fn intern(&mut self, name: &str) -> NameId {
+  pub fn intern(&mut self, name: &str) -> Result<NameId> {
     if let Some(&index) = self.index.get(name) {
-      return NameId { pool: self.origin(index), index };
+      return Ok(NameId { pool: self.origin(index), index });
     }
     // This new name is for this pool and appears after all indices owned by the ancestor.
-    let index = u32::try_from(self.names.len()).expect("name pool overflow");
+    let Some(index) = next_index(self.names.len()) else {
+      return Err(Error::limit(format!("a name pool holds at most {} names", u32::MAX - 1)));
+    };
     let boxed: Box<str> = name.into();
     self.names.push(boxed.clone());
     self.index.insert(boxed, index);
-    NameId { pool: self.id, index }
+    Ok(NameId { pool: self.id, index })
   }
 
   /// Returns the id of `name` if it has been interned.
@@ -224,15 +228,22 @@ impl NamePool {
     id.index() < self.names.len() && id.pool == self.origin(id.index)
   }
 
-  /// Returns the string corresponding to `id`.
+  /// Returns the string corresponding to `id`, or `None` if this pool does not [`own`](Self::owns) this `id` — meaning
+  /// the `id` was issued by an unrelated pool, or by the pool from which this one was forked, but *after* the fork.
+  ///
+  #[must_use]
+  pub fn resolve(&self, id: NameId) -> Option<&str> {
+    self.owns(id).then(|| &*self.names[id.index()])
+  }
+
+  /// Returns the string corresponding to `id`, a handle this crate knows the pool owns: one it interned there, or
+  /// read from a structure that only holds this pool's names.
   ///
   /// # Panics
   ///
-  /// If this pool does not [`own`](Self::owns) this `id` — meaning the `id` was issued by an unrelated pool, or by the
-  /// pool from which this one was forked, but *after* the fork.
-  ///
-  #[must_use]
-  pub fn resolve(&self, id: NameId) -> &str {
+  /// If this pool does not own `id`, which would be a bug in xenolith. A handle that an application supplies, or that
+  /// comes with a pool the application paired with it, is resolved with [`resolve`](Self::resolve) instead.
+  pub(crate) fn resolve_own(&self, id: NameId) -> &str {
     assert!(
       self.owns(id),
       "{id} is not a handle of pool {}: it came from an unrelated pool, or from an ancestor after the fork",
@@ -255,7 +266,7 @@ impl NamePool {
   ///
   /// let mut pool = NamePool::new();
   /// let local = pool.intern_ncname("template")?;
-  /// assert_eq!(pool.resolve(local), "template");
+  /// assert_eq!(pool.resolve(local), Some("template"));
   ///
   /// let err = pool.intern_ncname("xsl:template").unwrap_err();
   /// assert!(matches!(err, Error::Name { .. }));
@@ -264,10 +275,10 @@ impl NamePool {
   ///
   /// # Errors
   ///
-  /// Returns [`Error::Name`] if `name` is not an `NCName`.
+  /// Returns [`Error::Name`] if `name` is not an `NCName`, and [`Error::Limit`] as [`intern`](Self::intern) does.
   ///
   pub fn intern_ncname(&mut self, name: &str) -> Result<NameId> {
-    if chars::is_ncname(name) { Ok(self.intern(name)) } else { Err(Error::name(format!("not an NCName: {name:?}"))) }
+    if chars::is_ncname(name) { self.intern(name) } else { Err(Error::name(format!("not an NCName: {name:?}"))) }
   }
 
   /// Number of distinct names interned, including the reserved ones.
@@ -281,6 +292,12 @@ impl NamePool {
   pub fn is_empty(&self) -> bool {
     self.names.len() <= RESERVED_NAMES.len()
   }
+}
+
+/// The index a new name takes in a pool that holds `held` names, or `None` if the pool is full. The number of names
+/// stays below `u32::MAX`, so that it fits in a `u32` itself, as `fork` records it.
+fn next_index(held: usize) -> Option<u32> {
+  u32::try_from(held).ok().filter(|&index| index < u32::MAX - 1)
 }
 
 /// Generates the identity of a new pool. The identity is a `NonZeroU32` that is guaranteed to be unique within the
@@ -336,15 +353,16 @@ impl ExpandedName {
 /// use xenolith::{NamePool, QName};
 ///
 /// let mut pool = NamePool::new();
-/// let ns = pool.intern("http://www.w3.org/1999/XSL/Transform");
-/// let local = pool.intern("template");
+/// let ns = pool.intern("http://www.w3.org/1999/XSL/Transform")?;
+/// let local = pool.intern("template")?;
 ///
-/// let xsl = QName::new(Some(pool.intern("xsl")), Some(ns), local);
-/// let t = QName::new(Some(pool.intern("t")), Some(ns), local);
+/// let xsl = QName::new(Some(pool.intern("xsl")?), Some(ns), local);
+/// let t = QName::new(Some(pool.intern("t")?), Some(ns), local);
 ///
 /// assert_ne!(xsl, t); // they serialize differently
 /// assert_eq!(xsl.expanded, t.expanded); // but match the same templates
-/// assert_eq!(xsl.to_lexical(&pool), "xsl:template");
+/// assert_eq!(xsl.to_lexical(&pool).as_deref(), Some("xsl:template"));
+/// # Ok::<(), xenolith::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct QName {
@@ -373,13 +391,21 @@ impl QName {
     self.expanded.namespace
   }
 
-  /// Renders the lexical form (`prefix:local`, or `local` when unprefixed).
+  /// Renders the lexical form (`prefix:local`, or `local` when unprefixed), or `None` if `pool` does not
+  /// [`own`](NamePool::owns) the names.
   #[must_use]
-  pub fn to_lexical(&self, pool: &NamePool) -> String {
-    match self.prefix {
-      Some(p) => format!("{}:{}", pool.resolve(p), pool.resolve(self.local())),
-      None => pool.resolve(self.local()).to_owned(),
-    }
+  pub fn to_lexical(&self, pool: &NamePool) -> Option<String> {
+    let local = pool.resolve(self.local())?;
+    Some(match self.prefix {
+      Some(prefix) => format!("{}:{local}", pool.resolve(prefix)?),
+      None => local.to_owned(),
+    })
+  }
+
+  /// Renders the lexical form with a pool this crate knows owns the names, as
+  /// [`NamePool::resolve_own`](NamePool::resolve_own) does; a pool that does not would be a bug in xenolith.
+  pub(crate) fn lexical_own(&self, pool: &NamePool) -> String {
+    lexical(self.prefix.map(|prefix| pool.resolve_own(prefix)), pool.resolve_own(self.local()))
   }
 }
 
@@ -405,12 +431,17 @@ pub fn lexical(prefix: Option<&str>, local: &str) -> String {
   }
 }
 
-/// Wraps a [`QName`] with its pool so it can be formatted.
+/// Wraps a [`QName`] with its pool so it can be formatted. A part the pool does not [`own`](NamePool::owns) is written
+/// as its [`NameId`].
 #[derive(Debug)]
 pub struct DisplayQName<'a>(pub &'a QName, pub &'a NamePool);
 
 impl fmt::Display for DisplayQName<'_> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str(&self.0.to_lexical(self.1))
+    let part = |id: NameId| self.1.resolve(id).map_or_else(|| id.to_string(), ToOwned::to_owned);
+    match self.0.prefix {
+      Some(prefix) => write!(f, "{}:{}", part(prefix), part(self.0.local())),
+      None => f.write_str(&part(self.0.local())),
+    }
   }
 }

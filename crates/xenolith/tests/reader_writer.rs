@@ -66,8 +66,8 @@ fn a_read_that_is_not_strict_hands_on_loose_xml_as_it_was_written() {
   assert_eq!(names.0, ["1a"], "nothing is mended");
 
   let doc = Reader::new().with_strict(false).document("<a><!-- x -- y --></a>".as_bytes()).unwrap();
-  let comment = doc.first_child(doc.document_element().unwrap()).unwrap();
-  assert_eq!(doc.node_value(comment), Some(" x -- y "));
+  let comment = doc.node(doc.document_element().unwrap()).unwrap().first_child().unwrap();
+  assert_eq!(comment.node_value(), Some(" x -- y "));
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn the_reader_passes_its_options_to_the_parts_underneath() {
   // The encoding the caller names is the one the bytes are read in, whatever the declaration says.
   let latin1 = [b'<', b'a', b'>', 0xE9, b'<', b'/', b'a', b'>'];
   let doc = Reader::new().with_encoding("ISO-8859-1").document(&latin1[..]).expect("read as Latin-1");
-  assert_eq!(doc.text_content(doc.document_element().unwrap()), "\u{e9}");
+  assert_eq!(doc.node(doc.document_element().unwrap()).unwrap().text_content(), "\u{e9}");
 
   // A limit the configuration sets is the parser's, so a document that exceeds it is refused.
   // `#[non_exhaustive]` outside the crate, so the fields are set one at a time rather than in a struct expression.
@@ -176,8 +176,8 @@ fn a_read_can_assemble_a_document_from_its_parts() {
 
   // Off by default: the element is what the tree holds, and nothing was fetched.
   let doc = Reader::new().with_system_id("file:///doc/main.xml").document(xml.as_bytes()).expect("read");
-  let root = doc.document_element().unwrap();
-  assert_eq!(doc.node_name(doc.first_child(root).unwrap()), "xi:include");
+  let root = doc.node(doc.document_element().unwrap()).unwrap();
+  assert_eq!(root.first_child().unwrap().node_name(), "xi:include");
 
   // On, with a resolver to fetch through: the tree holds the assembled document.
   let doc = Reader::new()
@@ -186,12 +186,12 @@ fn a_read_can_assemble_a_document_from_its_parts() {
     .with_resolver(&map)
     .document(xml.as_bytes())
     .expect("read and assembled");
-  let root = doc.document_element().unwrap();
-  let included = doc.first_child(root).expect("the included element");
-  assert_eq!(doc.node_name(included), "p");
-  assert_eq!(doc.text_content(included), "from the part");
+  let root = doc.node(doc.document_element().unwrap()).unwrap();
+  let included = root.first_child().expect("the included element");
+  assert_eq!(included.node_name(), "p");
+  assert_eq!(included.text_content(), "from the part");
   // The base URI fixup says where it came from, so a reference inside it still resolves.
-  assert_eq!(doc.attribute(included, "xml:base"), Some("file:///doc/part.xml"));
+  assert_eq!(included.attribute("xml:base"), Some("file:///doc/part.xml"));
 }
 
 #[test]

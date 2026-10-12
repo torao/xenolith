@@ -26,10 +26,11 @@ fn builds_a_dom_while_validating_against_the_document_dtd_in_one_pass() {
 
   // And the tree was built, with the DTD's ID attribute marked so it is found by id.
   let doc = builder.into_document();
-  let root = doc.document_element().unwrap();
-  assert_eq!(doc.node_name(root), "r");
-  assert_eq!(doc.children(root).count(), 2);
-  assert_eq!(doc.get_element_by_id("k1").map(|n| doc.node_name(n)).as_deref(), Some("item"));
+  let root = doc.node(doc.document_element().unwrap()).unwrap();
+  assert_eq!(root.node_name(), "r");
+  assert_eq!(root.children().count(), 2);
+  let item = doc.get_element_by_id("k1").and_then(|n| doc.node(n).ok());
+  assert_eq!(item.map(|n| n.node_name()).as_deref(), Some("item"));
 }
 
 #[test]
@@ -50,6 +51,6 @@ fn a_dtd_violation_is_reported_and_the_tree_is_still_built() {
   assert!(!report.errors().is_empty());
 
   let doc = builder.into_document();
-  let root = doc.document_element().unwrap();
-  assert_eq!(doc.node_name(doc.first_child(root).unwrap()), "bad", "the tree is built despite the violation");
+  let root = doc.node(doc.document_element().unwrap()).unwrap();
+  assert_eq!(root.first_child().unwrap().node_name(), "bad", "the tree is built despite the violation");
 }

@@ -38,8 +38,8 @@ fn text_of(parser: &Parser) -> &str {
 /// `{namespace}local`, so namespace resolution is visible in the trace.
 fn qualified(parser: &Parser, name: QName) -> String {
   match name.namespace() {
-    Some(ns) => format!("{{{}}}{}", parser.pool().resolve(ns), parser.pool().resolve(name.local())),
-    None => parser.pool().resolve(name.local()).to_owned(),
+    Some(ns) => format!("{{{}}}{}", parser.pool().resolve_own(ns), parser.pool().resolve_own(name.local())),
+    None => parser.pool().resolve_own(name.local()).to_owned(),
   }
 }
 
@@ -378,7 +378,7 @@ fn event_ref_gives_the_current_event_as_a_borrowed_enum() {
   let TokenRef::StartElement { name, attributes, .. } = parser.token_ref().unwrap() else {
     panic!("expected a start element");
   };
-  assert_eq!(parser.pool().resolve(name.local()), "a");
+  assert_eq!(parser.pool().resolve_own(name.local()), "a");
   assert_eq!(attributes.len(), 1);
   assert_eq!(attributes.get(0).unwrap().value, "1");
 

@@ -52,8 +52,8 @@
 //! use xenolith::{Reader, Writer};
 //!
 //! let doc = Reader::new().document("<order><item qty='2'>pen</item></order>".as_bytes())?;
-//! let root = doc.document_element().unwrap();
-//! assert_eq!(doc.text_content(root), "pen");
+//! let root = doc.node(doc.document_element().unwrap())?;
+//! assert_eq!(root.text_content(), "pen");
 //!
 //! let out = Writer::new().with_xml_declaration(true).write(&doc, Vec::new())?;
 //! assert_eq!(

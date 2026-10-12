@@ -39,9 +39,9 @@
 //! rather than a graph of reference-counted objects. A [`NodeId`] serves as an index to identify the node within a
 //! specific document, so accessing the document itself is required to read the node's contents:
 //!
-//! - **read** through [`Document`] with `&self` ([`node_type`](Document::node_type),
-//!   [`first_child`](Document::first_child), and the rest), or through a [`NodeRef`], which bundles the document for a
-//!   chained walk like `doc.node(id).first_child()`.
+//! - **read** through a [`NodeRef`] ([`node_type`](NodeRef::node_type), [`first_child`](NodeRef::first_child), and the
+//!   rest), which bundles the document for a chained walk like `doc.node(id)?.first_child()`.
+//!   [`Document::node`] makes one after checking that the node is of that document.
 //! - **write** through [`Document`] with `&mut self`: the `create_*` methods make nodes,
 //!   [`append_child`](Document::append_child) and [`insert_before`](Document::insert_before) join them, and
 //!   [`remove_child`](Document::remove_child) takes them out.
@@ -60,14 +60,14 @@
 //! let mut doc = Document::new();
 //! let root = doc.create_element("doc")?;
 //! let p = doc.create_element("p")?;
-//! let text = doc.create_text_node("Hello");
+//! let text = doc.create_text_node("Hello")?;
 //! doc.append_child(p, text)?;
 //! doc.append_child(root, p)?;
 //! doc.append_child(doc.document_node(), root)?;
 //!
 //! assert_eq!(doc.document_element(), Some(root));
-//! assert_eq!(doc.node(root).first_child().unwrap().node_name(), "p");
-//! assert_eq!(doc.text_content(root), "Hello");
+//! assert_eq!(doc.node(root)?.first_child().unwrap().node_name(), "p");
+//! assert_eq!(doc.node(root)?.text_content(), "Hello");
 //! # Ok::<(), xenolith::dom::DomException>(())
 //! ```
 //!
@@ -86,7 +86,7 @@
 //!   `nodeType` codes, the tree operations, and the [`ExceptionCode`] system. Where an interface's shape suits a graph
 //!   of reference-counted objects rather than an arena, this module redesigns it rather than imitating it (see
 //!   [the arena](crate::dom#arena)).
-//! - [XML Base (Second Edition)], W3C Recommendation 28 January 2009, for [`base_uri`](Document::base_uri).
+//! - [XML Base (Second Edition)], W3C Recommendation 28 January 2009, for [`base_uri`](NodeRef::base_uri).
 //!
 //! [DOM Level 3 Core]: https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/
 //! [XML Base (Second Edition)]: https://www.w3.org/TR/2009/REC-xmlbase-20090128/

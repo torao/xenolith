@@ -24,7 +24,7 @@ use crate::dom::{Document, DomException, NodeId};
 /// enabled, or attributes declared as `ID`-type in the DTD. This allows
 /// [`get_element_by_id`](Document::get_element_by_id) to be used for these attributes. The builder also records the
 /// base URI for each element. This is resolved using `xml:base` and the document's system identifier, and can be
-/// retrieved via [`base_uri`](Document::base_uri).
+/// retrieved via [`base_uri`](crate::dom::NodeRef::base_uri).
 ///
 /// Leading and trailing whitespaces around the root element are omitted. Although the XML specification permits
 /// whitespace in those locations, the DOM specification does not allow character data to be placed directly under the
@@ -47,9 +47,9 @@ use crate::dom::{Document, DomException, NodeId};
 /// let mut builder = DomBuilder::new();
 /// StreamSource::new("<doc><p>Hello</p></doc>".as_bytes()).add_consumer(&mut builder).emit()?;
 /// let doc = builder.into_document();
-/// let root = doc.document_element().unwrap();
-/// assert_eq!(doc.node_name(root), "doc");
-/// assert_eq!(doc.text_content(root), "Hello");
+/// let root = doc.node(doc.document_element().unwrap())?;
+/// assert_eq!(root.node_name(), "doc");
+/// assert_eq!(root.text_content(), "Hello");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -73,7 +73,7 @@ use crate::dom::{Document, DomException, NodeId};
 /// assert!(validation.report().is_valid());
 ///
 /// let doc = builder.into_document();
-/// assert_eq!(doc.node_name(doc.document_element().unwrap()), "r");
+/// assert_eq!(doc.node(doc.document_element().unwrap())?.node_name(), "r");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug)]
@@ -140,11 +140,12 @@ impl DomBuilder {
   }
 
   /// Saves the document's base URI exactly once, based on the system identifier reported by the first event.
-  fn ensure_document_base(&mut self, system_id: Option<&str>) {
+  fn ensure_document_base(&mut self, system_id: Option<&str>) -> std::result::Result<(), DomException> {
     if !self.document_base_set {
       self.document_base_set = true;
-      self.doc.set_document_base(system_id);
+      self.doc.set_document_base(system_id)?;
     }
+    Ok(())
   }
 
   /// Creates an element for the start tag, including attributes, the base URI, and the ID mark.
@@ -160,7 +161,7 @@ impl DomBuilder {
       }
     }
 
-    self.doc.set_element_base(element, event.base_uri);
+    self.doc.set_element_base(element, event.base_uri)?;
     self.mark_id_attributes(element, event);
     Ok(element)
   }
@@ -186,9 +187,10 @@ impl DomBuilder {
     let Some(defs) = dtd.attlist(element_id) else { return };
     for def in defs {
       if matches!(def.att_type, AttType::Id) {
-        let name = pool.resolve(def.name).to_owned();
-        if self.doc.has_attribute(element, &name) {
-          let _ = self.doc.set_id_attribute(element, &name, true);
+        // The DTD and its pool come together in the doctype event; a name missing from the pool marks nothing.
+        let Some(name) = pool.resolve(def.name) else { continue };
+        if self.doc.has_attribute(element, name) {
+          let _ = self.doc.set_id_attribute(element, name, true);
         }
       }
     }
@@ -243,7 +245,7 @@ impl DomBuilder {
 
   /// Opens an element under the currently open node, with its attributes, base URI, and ID marks.
   fn start_element(&mut self, event: &StartElementEventRef<'_>) -> crate::Result<()> {
-    self.ensure_document_base(event.location.system_id.as_deref());
+    self.ensure_document_base(event.location.system_id.as_deref())?;
     let element = self.build_element(event)?;
     self.append(element)?;
     self.open.push(element);
@@ -266,13 +268,13 @@ impl DomBuilder {
 
   /// Appends a CDATA section, which the data model keeps apart from the text around it.
   fn cdata(&mut self, event: &CdataEventRef<'_>) -> crate::Result<()> {
-    let node = self.doc.create_cdata_section(event.text);
+    let node = self.doc.create_cdata_section(event.text)?;
     self.append(node)
   }
 
   /// Appends a comment.
   fn comment(&mut self, event: &CommentEventRef<'_>) -> crate::Result<()> {
-    let node = self.doc.create_comment(event.text);
+    let node = self.doc.create_comment(event.text)?;
     self.append(node)
   }
 
@@ -284,7 +286,7 @@ impl DomBuilder {
 
   /// Appends the document type node, and keeps the DTD the event carries.
   fn doctype(&mut self, event: &DoctypeEventRef<'_>) -> crate::Result<()> {
-    self.ensure_document_base(event.location.system_id.as_deref());
+    self.ensure_document_base(event.location.system_id.as_deref())?;
     // Keep the DTD, and the pool its names are interned in, so a later start tag can mark the attributes it declares
     // `ID`.
     self.dtd = Some(event.dtd.clone());
